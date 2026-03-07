@@ -1,0 +1,56 @@
+{
+  "telegram": {
+    "allowedUserIds": [123456789],
+    "allowedChatIds": [123456789],
+    "pollingTimeoutSeconds": 30,
+    "pollIntervalMs": 1000,
+    "discardBacklogOnStart": true,
+    "plainTextMode": "task"
+  },
+  "repos": [],
+  "_note_repos": "Optional: keep repos empty and use /repo init <name> [base-path], or replace with your real repo mappings.",
+  "codex": {
+    "command": "codex",
+    "baseArgs": ["exec"],
+    "askArgTemplate": ["{instruction}"],
+    "taskArgTemplate": ["{instruction}"],
+    "repoArgTemplate": [],
+    "timeoutMs": 1800000,
+    "blockedEnvVars": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"],
+    "preflightEnabled": true,
+    "preflightArgs": ["--version"],
+    "preflightTimeoutMs": 5000
+  },
+  "policy": {
+    "defaultMode": "observe"
+  },
+  "repoInit": {
+    "defaultParentPath": "./git"
+  },
+  "safety": {
+    "requireAgentsForMutatingTasks": false,
+    "instructionPolicy": {
+      "enforceOnAsk": false,
+      "blockedPatterns": [],
+      "allowedDownloadDomains": [],
+      "forbiddenPathPatterns": [
+        ".env",
+        ".env.*",
+        "*.pem",
+        "*.key",
+        ".aws/**",
+        ".ssh/**",
+        "credentials/**",
+        "secrets/**"
+      ]
+    }
+  },
+  "state": {
+    "filePath": "./.codefox/state.json",
+    "sessionTtlHours": 168,
+    "approvalTtlHours": 72
+  },
+  "audit": {
+    "logFilePath": "./logs/audit.log"
+  }
+}

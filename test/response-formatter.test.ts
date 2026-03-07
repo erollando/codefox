@@ -1,0 +1,60 @@
+import { describe, expect, it } from "vitest";
+import { formatTaskResult } from "../src/core/response-formatter.js";
+
+describe("response formatter", () => {
+  it("preserves long output blocks for adapter-level chunking", () => {
+    const longOutput = "x".repeat(2000);
+    const message = formatTaskResult(
+      {
+        ok: false,
+        summary: "failure",
+        outputTail: longOutput
+      },
+      "payments-api",
+      "active"
+    );
+
+    expect(message).toContain(longOutput);
+    expect(message).not.toContain("... (truncated)");
+  });
+
+  it("renders aborted and timed-out states explicitly", () => {
+    const aborted = formatTaskResult(
+      {
+        ok: false,
+        summary: "Task aborted by user.",
+        aborted: true
+      },
+      "payments-api",
+      "active"
+    );
+    const timedOut = formatTaskResult(
+      {
+        ok: false,
+        summary: "Codex task timed out after 1ms.",
+        timedOut: true
+      },
+      "payments-api",
+      "active"
+    );
+
+    expect(aborted).toContain("Task aborted.");
+    expect(timedOut).toContain("Task timed out.");
+  });
+
+  it("redacts sensitive tokens in summary and output", () => {
+    const message = formatTaskResult(
+      {
+        ok: false,
+        summary: "failed: TELEGRAM_BOT_TOKEN=abc123",
+        outputTail: "Authorization: Bearer secret-token"
+      },
+      "payments-api",
+      "active"
+    );
+
+    expect(message).toContain("[REDACTED]");
+    expect(message).not.toContain("abc123");
+    expect(message).not.toContain("secret-token");
+  });
+});

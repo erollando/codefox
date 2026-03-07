@@ -1,0 +1,14 @@
+node_modules/
+dist/
+logs/
+.codefox/
+coverage/
+*.log
+*.tsbuildinfo
+.DS_Store
+
+.env
+.env.*
+!.env.example
+
+config/codefox.config.json
