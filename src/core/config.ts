@@ -3,7 +3,7 @@ import path from "node:path";
 import { ConfigError } from "./errors.js";
 import type { AppConfig, PlainTextMode, PolicyMode, RepoConfig } from "../types/domain.js";
 
-const MODES: PolicyMode[] = ["observe", "active"];
+const MODES: PolicyMode[] = ["observe", "active", "full-access"];
 const PLAIN_TEXT_MODES: PlainTextMode[] = ["task", "ask"];
 const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
   ".env",

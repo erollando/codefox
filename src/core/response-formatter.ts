@@ -20,7 +20,7 @@ export function formatHelp(): string {
     "/repo init <name> [base-path]",
     "/repo remove <name>",
     "/repo info [name]",
-    "/mode <observe|active>",
+    "/mode <observe|active|full-access>",
     "/ask <question>",
     "/task <instruction>",
     "/status",
@@ -42,6 +42,9 @@ export function formatRepoInfo(repoName: string, rootPath: string): string {
 }
 
 export function formatMode(mode: PolicyMode): string {
+  if (mode === "full-access") {
+    return "Mode set to full-access. Warning: Codex commands may run with danger-full-access sandbox.";
+  }
   return `Mode set to ${mode}.`;
 }
 

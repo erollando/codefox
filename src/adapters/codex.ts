@@ -196,7 +196,14 @@ function buildSandboxArgs(command: string, baseArgs: string[], mode: TaskContext
   if (hasSandboxArgs(baseArgs)) {
     return [];
   }
-  return ["--sandbox", mode === "observe" ? "read-only" : "workspace-write"];
+  switch (mode) {
+    case "observe":
+      return ["--sandbox", "read-only"];
+    case "active":
+      return ["--sandbox", "workspace-write"];
+    case "full-access":
+      return ["--sandbox", "danger-full-access"];
+  }
 }
 
 function isCodexCommand(command: string): boolean {

@@ -21,6 +21,7 @@ export class PolicyEngine {
           reason: "observe mode blocks mutating tasks"
         };
       case "active":
+      case "full-access":
         return { allowed: true, requiresApproval: false };
       default:
         throw new PolicyError(`Unsupported mode '${mode}'`);

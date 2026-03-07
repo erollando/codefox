@@ -25,6 +25,7 @@ describe("PolicyEngine", () => {
   it("allows ask in all modes", () => {
     expect(policy.decide("observe", "ask")).toEqual({ allowed: true, requiresApproval: false });
     expect(policy.decide("active", "ask")).toEqual({ allowed: true, requiresApproval: false });
+    expect(policy.decide("full-access", "ask")).toEqual({ allowed: true, requiresApproval: false });
   });
 
   it("handles task mode constraints", () => {
@@ -34,5 +35,6 @@ describe("PolicyEngine", () => {
       reason: "observe mode blocks mutating tasks"
     });
     expect(policy.decide("active", "task")).toEqual({ allowed: true, requiresApproval: false });
+    expect(policy.decide("full-access", "task")).toEqual({ allowed: true, requiresApproval: false });
   });
 });

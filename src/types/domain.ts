@@ -1,4 +1,4 @@
-export type PolicyMode = "observe" | "active";
+export type PolicyMode = "observe" | "active" | "full-access";
 
 export type TaskType = "ask" | "task";
 export type PlainTextMode = "task" | "ask";

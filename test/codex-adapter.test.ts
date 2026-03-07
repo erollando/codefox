@@ -360,4 +360,46 @@ describe("CodexCliAdapter", () => {
     expect(capturedArgs).toContain("--sandbox");
     expect(capturedArgs).toContain("read-only");
   });
+
+  it("injects danger-full-access sandbox for full-access mode when sandbox flags are absent", async () => {
+    let capturedArgs: string[] = [];
+    const runner: ProcessRunner = {
+      spawn(_command, args) {
+        capturedArgs = args;
+        const child = new FakeChild();
+        queueMicrotask(() => child.emit("close", 0));
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        askArgTemplate: ["{instruction}"],
+        taskArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "full-access",
+      taskType: "task",
+      instruction: "install dependencies",
+      requestId: "full001"
+    };
+
+    await adapter.startTask("/tmp/payments-api", context).result;
+    expect(capturedArgs).toContain("--sandbox");
+    expect(capturedArgs).toContain("danger-full-access");
+  });
 });

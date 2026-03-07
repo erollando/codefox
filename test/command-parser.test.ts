@@ -40,6 +40,10 @@ describe("parseCommand", () => {
       type: "mode",
       mode: "active"
     });
+    expect(parseCommand("/mode full-access", "task")).toEqual({
+      type: "mode",
+      mode: "full-access"
+    });
     expect(parseCommand("/task@codefox_bot fix tests", "task")).toEqual({
       type: "task",
       instruction: "fix tests"

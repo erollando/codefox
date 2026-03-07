@@ -70,6 +70,13 @@ describe("config validation", () => {
     expect(validated.state.approvalTtlHours).toBeUndefined();
   });
 
+  it("accepts full-access as policy.defaultMode", () => {
+    const config = makeValidConfig();
+    (config.policy as { defaultMode: string }).defaultMode = "full-access";
+    const validated = validateConfig(config);
+    expect(validated.policy.defaultMode).toBe("full-access");
+  });
+
   it("parses optional state TTL values", () => {
     const config = makeValidConfig();
     (config as Record<string, unknown>).state = {

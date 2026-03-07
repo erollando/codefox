@@ -11,7 +11,7 @@ It authenticates Telegram users/chats, maps requests to approved repositories, a
 - Safety layers:
   - access control (user/chat allowlists)
   - repo root safety
-  - policy modes (`observe`, `active`)
+  - policy modes (`observe`, `active`, `full-access`)
 - Codex adapter: CLI invocation with configurable argument templates.
 - Audit logging: structured JSON lines with redacted previews for request/progress text.
 
@@ -28,6 +28,7 @@ It authenticates Telegram users/chats, maps requests to approved repositories, a
 - Codex sandbox is auto-selected by policy mode when not explicitly configured in `baseArgs`:
   - `observe` -> `read-only`
   - `active` -> `workspace-write`
+  - `full-access` -> `danger-full-access`
 - Task summaries/output are redacted before Telegram/audit rendering to reduce accidental secret disclosure.
 - Task execution is constrained to configured repo roots.
 - Long Telegram responses are automatically split into ordered message parts instead of being silently truncated.
@@ -41,7 +42,7 @@ It authenticates Telegram users/chats, maps requests to approved repositories, a
 - `/repo init <name> [base-path]`
 - `/repo remove <name>`
 - `/repo info [name]`
-- `/mode <observe|active>`
+- `/mode <observe|active|full-access>`
 - `/ask <question>`
 - `/task <instruction>`
 - `/status`
@@ -140,7 +141,7 @@ codex exec --sandbox workspace-write "Install Python dependencies for this repo 
 ```
 
 If dependency download/install fails with index/DNS errors (`/simple/...`, `Name or service not known`, `No matching distribution found` for common packages), treat it as connectivity/sandbox restrictions first.
-If you need Codex itself to perform network installs, configure a less restrictive sandbox in `codex.baseArgs` only for trusted local environments.
+If you need Codex itself to perform network installs from Telegram, use `/mode full-access` only in trusted local environments.
 
 For Python setup tasks, prefer:
 

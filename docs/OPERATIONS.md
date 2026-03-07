@@ -66,6 +66,7 @@ npm run verify
 - `/repo init <name> [base-path]` to create, `git init`, register, and auto-select a repo
 - `/repo remove <name>` to remove a registered repo
 - `/repo info [name]` to inspect mapped repo path
+- `/mode <observe|active|full-access>` to set execution policy mode
 - Approval ownership rule: only the user who created a pending request can approve or deny it.
 - Optional AGENTS guard: when enabled, `/task` requires `AGENTS.md` in repo root.
 - Optional instruction policy: when configured, `/task` or `/ask` can be blocked by:
@@ -88,12 +89,12 @@ npm run verify
 3. Codex task failures:
 - verify `codex.command` and argument templates
 - for Codex CLI use non-interactive mode (`codex.baseArgs` should include `exec`)
-- unless overridden in `baseArgs`, CodeFox injects sandbox by mode (`observe` read-only, `active` workspace-write)
+- unless overridden in `baseArgs`, CodeFox injects sandbox by mode (`observe` read-only, `active` workspace-write, `full-access` danger-full-access)
 - verify Codex preflight in startup logs (`codex.preflightEnabled`, args, timeout)
 - verify repository root exists and is accessible
 - inspect audit log `codex_finish` fields (`summaryPreview`, `exitCode`, `timedOut`, `aborted`)
 - for Python bootstrap tasks, use project interpreter-scoped pip (`.venv/bin/python -m pip ...` on Linux/macOS, `.venv\\Scripts\\python.exe -m pip ...` on Windows) instead of guessing `pip` vs `pip3`
-- if output shows package index/DNS failures (for example `/simple/...` retries or `Name or service not known`), treat as sandbox/network limitation; run bootstrap directly on host shell or use a less restrictive Codex sandbox only in trusted environments
+- if output shows package index/DNS failures (for example `/simple/...` retries or `Name or service not known`), treat as sandbox/network limitation; run bootstrap directly on host shell or switch to `/mode full-access` only in trusted environments
 
 4. Stuck long-running task:
 - send `/abort`

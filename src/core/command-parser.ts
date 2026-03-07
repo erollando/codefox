@@ -18,7 +18,7 @@ export type ParsedCommand =
   | { type: "abort" }
   | { type: "unknown"; raw: string };
 
-const MODES: PolicyMode[] = ["observe", "active"];
+const MODES: PolicyMode[] = ["observe", "active", "full-access"];
 
 function parseWithArg(text: string): [string, string] {
   const trimmed = text.trim();
