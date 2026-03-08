@@ -35,7 +35,6 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 
 - Unknown users/chats are denied.
 - `observe` maps to read-only sandbox, `active` to workspace-write, `full-access` to danger-full-access.
-- `full-access` requires explicit `/approve` before each `/run`.
 - Optional AGENTS guard can require `AGENTS.md` before `/run` in non-observe modes.
 - Optional instruction policy can block risky patterns, forbidden file-path references (like `.env`/keys), and non-allowlisted download domains before Codex starts.
 - Forbidden path policy is also injected as execution guidance into Codex prompts.
@@ -56,16 +55,20 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 - `/repo info [name]`
 - `/mode <observe|active|full-access>`
 - `/observe | /active | /full-access`
+- `/reasoning <minimal|low|medium|high|xhigh|default>` (alias: `/effort`)
 - `/run <instruction>`
 - `/steer <instruction>`
 - `/close`
 - `/status`
-- `/pending`
-- `/approve`
-- `/deny`
 - `/abort`
 
 Plain text (non-slash) input is treated as `/run <text>`.
+
+Image/document prompts:
+
+- Upload an image or document, then send `/run <question>` to analyze it.
+- You can also upload with a caption; caption text is treated like normal input (`/run` for plain text captions, or a slash command).
+- Uploaded attachment context is one-shot: it is consumed by the next `/run` or `/steer` unless you upload again.
 
 ## Configuration
 
@@ -85,6 +88,9 @@ Copy the sample config to `config/codefox.config.json`:
   "codex": {
     "command": "codex",
     "baseArgs": ["exec"],
+    "model": "gpt-5.3-codex",
+    "reasoningEffort": "high",
+    "configOverrides": [],
     "runArgTemplate": ["{instruction}"],
     "repoArgTemplate": [],
     "timeoutMs": 1800000,
@@ -95,7 +101,7 @@ Copy the sample config to `config/codefox.config.json`:
   },
   "policy": { "defaultMode": "observe" },
   "repoInit": {
-    "defaultParentPath": "./git"
+    "defaultParentPath": "/home/<your-user>/git"
   },
   "safety": {
     "requireAgentsForRuns": false,
@@ -124,11 +130,18 @@ Copy the sample config to `config/codefox.config.json`:
 }
 ```
 
-`state.filePath` persists chat sessions and pending approvals across service restarts.
+`state.filePath` persists chat sessions (and any legacy pending approval records) across service restarts.
 If set, `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
 `state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.
 `/repo init <name>` creates `<defaultParentPath>/<name>`, runs `git init`, registers it, and auto-selects it for the chat.
 `telegram.discardBacklogOnStart` drops offline backlog updates on startup (recommended for safety).
+
+Codex runtime options you can set in `codex`:
+
+- `model`: maps to `--model`
+- `reasoningEffort`: maps to `-c model_reasoning_effort=\"...\"` (`minimal|low|medium|high|xhigh`)
+- `profile`: maps to `--profile` (optional)
+- `configOverrides`: additional `-c key=value` entries passed through to Codex
 
 ## Environment variables
 

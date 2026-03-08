@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ApprovalRequest, PolicyMode, SessionState } from "../types/domain.js";
+import type { ApprovalRequest, CodexReasoningEffort, PolicyMode, SessionState } from "../types/domain.js";
 
 export interface PersistedState {
   sessions: SessionState[];
@@ -18,6 +18,7 @@ const EMPTY_STATE: PersistedState = {
 };
 
 const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
+const REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
 export class JsonStateStore {
   private writeQueue: Promise<void> = Promise.resolve();
@@ -90,6 +91,11 @@ function sanitizeSessions(sessions: SessionState[]): SessionState[] {
       const codexThreadId = typeof session.codexThreadId === "string" ? session.codexThreadId : undefined;
       const codexLastActiveAt =
         codexThreadId && isValidIsoTimestamp(session.codexLastActiveAt) ? session.codexLastActiveAt : undefined;
+      const reasoningEffortOverride =
+        typeof session.reasoningEffortOverride === "string" &&
+        REASONING_EFFORTS.includes(session.reasoningEffortOverride as CodexReasoningEffort)
+          ? (session.reasoningEffortOverride as CodexReasoningEffort)
+          : undefined;
 
       return {
         chatId: session.chatId,
@@ -98,6 +104,7 @@ function sanitizeSessions(sessions: SessionState[]): SessionState[] {
         activeRequestId: typeof session.activeRequestId === "string" ? session.activeRequestId : undefined,
         codexThreadId,
         codexLastActiveAt,
+        reasoningEffortOverride,
         updatedAt: isValidIsoTimestamp(session.updatedAt) ? session.updatedAt : now
       };
     });

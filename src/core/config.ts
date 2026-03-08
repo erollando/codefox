@@ -1,7 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ConfigError } from "./errors.js";
-import type { AppConfig, PolicyMode, RepoConfig } from "../types/domain.js";
+import type {
+  AppConfig,
+  CodexReasoningEffort,
+  PolicyMode,
+  RepoConfig
+} from "../types/domain.js";
 
 const MODES: PolicyMode[] = ["observe", "active", "full-access"];
 const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
@@ -16,6 +21,7 @@ const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
 ] as const;
 const DEFAULT_CODEX_BLOCKED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"] as const;
 const DEFAULT_CODEX_SESSION_IDLE_MINUTES = 120;
+const CODEX_REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
 function isMode(value: string): value is PolicyMode {
   return MODES.includes(value as PolicyMode);
@@ -128,6 +134,17 @@ function mustMode(value: unknown, key: string): PolicyMode {
     throw new ConfigError(`${key} must be one of ${MODES.join(", ")}`);
   }
   return mode;
+}
+
+function parseOptionalCodexReasoningEffort(value: unknown, key: string): CodexReasoningEffort | undefined {
+  if (typeof value === "undefined") {
+    return undefined;
+  }
+  const effort = mustString(value, key) as CodexReasoningEffort;
+  if (!CODEX_REASONING_EFFORTS.includes(effort)) {
+    throw new ConfigError(`${key} must be one of ${CODEX_REASONING_EFFORTS.join(", ")}`);
+  }
+  return effort;
 }
 
 export async function loadConfig(configPath?: string): Promise<AppConfig> {
@@ -244,6 +261,9 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
   assertPositiveInteger(preflightTimeoutMs, "codex.preflightTimeoutMs");
 
   const baseArgs = mustArray<string>(codex.baseArgs, "codex.baseArgs");
+  const configOverrides = codex.configOverrides
+    ? mustStringArray(codex.configOverrides, "codex.configOverrides")
+    : [];
   const runArgTemplate = mustArray<string>(codex.runArgTemplate, "codex.runArgTemplate");
   const repoArgTemplate = codex.repoArgTemplate ? mustArray<string>(codex.repoArgTemplate, "codex.repoArgTemplate") : [];
   const preflightArgs = codex.preflightArgs ? mustArray<string>(codex.preflightArgs, "codex.preflightArgs") : ["--version"];
@@ -274,6 +294,10 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
     codex: {
       command: mustString(codex.command, "codex.command"),
       baseArgs,
+      model: codex.model ? mustString(codex.model, "codex.model") : undefined,
+      profile: codex.profile ? mustString(codex.profile, "codex.profile") : undefined,
+      reasoningEffort: parseOptionalCodexReasoningEffort(codex.reasoningEffort, "codex.reasoningEffort"),
+      configOverrides,
       runArgTemplate,
       repoArgTemplate,
       timeoutMs,

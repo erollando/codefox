@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { CodexCliAdapter, RunningTask } from "../adapters/codex.js";
-import type { TelegramAdapter, TelegramUpdate } from "../adapters/telegram.js";
+import type { TelegramAdapter, TelegramDocument, TelegramPhotoSize, TelegramUpdate } from "../adapters/telegram.js";
 import type { AccessControl } from "./auth.js";
 import type { AuditEventInput, AuditLogger } from "./audit-logger.js";
 import { parseCommand } from "./command-parser.js";
@@ -25,10 +25,22 @@ import {
 } from "./response-formatter.js";
 import type { SessionManager } from "./session-manager.js";
 import { makeRequestId } from "./ids.js";
-import type { PolicyMode, RepoConfig, RunKind, TaskContext } from "../types/domain.js";
+import type {
+  CodexReasoningEffort,
+  PolicyMode,
+  RepoConfig,
+  RunKind,
+  TaskAttachment,
+  TaskAttachmentKind,
+  TaskContext
+} from "../types/domain.js";
 
 interface MessageSink {
   sendMessage(chatId: number, text: string): Promise<void>;
+  downloadFile?(
+    fileId: string,
+    metadata?: { originalName?: string; mimeType?: string }
+  ): Promise<{ localPath: string; originalName?: string; mimeType?: string }>;
 }
 
 interface AuditSink {
@@ -43,6 +55,14 @@ interface PendingSteer {
   userId: number;
   instruction: string;
   createdAt: string;
+  attachments: TaskAttachment[];
+}
+
+interface IncomingAttachment {
+  kind: TaskAttachmentKind;
+  fileId: string;
+  originalName?: string;
+  mimeType?: string;
 }
 
 export interface ControllerDeps {
@@ -66,18 +86,24 @@ export class CodeFoxController {
   private readonly activeAborts = new Map<string, () => void>();
   private readonly executionAdmissionLock = new Set<number>();
   private readonly pendingSteers = new Map<number, PendingSteer[]>();
+  private readonly attachmentContext = new Map<number, TaskAttachment[]>();
 
   constructor(private readonly deps: ControllerDeps) {}
 
   async handleUpdate(update: TelegramUpdate): Promise<void> {
     const message = update.message;
-    if (!message || typeof message.text !== "string" || !message.from) {
+    if (!message || !message.from) {
       return;
     }
 
     const chatId = message.chat.id;
     const userId = message.from.id;
-    const text = message.text;
+    const text = typeof message.text === "string" ? message.text : typeof message.caption === "string" ? message.caption : "";
+    const incomingAttachments = this.extractIncomingAttachments(message.photo, message.document);
+
+    if (!text && incomingAttachments.length === 0) {
+      return;
+    }
 
     try {
       this.deps.access.assertAuthorized({ userId, chatId });
@@ -87,7 +113,16 @@ export class CodeFoxController {
     }
 
     const session = this.deps.sessions.getOrCreate(chatId);
-    const command = parseCommand(text);
+    const command = text ? parseCommand(text) : ({ type: "unknown", raw: "" } as const);
+    const downloadedAttachments =
+      incomingAttachments.length > 0
+        ? await this.downloadIncomingAttachments(chatId, userId, incomingAttachments)
+        : [];
+
+    if (!text && downloadedAttachments.length > 0) {
+      const existing = this.attachmentContext.get(chatId) ?? [];
+      this.attachmentContext.set(chatId, dedupeAttachments([...existing, ...downloadedAttachments]));
+    }
 
     await this.deps.audit.log({
       type: "request_received",
@@ -95,12 +130,21 @@ export class CodeFoxController {
       userId,
       textPreview: toAuditPreview(text),
       textLength: text.length,
-      parsedType: command.type,
+      parsedType: text ? command.type : "attachment",
       mode: session.mode,
       repo: session.selectedRepo,
       activeRequestId: session.activeRequestId,
-      codexThreadId: session.codexThreadId
+      codexThreadId: session.codexThreadId,
+      attachmentCount: downloadedAttachments.length
     });
+
+    if (!text && downloadedAttachments.length > 0) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Attachment received (${downloadedAttachments.length}). Send /run <question> to analyze it.`
+      );
+      return;
+    }
 
     switch (command.type) {
       case "help": {
@@ -159,6 +203,22 @@ export class CodeFoxController {
         await this.deps.audit.log({ type: "mode_changed", chatId, userId, mode: command.mode });
         return;
       }
+      case "reasoning": {
+        this.deps.sessions.setReasoningEffortOverride(chatId, command.reasoningEffort);
+        await this.deps.telegram.sendMessage(
+          chatId,
+          command.reasoningEffort
+            ? `Reasoning effort set to ${command.reasoningEffort} for this chat.`
+            : "Reasoning effort reset to config default for this chat."
+        );
+        await this.deps.audit.log({
+          type: "reasoning_effort_changed",
+          chatId,
+          userId,
+          reasoningEffort: command.reasoningEffort
+        });
+        return;
+      }
       case "close": {
         await this.handleCloseSession(chatId, userId);
         return;
@@ -196,6 +256,7 @@ export class CodeFoxController {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
         }
+        const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
         this.runDetached(
           chatId,
           this.executeOrEnqueue({
@@ -204,14 +265,16 @@ export class CodeFoxController {
             repoName: session.selectedRepo,
             mode: session.mode,
             chatId,
-            userId
+            userId,
+            attachments
           }),
           "run_execute_or_enqueue"
         );
         return;
       }
       case "steer": {
-        await this.handleSteer(chatId, userId, command.instruction);
+        const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
+        await this.handleSteer(chatId, userId, command.instruction, attachments);
         return;
       }
       default: {
@@ -312,7 +375,8 @@ export class CodeFoxController {
         requestId: pending.id,
         userId,
         chatId,
-        bypassApproval: true
+        bypassApproval: true,
+        attachments: []
       }),
       "approve_execute_task"
     );
@@ -364,7 +428,12 @@ export class CodeFoxController {
     await this.deps.telegram.sendMessage(chatId, `Abort signal sent for ${session.activeRequestId}.`);
   }
 
-  private async handleSteer(chatId: number, userId: number, instruction: string): Promise<void> {
+  private async handleSteer(
+    chatId: number,
+    userId: number,
+    instruction: string,
+    attachments: TaskAttachment[]
+  ): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     if (!session.selectedRepo) {
       await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
@@ -383,7 +452,7 @@ export class CodeFoxController {
     }
 
     const existing = this.pendingSteers.get(chatId) ?? [];
-    existing.push({ userId, instruction, createdAt: new Date().toISOString() });
+    existing.push({ userId, instruction, createdAt: new Date().toISOString(), attachments });
     this.pendingSteers.set(chatId, existing);
 
     await this.deps.audit.log({
@@ -587,6 +656,102 @@ export class CodeFoxController {
     }
   }
 
+  private extractIncomingAttachments(
+    photo?: TelegramPhotoSize[],
+    document?: TelegramDocument
+  ): IncomingAttachment[] {
+    const attachments: IncomingAttachment[] = [];
+
+    if (Array.isArray(photo) && photo.length > 0) {
+      const sorted = [...photo].sort((left, right) => {
+        const leftScore = (left.file_size ?? 0) || left.width * left.height;
+        const rightScore = (right.file_size ?? 0) || right.width * right.height;
+        return rightScore - leftScore;
+      });
+      const selected = sorted[0];
+      attachments.push({
+        kind: "image",
+        fileId: selected.file_id,
+        originalName: `photo_${selected.file_id}.jpg`,
+        mimeType: "image/jpeg"
+      });
+    }
+
+    if (document?.file_id) {
+      attachments.push({
+        kind: isImageMimeType(document.mime_type) ? "image" : "document",
+        fileId: document.file_id,
+        originalName: document.file_name,
+        mimeType: document.mime_type
+      });
+    }
+
+    return attachments;
+  }
+
+  private async downloadIncomingAttachments(
+    chatId: number,
+    userId: number,
+    incoming: IncomingAttachment[]
+  ): Promise<TaskAttachment[]> {
+    if (incoming.length === 0) {
+      return [];
+    }
+
+    if (!this.deps.telegram.downloadFile) {
+      await this.deps.audit.log({
+        type: "attachment_download_unavailable",
+        chatId,
+        userId,
+        attachmentCount: incoming.length
+      });
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Attachment uploads are not enabled for this Telegram adapter. Send text instructions only."
+      );
+      return [];
+    }
+
+    const downloaded: TaskAttachment[] = [];
+    for (const attachment of incoming) {
+      try {
+        const file = await this.deps.telegram.downloadFile(attachment.fileId, {
+          originalName: attachment.originalName,
+          mimeType: attachment.mimeType
+        });
+        downloaded.push({
+          kind: attachment.kind,
+          localPath: file.localPath,
+          originalName: file.originalName ?? attachment.originalName,
+          mimeType: file.mimeType ?? attachment.mimeType
+        });
+      } catch (error) {
+        await this.deps.audit.log({
+          type: "attachment_download_failed",
+          chatId,
+          userId,
+          fileId: attachment.fileId,
+          error: String(error)
+        });
+        await this.deps.telegram.sendMessage(
+          chatId,
+          formatError(`Failed to download attachment (${attachment.fileId}).`)
+        );
+      }
+    }
+
+    return downloaded;
+  }
+
+  private resolveAttachmentsForRun(chatId: number, immediate: TaskAttachment[]): TaskAttachment[] {
+    if (immediate.length > 0) {
+      return immediate;
+    }
+    const stored = this.attachmentContext.get(chatId) ?? [];
+    this.attachmentContext.delete(chatId);
+    return stored;
+  }
+
   private async executeOrEnqueue(params: {
     runKind: RunKind;
     instruction: string;
@@ -595,6 +760,7 @@ export class CodeFoxController {
     chatId: number;
     userId: number;
     bypassApproval?: boolean;
+    attachments?: TaskAttachment[];
   }): Promise<void> {
     const { runKind, instruction, repoName, mode, chatId, userId } = params;
     if (this.executionAdmissionLock.has(chatId)) {
@@ -733,7 +899,8 @@ export class CodeFoxController {
         requestId,
         userId,
         chatId,
-        bypassApproval: Boolean(params.bypassApproval)
+        bypassApproval: Boolean(params.bypassApproval),
+        attachments: params.attachments ?? []
       });
     } finally {
       this.executionAdmissionLock.delete(chatId);
@@ -749,8 +916,9 @@ export class CodeFoxController {
     userId: number;
     chatId: number;
     bypassApproval: boolean;
+    attachments: TaskAttachment[];
   }): Promise<void> {
-    const { runKind, instruction, repoName, mode, requestId, userId, chatId } = params;
+    const { runKind, instruction, repoName, mode, requestId, userId, chatId, attachments } = params;
 
     let resultSent = false;
     let runResultResumeRejected = false;
@@ -768,7 +936,9 @@ export class CodeFoxController {
         requestId,
         runKind,
         systemGuidance: this.deps.instructionPolicy.buildExecutionGuidance(),
-        resumeThreadId
+        resumeThreadId,
+        reasoningEffortOverride: this.deps.sessions.getOrCreate(chatId).reasoningEffortOverride,
+        attachments
       };
 
       this.deps.sessions.setActiveRequest(chatId, requestId);
@@ -924,6 +1094,7 @@ export class CodeFoxController {
 
     const mergedInstruction = buildSteerInstruction(steers.map((item) => item.instruction));
     const steerUserId = steers[steers.length - 1].userId;
+    const mergedAttachments = dedupeAttachments(steers.flatMap((item) => item.attachments));
 
     await this.deps.audit.log({
       type: "steer_dispatch",
@@ -942,7 +1113,8 @@ export class CodeFoxController {
       mode: session.mode,
       chatId,
       userId: steerUserId,
-      bypassApproval: true
+      bypassApproval: true,
+      attachments: mergedAttachments
     });
   }
 
@@ -983,6 +1155,24 @@ function buildSteerInstruction(instructions: string[]): string {
     "Merge all guidance items below and continue from the current session state.",
     ...cleaned.map((entry, index) => `${index + 1}. ${entry}`)
   ].join("\n");
+}
+
+function isImageMimeType(mimeType: string | undefined): boolean {
+  return typeof mimeType === "string" && mimeType.toLowerCase().startsWith("image/");
+}
+
+function dedupeAttachments(attachments: TaskAttachment[]): TaskAttachment[] {
+  const seen = new Set<string>();
+  const unique: TaskAttachment[] = [];
+  for (const attachment of attachments) {
+    const key = `${attachment.kind}:${attachment.localPath}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(attachment);
+  }
+  return unique;
 }
 
 export function createControllerFromAdapters(params: {

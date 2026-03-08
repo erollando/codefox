@@ -1,5 +1,14 @@
 export type PolicyMode = "observe" | "active" | "full-access";
 export type RunKind = "run" | "steer";
+export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type TaskAttachmentKind = "image" | "document";
+
+export interface TaskAttachment {
+  kind: TaskAttachmentKind;
+  localPath: string;
+  originalName?: string;
+  mimeType?: string;
+}
 
 export interface RepoConfig {
   name: string;
@@ -18,6 +27,10 @@ export interface TelegramConfig {
 export interface CodexConfig {
   command: string;
   baseArgs: string[];
+  model?: string;
+  profile?: string;
+  reasoningEffort?: CodexReasoningEffort;
+  configOverrides?: string[];
   runArgTemplate: string[];
   repoArgTemplate: string[];
   timeoutMs: number;
@@ -73,6 +86,7 @@ export interface SessionState {
   activeRequestId?: string;
   codexThreadId?: string;
   codexLastActiveAt?: string;
+  reasoningEffortOverride?: CodexReasoningEffort;
   updatedAt: string;
 }
 
@@ -96,6 +110,8 @@ export interface TaskContext {
   runKind: RunKind;
   systemGuidance?: string[];
   resumeThreadId?: string;
+  reasoningEffortOverride?: CodexReasoningEffort;
+  attachments?: TaskAttachment[];
 }
 
 export interface TaskResult {

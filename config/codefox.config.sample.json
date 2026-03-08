@@ -11,6 +11,9 @@
   "codex": {
     "command": "codex",
     "baseArgs": ["exec"],
+    "model": "gpt-5.3-codex",
+    "reasoningEffort": "high",
+    "configOverrides": [],
     "runArgTemplate": ["{instruction}"],
     "repoArgTemplate": [],
     "timeoutMs": 1800000,
@@ -23,7 +26,7 @@
     "defaultMode": "observe"
   },
   "repoInit": {
-    "defaultParentPath": "./git"
+    "defaultParentPath": "/home/<your-user>/git"
   },
   "safety": {
     "requireAgentsForRuns": false,

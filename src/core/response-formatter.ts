@@ -22,13 +22,11 @@ export function formatHelp(): string {
     "/repo info [name]",
     "/mode <observe|active|full-access>",
     "/observe | /active | /full-access",
+    "/reasoning <minimal|low|medium|high|xhigh|default>",
     "/run <instruction>",
     "/steer <instruction>",
     "/close",
     "/status",
-    "/pending",
-    "/approve",
-    "/deny",
     "/abort"
   ].join("\n");
 }
@@ -52,7 +50,7 @@ export function formatMode(mode: PolicyMode): string {
     case "active":
       return "Mode set to active (workspace-write sandbox).";
     case "full-access":
-      return "Mode set to full-access (danger-full-access sandbox, approval required per /run).";
+      return "Mode set to full-access (danger-full-access sandbox).";
   }
 }
 
@@ -66,6 +64,7 @@ export function formatSessionStatus(session: SessionState, codexSessionIdleMinut
     "Status:",
     `repo: ${session.selectedRepo ?? "(not selected)"}`,
     `mode: ${session.mode}`,
+    `reasoning: ${session.reasoningEffortOverride ?? "default"}`,
     `active request: ${session.activeRequestId ?? "none"}`,
     `codex session: ${codexSession}`
   ].join("\n");
@@ -108,7 +107,8 @@ export function formatTaskResult(result: TaskResult, repo: string, mode: PolicyM
     lines.push(`codex session: ${result.threadId}`);
   }
 
-  if (safeOutputTail) {
+  // Avoid flooding Telegram with Codex banners/transcript on successful runs.
+  if (!result.ok && safeOutputTail) {
     lines.push(`output:\n${safeOutputTail}`);
   }
 

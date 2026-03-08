@@ -8,6 +8,7 @@ describe("SessionManager", () => {
 
     sessions.setRepo(100, "payments-api");
     sessions.setMode(100, "active");
+    sessions.setReasoningEffortOverride(100, "low");
     sessions.setActiveRequest(100, "abc123");
     sessions.setCodexThread(100, "thread_1");
 
@@ -17,7 +18,8 @@ describe("SessionManager", () => {
       selectedRepo: "payments-api",
       mode: "active",
       activeRequestId: "abc123",
-      codexThreadId: "thread_1"
+      codexThreadId: "thread_1",
+      reasoningEffortOverride: "low"
     });
     expect(typeof session.updatedAt).toBe("string");
     expect(typeof session.codexLastActiveAt).toBe("string");

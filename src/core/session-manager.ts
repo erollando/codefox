@@ -1,4 +1,4 @@
-import type { PolicyMode, SessionState } from "../types/domain.js";
+import type { CodexReasoningEffort, PolicyMode, SessionState } from "../types/domain.js";
 
 export class SessionManager {
   private readonly sessions = new Map<number, SessionState>();
@@ -16,6 +16,7 @@ export class SessionManager {
         activeRequestId: session.activeRequestId,
         codexThreadId: session.codexThreadId,
         codexLastActiveAt: session.codexLastActiveAt,
+        reasoningEffortOverride: session.reasoningEffortOverride,
         updatedAt: session.updatedAt ?? new Date().toISOString()
       });
     }
@@ -56,6 +57,14 @@ export class SessionManager {
   setMode(chatId: number, mode: PolicyMode): SessionState {
     const session = this.getOrCreate(chatId);
     session.mode = mode;
+    session.updatedAt = new Date().toISOString();
+    this.emitChange();
+    return session;
+  }
+
+  setReasoningEffortOverride(chatId: number, reasoningEffort?: CodexReasoningEffort): SessionState {
+    const session = this.getOrCreate(chatId);
+    session.reasoningEffortOverride = reasoningEffort;
     session.updatedAt = new Date().toISOString();
     this.emitChange();
     return session;

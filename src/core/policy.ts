@@ -12,13 +12,8 @@ export class PolicyEngine {
     switch (mode) {
       case "observe":
       case "active":
-        return { allowed: true, requiresApproval: false };
       case "full-access":
-        return {
-          allowed: true,
-          requiresApproval: true,
-          reason: "full-access requires explicit approval"
-        };
+        return { allowed: true, requiresApproval: false };
       default:
         throw new PolicyError(`Unsupported mode '${mode}'`);
     }

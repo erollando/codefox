@@ -1,4 +1,4 @@
-import type { PolicyMode } from "../types/domain.js";
+import type { CodexReasoningEffort, PolicyMode } from "../types/domain.js";
 
 export type ParsedCommand =
   | { type: "help" }
@@ -9,6 +9,7 @@ export type ParsedCommand =
   | { type: "repo_remove"; repoName: string }
   | { type: "repo_info"; repoName?: string }
   | { type: "mode"; mode: PolicyMode }
+  | { type: "reasoning"; reasoningEffort?: CodexReasoningEffort }
   | { type: "run"; instruction: string }
   | { type: "steer"; instruction: string }
   | { type: "close" }
@@ -20,6 +21,8 @@ export type ParsedCommand =
   | { type: "unknown"; raw: string };
 
 const MODES: PolicyMode[] = ["observe", "active", "full-access"];
+const REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
+const REASONING_RESET_ARGS = new Set(["default", "reset"]);
 
 function parseWithArg(text: string): [string, string] {
   const trimmed = text.trim();
@@ -71,6 +74,14 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "mode", mode: "active" };
     case "/full-access":
       return { type: "mode", mode: "full-access" };
+    case "/reasoning":
+    case "/effort":
+      if (REASONING_RESET_ARGS.has(arg.toLowerCase())) {
+        return { type: "reasoning", reasoningEffort: undefined };
+      }
+      return REASONING_EFFORTS.includes(arg as CodexReasoningEffort)
+        ? { type: "reasoning", reasoningEffort: arg as CodexReasoningEffort }
+        : { type: "unknown", raw: text };
     case "/run":
       return arg ? { type: "run", instruction: arg } : { type: "unknown", raw: text };
     case "/steer":

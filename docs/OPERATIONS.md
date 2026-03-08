@@ -52,7 +52,7 @@ npm run verify
 
 ## Persistent State
 
-- Session and approval state are stored in `state.filePath` (default `./.codefox/state.json`).
+- Session state (and any legacy approval records) are stored in `state.filePath` (default `./.codefox/state.json`).
 - This allows `/repo`, `/mode`, and Codex session thread state to survive restarts.
 - Optional `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
 - `state.codexSessionIdleMinutes` closes stale Codex thread sessions after idle timeout.
@@ -61,19 +61,16 @@ npm run verify
 ## Operational Commands (Telegram)
 
 - `/status` to inspect selected repo, mode, active request, and codex session id
+- `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
 - `/close` to close stored Codex session thread explicitly
-- `/pending` to inspect the pending approval request details
-- `/approve` and `/deny` for approval flow
 - `/abort` to stop active Codex execution
 - `/repo add <name> <absolute-path>` to register a repo at runtime
 - `/repo init <name> [base-path]` to create, `git init`, register, and auto-select a repo
 - `/repo remove <name>` to remove a registered repo
 - `/repo info [name]` to inspect mapped repo path
 - `/mode <observe|active|full-access>` to set execution policy mode
-- `full-access` mode requires explicit approval per run
-- Approval ownership rule: only the user who created a pending request can approve or deny it.
 - Optional AGENTS guard: when enabled, `/run` in non-observe mode requires `AGENTS.md` in repo root.
 - Optional instruction policy can block:
   - blocked text patterns
@@ -81,6 +78,9 @@ npm run verify
   - download URLs outside allowed domains
 - If `forbiddenPathPatterns` is not configured, CodeFox uses a secure default set for common secret paths/files.
 - Codex subprocess environment is filtered by `codex.blockedEnvVars` before run start.
+- Codex runtime tuning can be set in config via `codex.model`, `codex.reasoningEffort`, and `codex.configOverrides`.
+- Image/document prompts are supported: upload attachment(s) and then send `/run ...`, or include a caption on upload.
+- Attachment context is consumed by the next `/run` or `/steer` and then cleared.
 
 ## Troubleshooting
 

@@ -44,6 +44,18 @@ describe("parseCommand", () => {
       type: "mode",
       mode: "observe"
     });
+    expect(parseCommand("/reasoning high")).toEqual({
+      type: "reasoning",
+      reasoningEffort: "high"
+    });
+    expect(parseCommand("/effort low")).toEqual({
+      type: "reasoning",
+      reasoningEffort: "low"
+    });
+    expect(parseCommand("/reasoning default")).toEqual({
+      type: "reasoning",
+      reasoningEffort: undefined
+    });
     expect(parseCommand("/run@codefox_bot fix tests")).toEqual({
       type: "run",
       instruction: "fix tests"
@@ -71,6 +83,7 @@ describe("parseCommand", () => {
     expect(parseCommand("/repo remove").type).toBe("unknown");
     expect(parseCommand("/run").type).toBe("unknown");
     expect(parseCommand("/steer").type).toBe("unknown");
+    expect(parseCommand("/reasoning insane").type).toBe("unknown");
     expect(parseCommand("/ask why").type).toBe("unknown");
     expect(parseCommand("/task fix").type).toBe("unknown");
   });

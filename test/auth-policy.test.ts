@@ -27,11 +27,7 @@ describe("PolicyEngine", () => {
     expect(policy.decide("active")).toEqual({ allowed: true, requiresApproval: false });
   });
 
-  it("requires approval for full-access runs", () => {
-    expect(policy.decide("full-access")).toEqual({
-      allowed: true,
-      requiresApproval: true,
-      reason: "full-access requires explicit approval"
-    });
+  it("allows full-access runs without codefox pre-run approval", () => {
+    expect(policy.decide("full-access")).toEqual({ allowed: true, requiresApproval: false });
   });
 });

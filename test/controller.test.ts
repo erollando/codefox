@@ -25,6 +25,22 @@ class FakeTelegram {
   }
 }
 
+class FakeTelegramWithFiles extends FakeTelegram {
+  constructor(
+    private readonly files: Record<string, { localPath: string; originalName?: string; mimeType?: string }>
+  ) {
+    super();
+  }
+
+  async downloadFile(fileId: string): Promise<{ localPath: string; originalName?: string; mimeType?: string }> {
+    const file = this.files[fileId];
+    if (!file) {
+      throw new Error(`missing file ${fileId}`);
+    }
+    return file;
+  }
+}
+
 class FakeAudit {
   readonly events: Array<Record<string, unknown>> = [];
 
@@ -61,9 +77,10 @@ function makeController(
     defaultMode?: "observe" | "active" | "full-access";
     requireAgentsForRuns?: boolean;
     instructionPolicy?: InstructionPolicy;
+    telegram?: FakeTelegram;
   }
 ) {
-  const telegram = new FakeTelegram();
+  const telegram = options?.telegram ?? new FakeTelegram();
   const audit = new FakeAudit();
   const approvals = new ApprovalStore();
   const sessions = new SessionManager(options?.defaultMode ?? "observe");
@@ -147,7 +164,97 @@ describe("CodeFoxController", () => {
     expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_1");
   });
 
-  it("requires approval for full-access and enforces approval ownership", async () => {
+  it("updates per-chat reasoning effort via /reasoning and forwards it to codex", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, sessions } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/reasoning low"));
+    await controller.handleUpdate(makeUpdate("/run check status"));
+    await flushAsyncWork();
+
+    expect(sessions.getOrCreate(100).reasoningEffortOverride).toBe("low");
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0].context.reasoningEffortOverride).toBe("low");
+  });
+
+  it("resets per-chat reasoning effort to config default via /reasoning default", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, sessions } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/reasoning high"));
+    await controller.handleUpdate(makeUpdate("/reasoning default"));
+    await controller.handleUpdate(makeUpdate("/run check status"));
+    await flushAsyncWork();
+
+    expect(sessions.getOrCreate(100).reasoningEffortOverride).toBeUndefined();
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0].context.reasoningEffortOverride).toBeUndefined();
+  });
+
+  it("uses uploaded attachment context for the next run only", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const telegram = new FakeTelegramWithFiles({
+      photo_file_1: {
+        localPath: "/tmp/codefox-photo-1.jpg",
+        originalName: "photo.jpg",
+        mimeType: "image/jpeg"
+      }
+    });
+    const { controller } = makeController(fakeCodex, { telegram });
+
+    await controller.handleUpdate({
+      update_id: 1,
+      message: {
+        message_id: 1,
+        from: { id: 1 },
+        chat: { id: 100 },
+        photo: [{ file_id: "photo_file_1", width: 200, height: 200 }]
+      }
+    });
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/run what is in the uploaded image?"));
+    await flushAsyncWork();
+    await controller.handleUpdate(makeUpdate("/run repeat without uploading again"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(2);
+    expect(fakeCodex.calls[0].context.attachments?.length).toBe(1);
+    expect(fakeCodex.calls[0].context.attachments?.[0].kind).toBe("image");
+    expect(fakeCodex.calls[0].context.attachments?.[0].localPath).toBe("/tmp/codefox-photo-1.jpg");
+    expect(fakeCodex.calls[1].context.attachments ?? []).toHaveLength(0);
+  });
+
+  it("executes /run directly in full-access mode without codefox pre-run approval", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -164,25 +271,12 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode full-access"));
     await controller.handleUpdate(makeUpdate("/run install dependencies"));
-
-    const pending = approvals.get(100);
-    expect(pending).toBeDefined();
-    expect(pending?.mode).toBe("full-access");
-    expect(telegram.sent.some((item) => item.text.includes("Approval required"))).toBe(true);
-
-    await controller.handleUpdate(makeUpdate("/approve", 2));
-    await controller.handleUpdate(makeUpdate("/deny", 2));
     await flushAsyncWork();
 
-    expect(
-      telegram.sent.some((item) => item.text.includes("Only the requesting user can approve this request."))
-    ).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Only the requesting user can deny this request."))).toBe(true);
-    expect(fakeCodex.calls.length).toBe(0);
-
-    await controller.handleUpdate(makeUpdate("/approve", 1));
-    await flushAsyncWork();
     expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0].context.mode).toBe("full-access");
+    expect(approvals.get(100)).toBeUndefined();
+    expect(telegram.sent.some((item) => item.text.includes("Approval required"))).toBe(false);
   });
 
   it("allows runs in observe mode with read-only intent", async () => {

@@ -198,6 +198,7 @@ export class CodexCliAdapter {
 
   private buildArgs(repoPath: string, context: TaskContext): string[] {
     const instruction = buildInstruction(context);
+    const globalArgs = buildGlobalArgs(this.config, context);
     const sandboxArgs = buildSandboxArgs(this.config.command, this.config.baseArgs, context.mode);
     const repoArgs = this.config.repoArgTemplate.map((value) => value.replaceAll("{repoPath}", repoPath));
 
@@ -217,8 +218,33 @@ export class CodexCliAdapter {
       })
       .filter((value) => value.length > 0);
 
-    return [...this.config.baseArgs, ...sandboxArgs, ...repoArgs, ...resumeArgs, ...runArgs];
+    return [...globalArgs, ...this.config.baseArgs, ...sandboxArgs, ...repoArgs, ...resumeArgs, ...runArgs];
   }
+}
+
+function buildGlobalArgs(config: CodexConfig, context: TaskContext): string[] {
+  const args: string[] = [];
+
+  if (config.profile) {
+    args.push("--profile", config.profile);
+  }
+  if (config.model) {
+    args.push("--model", config.model);
+  }
+  const effectiveReasoningEffort = context.reasoningEffortOverride ?? config.reasoningEffort;
+  if (effectiveReasoningEffort) {
+    args.push("-c", `model_reasoning_effort="${effectiveReasoningEffort}"`);
+  }
+  for (const attachment of context.attachments ?? []) {
+    if (attachment.kind === "image") {
+      args.push("--image", attachment.localPath);
+    }
+  }
+  for (const override of config.configOverrides ?? []) {
+    args.push("-c", override);
+  }
+
+  return args;
 }
 
 function shouldInjectCodexResume(command: string, baseArgs: string[]): boolean {
@@ -342,11 +368,7 @@ function summarizeOutput(exitCode: number, output: string, timedOut: boolean, ab
   }
 
   if (exitCode === 0) {
-    const lines = output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    return lines[lines.length - 1] ?? "Completed successfully.";
+    return extractAssistantSummary(output) ?? "Completed successfully.";
   }
 
   if (!output) {
@@ -374,9 +396,28 @@ function buildInstruction(context: TaskContext): string {
     `run_kind: ${context.runKind}`,
     ...(context.resumeThreadId ? [`resume_thread_id: ${context.resumeThreadId}`] : []),
     ...guidanceBlock,
+    ...buildAttachmentGuidance(context),
     "User instruction:",
     context.instruction
   ].join("\n");
+}
+
+function buildAttachmentGuidance(context: TaskContext): string[] {
+  const attachments = context.attachments ?? [];
+  if (attachments.length === 0) {
+    return [];
+  }
+
+  const lines = ["Attachments:"];
+  for (const attachment of attachments) {
+    lines.push(
+      `- ${attachment.kind}: ${attachment.originalName ?? "unnamed"} (${attachment.mimeType ?? "unknown"}) at ${
+        attachment.localPath
+      }`
+    );
+  }
+  lines.push("Use these attachments as additional context for the user request.");
+  return lines;
 }
 
 function detectThreadId(text: string): string | undefined {
@@ -396,7 +437,16 @@ function detectThreadId(text: string): string | undefined {
   }
 
   const threadToken = matchLast(text, /\b(thread_[A-Za-z0-9._:-]+)\b/g);
-  return threadToken;
+  if (threadToken) {
+    return threadToken;
+  }
+
+  // Plain-text Codex exec output commonly prints "session id: <uuid>".
+  const sessionId = matchLast(
+    text,
+    /session id\s*:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi
+  );
+  return sessionId;
 }
 
 function matchLast(text: string, pattern: RegExp): string | undefined {
@@ -412,4 +462,84 @@ function matchLast(text: string, pattern: RegExp): string | undefined {
 
 function isResumeRejected(text: string): boolean {
   return RESUME_REJECTION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function extractAssistantSummary(output: string): string | undefined {
+  const normalized = output.replace(/\r\n/g, "\n");
+
+  const jsonSummary = extractJsonAgentMessage(normalized);
+  if (jsonSummary) {
+    return jsonSummary.slice(0, 400);
+  }
+
+  const codexSummary = extractPlainCodexMessage(normalized);
+  if (codexSummary) {
+    return codexSummary.slice(0, 400);
+  }
+
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !isNoiseLine(line));
+  const last = lines[lines.length - 1];
+  return last ? last.slice(0, 400) : undefined;
+}
+
+function extractJsonAgentMessage(text: string): string | undefined {
+  let last: string | undefined;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        type?: string;
+        item?: { type?: string; text?: string };
+      };
+      if (parsed.type === "item.completed" && parsed.item?.type === "agent_message" && parsed.item.text) {
+        last = parsed.item.text.trim();
+      }
+    } catch {
+      // Ignore non-JSON lines.
+    }
+  }
+  return last;
+}
+
+function extractPlainCodexMessage(text: string): string | undefined {
+  let last: string | undefined;
+  const pattern = /(?:^|\n)codex\s*\n([\s\S]*?)(?=\n(?:tokens used|$))/g;
+  for (const match of text.matchAll(pattern)) {
+    const candidate = (match[1] ?? "").trim();
+    if (candidate) {
+      last = candidate;
+    }
+  }
+  return last;
+}
+
+function isNoiseLine(line: string): boolean {
+  const normalized = line.toLowerCase();
+  if (normalized === "--------") {
+    return true;
+  }
+  if (normalized === "user" || normalized === "codex" || normalized === "tokens used") {
+    return true;
+  }
+  if (/^[0-9][0-9,]*$/.test(line)) {
+    return true;
+  }
+  return (
+    normalized.startsWith("openai codex ") ||
+    normalized.startsWith("workdir:") ||
+    normalized.startsWith("model:") ||
+    normalized.startsWith("provider:") ||
+    normalized.startsWith("approval:") ||
+    normalized.startsWith("sandbox:") ||
+    normalized.startsWith("reasoning effort:") ||
+    normalized.startsWith("reasoning summaries:") ||
+    normalized.startsWith("session id:") ||
+    normalized.startsWith("mcp startup:")
+  );
 }

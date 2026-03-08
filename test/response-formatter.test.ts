@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { formatTaskResult } from "../src/core/response-formatter.js";
 
 describe("response formatter", () => {
+  it("does not include raw output tail on successful runs", () => {
+    const message = formatTaskResult(
+      {
+        ok: true,
+        summary: "done",
+        outputTail: "OpenAI Codex v0.111.0\\n...very noisy transcript..."
+      },
+      "payments-api",
+      "active"
+    );
+
+    expect(message).toContain("Run completed.");
+    expect(message).not.toContain("output:");
+    expect(message).not.toContain("very noisy transcript");
+  });
+
   it("preserves long output blocks for adapter-level chunking", () => {
     const longOutput = "x".repeat(2000);
     const message = formatTaskResult(

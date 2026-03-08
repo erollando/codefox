@@ -440,4 +440,209 @@ describe("CodexCliAdapter", () => {
     expect(capturedArgs).toContain("thread_old");
     expect(result.threadId).toBe("thread_abc");
   });
+
+  it("captures plain-text codex session id for future resume", async () => {
+    const runner: ProcessRunner = {
+      spawn() {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("session id: 019cccf2-3c55-74c1-81ca-b312d7281274\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "status",
+      requestId: "sess001",
+      runKind: "run"
+    };
+
+    const result = await adapter.startTask("/tmp/payments-api", context).result;
+    expect(result.threadId).toBe("019cccf2-3c55-74c1-81ca-b312d7281274");
+  });
+
+  it("uses the assistant message instead of token counters as summary", async () => {
+    const runner: ProcessRunner = {
+      spawn() {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("OpenAI Codex v0.111.0 (research preview)\n");
+          child.stdout.emitData("session id: 019cccf2-3c55-74c1-81ca-b312d7281274\n");
+          child.stdout.emitData("user\n");
+          child.stdout.emitData("question\n");
+          child.stdout.emitData("codex\n");
+          child.stdout.emitData("Yes, this is the answer.\n");
+          child.stdout.emitData("tokens used\n");
+          child.stdout.emitData("2,092\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "status",
+      requestId: "sum001",
+      runKind: "run"
+    };
+
+    const result = await adapter.startTask("/tmp/payments-api", context).result;
+    expect(result.summary).toBe("Yes, this is the answer.");
+  });
+
+  it("prepends codex global runtime flags from config", async () => {
+    let capturedArgs: string[] = [];
+    const runner: ProcessRunner = {
+      spawn(_command, args) {
+        capturedArgs = args;
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("ok\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        model: "gpt-5.3-codex",
+        reasoningEffort: "low",
+        configOverrides: ['model_reasoning_summary="none"'],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "status",
+      requestId: "flags001",
+      runKind: "run",
+      attachments: [
+        {
+          kind: "image",
+          localPath: "/tmp/photo.png",
+          originalName: "photo.png",
+          mimeType: "image/png"
+        }
+      ]
+    };
+
+    await adapter.startTask("/tmp/payments-api", context).result;
+
+    expect(capturedArgs.slice(0, 2)).toEqual(["--model", "gpt-5.3-codex"]);
+    expect(capturedArgs).toContain("-c");
+    expect(capturedArgs).toContain('model_reasoning_effort="low"');
+    expect(capturedArgs).toContain('model_reasoning_summary="none"');
+    expect(capturedArgs).toContain("--image");
+    expect(capturedArgs).toContain("/tmp/photo.png");
+    expect(capturedArgs).toContain("exec");
+  });
+
+  it("adds non-image attachments to instruction context without using --image", async () => {
+    let capturedArgs: string[] = [];
+    const runner: ProcessRunner = {
+      spawn(_command, args) {
+        capturedArgs = args;
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("ok\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "observe",
+      instruction: "summarize attached document",
+      requestId: "doc001",
+      runKind: "run",
+      attachments: [
+        {
+          kind: "document",
+          localPath: "/tmp/doc.md",
+          originalName: "doc.md",
+          mimeType: "text/markdown"
+        }
+      ]
+    };
+
+    await adapter.startTask("/tmp/payments-api", context).result;
+
+    expect(capturedArgs).not.toContain("--image");
+    expect(capturedArgs.join(" ")).toContain("Attachments:");
+    expect(capturedArgs.join(" ")).toContain("/tmp/doc.md");
+    expect(capturedArgs.join(" ")).toContain("summarize attached document");
+  });
 });

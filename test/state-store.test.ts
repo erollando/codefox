@@ -78,6 +78,7 @@ describe("JsonStateStore", () => {
         activeRequestId: undefined,
         codexThreadId: undefined,
         codexLastActiveAt: undefined,
+        reasoningEffortOverride: undefined,
         updatedAt: expect.any(String)
       }
     ]);

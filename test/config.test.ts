@@ -181,6 +181,26 @@ describe("config validation", () => {
     expect(validated.codex.preflightTimeoutMs).toBe(9000);
   });
 
+  it("parses codex runtime options for model/profile/reasoning/config overrides", () => {
+    const config = makeValidConfig();
+    (config.codex as Record<string, unknown>).model = "gpt-5.3-codex";
+    (config.codex as Record<string, unknown>).profile = "default";
+    (config.codex as Record<string, unknown>).reasoningEffort = "medium";
+    (config.codex as Record<string, unknown>).configOverrides = ['model_reasoning_summary="none"'];
+
+    const validated = validateConfig(config);
+    expect(validated.codex.model).toBe("gpt-5.3-codex");
+    expect(validated.codex.profile).toBe("default");
+    expect(validated.codex.reasoningEffort).toBe("medium");
+    expect(validated.codex.configOverrides).toEqual(['model_reasoning_summary="none"']);
+  });
+
+  it("rejects invalid codex reasoningEffort values", () => {
+    const config = makeValidConfig();
+    (config.codex as Record<string, unknown>).reasoningEffort = "extreme";
+    expect(() => validateConfig(config)).toThrowError(/codex\.reasoningEffort/);
+  });
+
   it("rejects non-positive codex preflight timeout", () => {
     const config = makeValidConfig();
     (config.codex as Record<string, unknown>).preflightTimeoutMs = 0;
