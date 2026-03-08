@@ -68,6 +68,10 @@ npm run verify
 - `/abort` to stop active Codex execution
 - `/repo add <name> <absolute-path>` to register a repo at runtime
 - `/repo init <name> [base-path]` to create, `git init`, register, and auto-select a repo
+- `/repo bootstrap <name> <python|java|nodejs> [base-path]` to init/register, apply local AGENTS template, and scaffold playbook docs
+- `/repo template <name> <python|java|nodejs>` to apply local AGENTS template to an existing repo
+- `/repo playbook <name> [overwrite]` to scaffold or refresh `SPEC.md`, `MILESTONES.md`, `RUNBOOK.md`, `VERIFY.md`, `STATUS.md`
+- `/repo guide [name]` to inspect AGENTS/playbook coverage and get next-step guidance
 - `/repo remove <name>` to remove a registered repo
 - `/repo info [name]` to inspect mapped repo path
 - `/mode <observe|active|full-access>` to set execution policy mode
@@ -81,6 +85,7 @@ npm run verify
 - Codex runtime tuning can be set in config via `codex.model`, `codex.reasoningEffort`, and `codex.configOverrides`.
 - Image/document prompts are supported: upload attachment(s) and then send `/run ...`, or include a caption on upload.
 - Attachment context is consumed by the next `/run` or `/steer` and then cleared.
+- `/repo bootstrap` and `/repo template` apply downstream `AGENTS.md` templates intended for normal git tracking.
 
 ## Troubleshooting
 

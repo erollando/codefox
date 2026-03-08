@@ -12,3 +12,4 @@ coverage/
 !.env.example
 
 config/codefox.config.json
+

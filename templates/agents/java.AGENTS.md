@@ -38,9 +38,19 @@ Build and maintain a clean, testable Java project.
 - Prefer small, isolated unit tests first, then integration tests when needed.
 - Report exact build/test commands and outcomes.
 
+## Long-horizon docs
+
+- Keep these repo-root docs updated when planning/executing non-trivial work:
+  - `SPEC.md`
+  - `MILESTONES.md`
+  - `RUNBOOK.md`
+  - `VERIFY.md`
+  - `STATUS.md`
+- `STATUS.md` should track progress against `MILESTONES.md`.
+- If this repo is managed through CodeFox, `/repo playbook <name>` can scaffold missing docs.
+
 ## Scope boundaries
 
 - Do not access or print secret files.
 - Do not operate outside the configured repository root.
 - Keep changes focused; avoid unrelated refactors.
-

@@ -520,6 +520,112 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("selected: anonfox2"))).toBe(true);
   });
 
+  it("supports repo bootstrap with AGENTS template", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const defaultBase = await mkdtemp(path.join(os.tmpdir(), "codefox-repo-bootstrap-"));
+    const initializedPaths: string[] = [];
+    const telegram = new FakeTelegram();
+
+    const controller = new CodeFoxController({
+      telegram,
+      access: new AccessControl([1], [100]),
+      repos: new RepoRegistry([]),
+      sessions: new SessionManager("observe"),
+      policy: new PolicyEngine(),
+      approvals: new ApprovalStore(),
+      audit: new FakeAudit(),
+      codex: fakeCodex,
+      repoInitDefaultParentPath: defaultBase,
+      initializeRepo: async (repoPath) => {
+        initializedPaths.push(repoPath);
+      },
+      requireAgentsForRuns: false,
+      instructionPolicy: new InstructionPolicy({
+        blockedPatterns: [],
+        allowedDownloadDomains: []
+      }),
+      codexSessionIdleMinutes: 120
+    });
+
+    await controller.handleUpdate(makeUpdate("/repo bootstrap anonbootstrap nodejs"));
+
+    const repoPath = path.join(defaultBase, "anonbootstrap");
+    const agentsPath = path.join(repoPath, "AGENTS.md");
+    const specPath = path.join(repoPath, "SPEC.md");
+    const milestonesPath = path.join(repoPath, "MILESTONES.md");
+    const runbookPath = path.join(repoPath, "RUNBOOK.md");
+    const verifyPath = path.join(repoPath, "VERIFY.md");
+    const statusPath = path.join(repoPath, "STATUS.md");
+
+    expect((await stat(repoPath)).isDirectory()).toBe(true);
+    expect((await stat(agentsPath)).isFile()).toBe(true);
+    expect((await stat(specPath)).isFile()).toBe(true);
+    expect((await stat(milestonesPath)).isFile()).toBe(true);
+    expect((await stat(runbookPath)).isFile()).toBe(true);
+    expect((await stat(verifyPath)).isFile()).toBe(true);
+    expect((await stat(statusPath)).isFile()).toBe(true);
+    expect(initializedPaths).toEqual([repoPath]);
+    expect(telegram.sent.some((item) => item.text.includes("Repo initialized and added: anonbootstrap"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Template applied (nodejs)"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Playbook scaffold applied for anonbootstrap"))).toBe(true);
+  });
+
+  it("supports repo playbook and repo guide commands", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const repoPath = await mkdtemp(path.join(os.tmpdir(), "codefox-repo-playbook-"));
+    const telegram = new FakeTelegram();
+    const controller = new CodeFoxController({
+      telegram,
+      access: new AccessControl([1], [100]),
+      repos: new RepoRegistry([{ name: "playbook-repo", rootPath: repoPath }]),
+      sessions: new SessionManager("observe"),
+      policy: new PolicyEngine(),
+      approvals: new ApprovalStore(),
+      audit: new FakeAudit(),
+      codex: fakeCodex,
+      repoInitDefaultParentPath: "/tmp",
+      initializeRepo: async () => {},
+      requireAgentsForRuns: false,
+      instructionPolicy: new InstructionPolicy({
+        blockedPatterns: [],
+        allowedDownloadDomains: []
+      }),
+      codexSessionIdleMinutes: 120
+    });
+
+    await controller.handleUpdate(makeUpdate("/repo guide playbook-repo"));
+    await controller.handleUpdate(makeUpdate("/repo playbook playbook-repo"));
+    await controller.handleUpdate(makeUpdate("/repo guide playbook-repo"));
+
+    expect(telegram.sent.some((item) => item.text.includes("Repo guidance for playbook-repo"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Missing: AGENTS.md"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Playbook scaffold applied for playbook-repo"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Playbook docs: 5/5 present"))).toBe(true);
+    expect((await stat(path.join(repoPath, "SPEC.md"))).isFile()).toBe(true);
+    expect((await stat(path.join(repoPath, "MILESTONES.md"))).isFile()).toBe(true);
+    expect((await stat(path.join(repoPath, "RUNBOOK.md"))).isFile()).toBe(true);
+    expect((await stat(path.join(repoPath, "VERIFY.md"))).isFile()).toBe(true);
+    expect((await stat(path.join(repoPath, "STATUS.md"))).isFile()).toBe(true);
+  });
+
   it("blocks active/full-access runs when AGENTS.md guard is enabled and file is missing", async () => {
     const fakeCodexBlocked: FakeCodex = {
       calls: [],

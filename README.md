@@ -51,6 +51,10 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 - `/repo <name>`
 - `/repo add <name> <absolute-path>`
 - `/repo init <name> [base-path]`
+- `/repo bootstrap <name> <python|java|nodejs> [base-path]`
+- `/repo template <name> <python|java|nodejs>`
+- `/repo playbook <name> [overwrite]`
+- `/repo guide [name]`
 - `/repo remove <name>`
 - `/repo info [name]`
 - `/mode <observe|active|full-access>`
@@ -69,6 +73,13 @@ Image/document prompts:
 - Upload an image or document, then send `/run <question>` to analyze it.
 - You can also upload with a caption; caption text is treated like normal input (`/run` for plain text captions, or a slash command).
 - Uploaded attachment context is one-shot: it is consumed by the next `/run` or `/steer` unless you upload again.
+
+Repo bootstrap and local agent docs:
+
+- `/repo bootstrap ...` initializes a repo, applies a local AGENTS template, and scaffolds playbook docs (`SPEC.md`, `MILESTONES.md`, `RUNBOOK.md`, `VERIFY.md`, `STATUS.md`).
+- `/repo template ...` applies a template to an existing registered repo.
+- `/repo playbook ...` scaffolds or refreshes the same playbook docs for an existing repo.
+- `/repo guide ...` reports AGENTS/playbook coverage and recommends next commands.
 
 ## Configuration
 

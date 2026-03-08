@@ -2,6 +2,7 @@ export type PolicyMode = "observe" | "active" | "full-access";
 export type RunKind = "run" | "steer";
 export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 export type TaskAttachmentKind = "image" | "document";
+export type AgentTemplateName = "python" | "java" | "nodejs";
 
 export interface TaskAttachment {
   kind: TaskAttachmentKind;

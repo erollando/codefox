@@ -25,8 +25,9 @@ import {
 } from "./response-formatter.js";
 import type { SessionManager } from "./session-manager.js";
 import { makeRequestId } from "./ids.js";
+import { AGENT_TEMPLATE_NAMES, PLAYBOOK_FILE_NAMES, applyAgentTemplate, applyPlaybookDocs } from "./agent-files.js";
 import type {
-  CodexReasoningEffort,
+  AgentTemplateName,
   PolicyMode,
   RepoConfig,
   RunKind,
@@ -165,6 +166,22 @@ export class CodeFoxController {
       }
       case "repo_init": {
         await this.handleRepoInit(chatId, userId, command.repoName, command.basePath);
+        return;
+      }
+      case "repo_bootstrap": {
+        await this.handleRepoBootstrap(chatId, userId, command.repoName, command.template, command.basePath);
+        return;
+      }
+      case "repo_template": {
+        await this.handleRepoTemplate(chatId, userId, command.repoName, command.template);
+        return;
+      }
+      case "repo_playbook": {
+        await this.handleRepoPlaybook(chatId, userId, command.repoName, command.overwrite);
+        return;
+      }
+      case "repo_guide": {
+        await this.handleRepoGuide(chatId, userId, command.repoName);
         return;
       }
       case "repo_remove": {
@@ -537,6 +554,172 @@ export class CodeFoxController {
     }
 
     await this.registerRepo(chatId, userId, repoName, resolvedPath, "repo_initialized");
+  }
+
+  private async handleRepoBootstrap(
+    chatId: number,
+    userId: number,
+    repoName: string,
+    template: AgentTemplateName,
+    basePathOverride?: string
+  ): Promise<void> {
+    if (!AGENT_TEMPLATE_NAMES.includes(template)) {
+      await this.deps.telegram.sendMessage(chatId, formatError(`Unknown template '${template}'.`));
+      return;
+    }
+
+    if (this.deps.repos.has(repoName)) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Repository '${repoName}' already exists. Use /repo template ${repoName} <python|java|nodejs> instead.`
+      );
+      return;
+    }
+
+    await this.handleRepoInit(chatId, userId, repoName, basePathOverride);
+    if (!this.deps.repos.has(repoName)) {
+      return;
+    }
+    await this.handleRepoTemplate(chatId, userId, repoName, template);
+    await this.handleRepoPlaybook(chatId, userId, repoName, false);
+  }
+
+  private async handleRepoTemplate(
+    chatId: number,
+    userId: number,
+    repoName: string,
+    template: AgentTemplateName
+  ): Promise<void> {
+    if (!AGENT_TEMPLATE_NAMES.includes(template)) {
+      await this.deps.telegram.sendMessage(chatId, formatError(`Unknown template '${template}'.`));
+      return;
+    }
+
+    try {
+      const repo = this.deps.repos.get(repoName);
+      const result = await applyAgentTemplate({
+        repoPath: repo.rootPath,
+        templateName: template
+      });
+
+      await this.deps.audit.log({
+        type: "repo_agent_template_applied",
+        chatId,
+        userId,
+        repo: repoName,
+        template,
+        agentsPath: result.agentsPath,
+        wroteAgents: result.written
+      });
+
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          `Template applied (${template}) for ${repoName}.`,
+          `AGENTS: ${result.written ? "written" : "already present, kept as-is"}`,
+          `path: ${result.agentsPath}`
+        ].join("\n")
+      );
+    } catch (error) {
+      await this.deps.telegram.sendMessage(chatId, formatError(String(error)));
+    }
+  }
+
+  private async handleRepoPlaybook(chatId: number, userId: number, repoName: string, overwrite: boolean): Promise<void> {
+    try {
+      const repo = this.deps.repos.get(repoName);
+      const result = await applyPlaybookDocs({
+        repoPath: repo.rootPath,
+        repoName,
+        overwrite
+      });
+
+      await this.deps.audit.log({
+        type: "repo_playbook_applied",
+        chatId,
+        userId,
+        repo: repoName,
+        overwrite,
+        writtenFiles: result.written,
+        keptFiles: result.kept
+      });
+
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          `Playbook scaffold applied for ${repoName}.`,
+          `written: ${result.written.length > 0 ? result.written.join(", ") : "(none)"}`,
+          `kept: ${result.kept.length > 0 ? result.kept.join(", ") : "(none)"}`,
+          !overwrite && result.kept.length > 0 ? `Use /repo playbook ${repoName} overwrite to refresh kept files.` : "",
+          "Keep STATUS.md aligned with MILESTONES.md."
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    } catch (error) {
+      await this.deps.telegram.sendMessage(chatId, formatError(String(error)));
+    }
+  }
+
+  private async handleRepoGuide(chatId: number, userId: number, repoName?: string): Promise<void> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    const targetName = repoName ?? session.selectedRepo;
+    if (!targetName) {
+      await this.deps.telegram.sendMessage(chatId, "No repo selected. Use /repo <name> or /repo guide <name>.");
+      return;
+    }
+
+    try {
+      const repo = this.deps.repos.get(targetName);
+      const allFiles = ["AGENTS.md", ...PLAYBOOK_FILE_NAMES];
+      const statuses = await Promise.all(
+        allFiles.map(async (fileName) => {
+          const filePath = path.join(repo.rootPath, fileName);
+          const fileStat = await stat(filePath).catch(() => undefined);
+          return {
+            fileName,
+            present: Boolean(fileStat?.isFile())
+          };
+        })
+      );
+
+      const missing = statuses.filter((entry) => !entry.present).map((entry) => entry.fileName);
+      const playbookSet = new Set<string>(PLAYBOOK_FILE_NAMES);
+      const presentPlaybook = statuses.filter((entry) => playbookSet.has(entry.fileName) && entry.present).length;
+      const missingPlaybook = PLAYBOOK_FILE_NAMES.length - presentPlaybook;
+      const hasAgents = statuses.find((entry) => entry.fileName === "AGENTS.md")?.present ?? false;
+
+      await this.deps.audit.log({
+        type: "repo_guided",
+        chatId,
+        userId,
+        repo: targetName,
+        hasAgents,
+        presentPlaybook,
+        missingPlaybook,
+        missingFiles: missing
+      });
+
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          `Repo guidance for ${targetName}`,
+          `path: ${repo.rootPath}`,
+          `AGENTS.md: ${hasAgents ? "present" : "missing"}`,
+          `Playbook docs: ${presentPlaybook}/${PLAYBOOK_FILE_NAMES.length} present`,
+          missing.length > 0 ? `Missing: ${missing.join(", ")}` : "Missing: (none)",
+          hasAgents ? "" : `Use /repo template ${targetName} <python|java|nodejs> to create AGENTS.md.`,
+          missingPlaybook > 0
+            ? `Use /repo playbook ${targetName} to create SPEC.md, MILESTONES.md, RUNBOOK.md, VERIFY.md, STATUS.md.`
+            : "",
+          "Keep STATUS.md milestone progress aligned with MILESTONES.md."
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    } catch (error) {
+      await this.deps.telegram.sendMessage(chatId, formatError(String(error)));
+    }
   }
 
   private async registerRepo(

@@ -1,4 +1,4 @@
-import type { CodexReasoningEffort, PolicyMode } from "../types/domain.js";
+import type { AgentTemplateName, CodexReasoningEffort, PolicyMode } from "../types/domain.js";
 
 export type ParsedCommand =
   | { type: "help" }
@@ -6,6 +6,10 @@ export type ParsedCommand =
   | { type: "repo"; repoName: string }
   | { type: "repo_add"; repoName: string; repoPath: string }
   | { type: "repo_init"; repoName: string; basePath?: string }
+  | { type: "repo_bootstrap"; repoName: string; template: AgentTemplateName; basePath?: string }
+  | { type: "repo_template"; repoName: string; template: AgentTemplateName }
+  | { type: "repo_playbook"; repoName: string; overwrite: boolean }
+  | { type: "repo_guide"; repoName?: string }
   | { type: "repo_remove"; repoName: string }
   | { type: "repo_info"; repoName?: string }
   | { type: "mode"; mode: PolicyMode }
@@ -22,6 +26,7 @@ export type ParsedCommand =
 
 const MODES: PolicyMode[] = ["observe", "active", "full-access"];
 const REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
+const AGENT_TEMPLATES: AgentTemplateName[] = ["python", "java", "nodejs"];
 const REASONING_RESET_ARGS = new Set(["default", "reset"]);
 
 function parseWithArg(text: string): [string, string] {
@@ -126,6 +131,62 @@ function parseRepoCommand(arg: string, raw: string): ParsedCommand {
       type: "repo_init",
       repoName: rest[0],
       basePath: rest.length > 1 ? rest.slice(1).join(" ") : undefined
+    };
+  }
+
+  if (normalized === "bootstrap") {
+    if (rest.length < 2) {
+      return { type: "unknown", raw };
+    }
+    const template = rest[1]?.toLowerCase() as AgentTemplateName;
+    if (!AGENT_TEMPLATES.includes(template)) {
+      return { type: "unknown", raw };
+    }
+    return {
+      type: "repo_bootstrap",
+      repoName: rest[0],
+      template,
+      basePath: rest.length > 2 ? rest.slice(2).join(" ") : undefined
+    };
+  }
+
+  if (normalized === "template") {
+    if (rest.length !== 2) {
+      return { type: "unknown", raw };
+    }
+    const template = rest[1]?.toLowerCase() as AgentTemplateName;
+    if (!AGENT_TEMPLATES.includes(template)) {
+      return { type: "unknown", raw };
+    }
+    return {
+      type: "repo_template",
+      repoName: rest[0],
+      template
+    };
+  }
+
+  if (normalized === "playbook") {
+    if (rest.length < 1 || rest.length > 2) {
+      return { type: "unknown", raw };
+    }
+    const overwriteArg = rest[1]?.toLowerCase();
+    if (rest.length === 2 && overwriteArg !== "overwrite" && overwriteArg !== "--overwrite") {
+      return { type: "unknown", raw };
+    }
+    return {
+      type: "repo_playbook",
+      repoName: rest[0],
+      overwrite: rest.length === 2
+    };
+  }
+
+  if (normalized === "guide") {
+    if (rest.length > 1) {
+      return { type: "unknown", raw };
+    }
+    return {
+      type: "repo_guide",
+      repoName: rest[0]
     };
   }
 

@@ -24,6 +24,41 @@ describe("parseCommand", () => {
       repoName: "pii-api",
       basePath: "/tmp/work"
     });
+    expect(parseCommand("/repo bootstrap pii-api python")).toEqual({
+      type: "repo_bootstrap",
+      repoName: "pii-api",
+      template: "python",
+      basePath: undefined
+    });
+    expect(parseCommand("/repo bootstrap pii-api nodejs /tmp/work")).toEqual({
+      type: "repo_bootstrap",
+      repoName: "pii-api",
+      template: "nodejs",
+      basePath: "/tmp/work"
+    });
+    expect(parseCommand("/repo template pii-api java")).toEqual({
+      type: "repo_template",
+      repoName: "pii-api",
+      template: "java"
+    });
+    expect(parseCommand("/repo playbook pii-api")).toEqual({
+      type: "repo_playbook",
+      repoName: "pii-api",
+      overwrite: false
+    });
+    expect(parseCommand("/repo playbook pii-api overwrite")).toEqual({
+      type: "repo_playbook",
+      repoName: "pii-api",
+      overwrite: true
+    });
+    expect(parseCommand("/repo guide")).toEqual({
+      type: "repo_guide",
+      repoName: undefined
+    });
+    expect(parseCommand("/repo guide pii-api")).toEqual({
+      type: "repo_guide",
+      repoName: "pii-api"
+    });
     expect(parseCommand("/repo remove pii-api")).toEqual({
       type: "repo_remove",
       repoName: "pii-api"
@@ -80,9 +115,18 @@ describe("parseCommand", () => {
     expect(parseCommand("/repo").type).toBe("unknown");
     expect(parseCommand("/repo add only-name").type).toBe("unknown");
     expect(parseCommand("/repo init").type).toBe("unknown");
+    expect(parseCommand("/repo bootstrap").type).toBe("unknown");
+    expect(parseCommand("/repo bootstrap pii-api ruby").type).toBe("unknown");
+    expect(parseCommand("/repo template pii-api").type).toBe("unknown");
+    expect(parseCommand("/repo template pii-api ruby").type).toBe("unknown");
+    expect(parseCommand("/repo playbook").type).toBe("unknown");
+    expect(parseCommand("/repo playbook pii-api force").type).toBe("unknown");
+    expect(parseCommand("/repo guide pii-api extra").type).toBe("unknown");
     expect(parseCommand("/repo remove").type).toBe("unknown");
     expect(parseCommand("/run").type).toBe("unknown");
     expect(parseCommand("/steer").type).toBe("unknown");
+    expect(parseCommand("/codex-changelog").type).toBe("unknown");
+    expect(parseCommand("/changelog").type).toBe("unknown");
     expect(parseCommand("/reasoning insane").type).toBe("unknown");
     expect(parseCommand("/ask why").type).toBe("unknown");
     expect(parseCommand("/task fix").type).toBe("unknown");
