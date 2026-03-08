@@ -9,15 +9,13 @@ function makeValidConfig() {
     telegram: {
       allowedUserIds: [1],
       pollingTimeoutSeconds: 30,
-      pollIntervalMs: 1000,
-      plainTextMode: "task"
+      pollIntervalMs: 1000
     },
     repos: [{ name: "payments-api", rootPath: "/tmp/payments-api" }],
     codex: {
       command: "codex",
       baseArgs: [],
-      askArgTemplate: ["{instruction}"],
-      taskArgTemplate: ["{instruction}"],
+      runArgTemplate: ["{instruction}"],
       repoArgTemplate: [],
       timeoutMs: 1000
     },
@@ -47,18 +45,12 @@ describe("config validation", () => {
     expect(() => validateConfig(config)).toThrowError(/TELEGRAM_BOT_TOKEN/);
   });
 
-  it("requires telegram.plainTextMode", () => {
-    const config = makeValidConfig();
-    delete (config.telegram as Record<string, unknown>).plainTextMode;
-    expect(() => validateConfig(config)).toThrowError(/telegram\.plainTextMode/);
-  });
-
   it("accepts valid minimal config", () => {
     const config = makeValidConfig();
     const validated = validateConfig(config);
     expect(validated.telegram.token).toBe("123456:valid");
     expect(validated.telegram.discardBacklogOnStart).toBe(true);
-    expect(validated.safety.requireAgentsForMutatingTasks).toBe(false);
+    expect(validated.safety.requireAgentsForRuns).toBe(false);
     expect(validated.state.filePath.endsWith(path.join(".codefox", "state.json"))).toBe(true);
     expect(validated.repoInit.defaultParentPath.endsWith(path.join("git"))).toBe(true);
     expect(validated.safety.instructionPolicy.forbiddenPathPatterns).toContain(".env");
@@ -66,6 +58,7 @@ describe("config validation", () => {
     expect(validated.codex.preflightEnabled).toBe(true);
     expect(validated.codex.preflightArgs).toEqual(["--version"]);
     expect(validated.codex.preflightTimeoutMs).toBe(5000);
+    expect(validated.state.codexSessionIdleMinutes).toBe(120);
     expect(validated.state.sessionTtlHours).toBeUndefined();
     expect(validated.state.approvalTtlHours).toBeUndefined();
   });
@@ -77,16 +70,18 @@ describe("config validation", () => {
     expect(validated.policy.defaultMode).toBe("full-access");
   });
 
-  it("parses optional state TTL values", () => {
+  it("parses optional state TTL and codex session idle values", () => {
     const config = makeValidConfig();
     (config as Record<string, unknown>).state = {
       filePath: "./.codefox/state.json",
       sessionTtlHours: 72,
-      approvalTtlHours: 24
+      approvalTtlHours: 24,
+      codexSessionIdleMinutes: 45
     };
     const validated = validateConfig(config);
     expect(validated.state.sessionTtlHours).toBe(72);
     expect(validated.state.approvalTtlHours).toBe(24);
+    expect(validated.state.codexSessionIdleMinutes).toBe(45);
   });
 
   it("parses optional repoInit.defaultParentPath", () => {
@@ -124,6 +119,15 @@ describe("config validation", () => {
     expect(() => validateConfig(config)).toThrowError(/state\.sessionTtlHours/);
   });
 
+  it("rejects non-positive codex session idle timeout", () => {
+    const config = makeValidConfig();
+    (config as Record<string, unknown>).state = {
+      filePath: "./.codefox/state.json",
+      codexSessionIdleMinutes: 0
+    };
+    expect(() => validateConfig(config)).toThrowError(/state\.codexSessionIdleMinutes/);
+  });
+
   it("rejects overlapping repository roots", () => {
     const config = makeValidConfig();
     config.repos = [
@@ -140,10 +144,16 @@ describe("config validation", () => {
     expect(validated.repos).toEqual([]);
   });
 
-  it("rejects empty codex arg templates", () => {
+  it("rejects empty codex run arg template", () => {
     const config = makeValidConfig();
-    config.codex.taskArgTemplate = [];
-    expect(() => validateConfig(config)).toThrowError(/taskArgTemplate/);
+    config.codex.runArgTemplate = [];
+    expect(() => validateConfig(config)).toThrowError(/runArgTemplate/);
+  });
+
+  it("rejects run arg template without instruction placeholder", () => {
+    const config = makeValidConfig();
+    config.codex.runArgTemplate = ["--no-input"];
+    expect(() => validateConfig(config)).toThrowError(/\{instruction\}/);
   });
 
   it("accepts missing codex.repoArgTemplate", () => {

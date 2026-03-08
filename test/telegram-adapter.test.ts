@@ -120,7 +120,7 @@ describe("TelegramPollingAdapter", () => {
                 update_id: 20,
                 message: {
                   message_id: 1,
-                  text: "/task stale",
+                  text: "/run stale",
                   from: { id: 1 },
                   chat: { id: 100 }
                 }
@@ -140,7 +140,7 @@ describe("TelegramPollingAdapter", () => {
                 update_id: 21,
                 message: {
                   message_id: 2,
-                  text: "/task fresh",
+                  text: "/run fresh",
                   from: { id: 1 },
                   chat: { id: 100 }
                 }
@@ -169,6 +169,6 @@ describe("TelegramPollingAdapter", () => {
     adapter.stop();
     await polling;
 
-    expect(handled).toEqual(["/task fresh"]);
+    expect(handled).toEqual(["/run fresh"]);
   });
 });

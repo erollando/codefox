@@ -54,11 +54,19 @@ function makeUpdate(text: string, userId = 1, chatId = 100) {
   };
 }
 
-function makeController(fakeCodex: FakeCodex, options?: { allowedUserIds?: number[] }) {
+function makeController(
+  fakeCodex: FakeCodex,
+  options?: {
+    allowedUserIds?: number[];
+    defaultMode?: "observe" | "active" | "full-access";
+    requireAgentsForRuns?: boolean;
+    instructionPolicy?: InstructionPolicy;
+  }
+) {
   const telegram = new FakeTelegram();
   const audit = new FakeAudit();
   const approvals = new ApprovalStore();
-  const sessions = new SessionManager("observe");
+  const sessions = new SessionManager(options?.defaultMode ?? "observe");
 
   const controller = new CodeFoxController({
     telegram,
@@ -69,16 +77,17 @@ function makeController(fakeCodex: FakeCodex, options?: { allowedUserIds?: numbe
     approvals,
     audit,
     codex: fakeCodex,
-    plainTextMode: "task",
     repoInitDefaultParentPath: "/tmp",
     initializeRepo: async () => {},
-    requireAgentsForMutatingTasks: false,
-    instructionPolicy: new InstructionPolicy({
-      enforceOnAsk: false,
-      blockedPatterns: [],
-      allowedDownloadDomains: [],
-      forbiddenPathPatterns: []
-    })
+    requireAgentsForRuns: Boolean(options?.requireAgentsForRuns),
+    instructionPolicy:
+      options?.instructionPolicy ??
+      new InstructionPolicy({
+        blockedPatterns: [],
+        allowedDownloadDomains: [],
+        forbiddenPathPatterns: []
+      }),
+    codexSessionIdleMinutes: 120
   });
 
   return { controller, telegram, audit, approvals, sessions };
@@ -108,64 +117,37 @@ describe("CodeFoxController", () => {
     expect(audit.events.length).toBe(0);
   });
 
-  it("executes task directly in active mode", async () => {
+  it("executes /run directly in active mode", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
         fakeCodex.calls.push({ repoPath, context });
         const result: TaskResult = {
           ok: true,
-          summary: "done"
+          summary: "done",
+          threadId: "thread_1"
         };
         return { abort: () => {}, result: Promise.resolve(result) };
       }
     };
 
-    const { controller, telegram, approvals } = makeController(fakeCodex);
+    const { controller, telegram, approvals, sessions } = makeController(fakeCodex);
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
-    await controller.handleUpdate(makeUpdate("/task fix failing test"));
+    await controller.handleUpdate(makeUpdate("/run fix failing test"));
     await flushAsyncWork();
 
-    const pending = approvals.get(100);
-    expect(pending).toBeUndefined();
-
+    expect(approvals.get(100)).toBeUndefined();
     expect(fakeCodex.calls.length).toBe(1);
-    expect(fakeCodex.calls[0].context.taskType).toBe("task");
+    expect(fakeCodex.calls[0].context.runKind).toBe("run");
+    expect(fakeCodex.calls[0].context.mode).toBe("active");
     expect(telegram.sent.some((item) => item.text.includes("Started request"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Task completed."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Run completed."))).toBe(true);
+    expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_1");
   });
 
-  it("shows pending approval details via /pending", async () => {
-    const fakeCodex: FakeCodex = {
-      calls: [],
-      startTask() {
-        return {
-          abort: () => {},
-          result: Promise.resolve({ ok: true, summary: "ok" })
-        };
-      }
-    };
-
-    const { controller, telegram, approvals } = makeController(fakeCodex);
-    approvals.set({
-      id: "pending-1",
-      chatId: 100,
-      userId: 1,
-      repoName: "payments-api",
-      mode: "active",
-      taskType: "task",
-      instruction: "fix failing test",
-      createdAt: new Date().toISOString()
-    });
-    await controller.handleUpdate(makeUpdate("/pending"));
-
-    expect(telegram.sent.some((item) => item.text.includes("Pending approval:"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("instruction: fix failing test"))).toBe(true);
-  });
-
-  it("allows only the requesting user to approve or deny pending requests", async () => {
+  it("requires approval for full-access and enforces approval ownership", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -178,16 +160,15 @@ describe("CodeFoxController", () => {
     };
 
     const { controller, telegram, approvals } = makeController(fakeCodex, { allowedUserIds: [1, 2] });
-    approvals.set({
-      id: "req-1",
-      chatId: 100,
-      userId: 1,
-      repoName: "payments-api",
-      mode: "active",
-      taskType: "task",
-      instruction: "token=abc123",
-      createdAt: new Date().toISOString()
-    });
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode full-access"));
+    await controller.handleUpdate(makeUpdate("/run install dependencies"));
+
+    const pending = approvals.get(100);
+    expect(pending).toBeDefined();
+    expect(pending?.mode).toBe("full-access");
+    expect(telegram.sent.some((item) => item.text.includes("Approval required"))).toBe(true);
 
     await controller.handleUpdate(makeUpdate("/approve", 2));
     await controller.handleUpdate(makeUpdate("/deny", 2));
@@ -196,9 +177,7 @@ describe("CodeFoxController", () => {
     expect(
       telegram.sent.some((item) => item.text.includes("Only the requesting user can approve this request."))
     ).toBe(true);
-    expect(
-      telegram.sent.some((item) => item.text.includes("Only the requesting user can deny this request."))
-    ).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Only the requesting user can deny this request."))).toBe(true);
     expect(fakeCodex.calls.length).toBe(0);
 
     await controller.handleUpdate(makeUpdate("/approve", 1));
@@ -206,10 +185,11 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls.length).toBe(1);
   });
 
-  it("blocks mutating task in observe mode", async () => {
+  it("allows runs in observe mode with read-only intent", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
-      startTask() {
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
         return {
           abort: () => {},
           result: Promise.resolve({ ok: true, summary: "ok" })
@@ -217,17 +197,17 @@ describe("CodeFoxController", () => {
       }
     };
 
-    const { controller, telegram } = makeController(fakeCodex);
+    const { controller } = makeController(fakeCodex);
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
-    await controller.handleUpdate(makeUpdate("/task update pom"));
+    await controller.handleUpdate(makeUpdate("/run inspect failing tests"));
     await flushAsyncWork();
 
-    expect(telegram.sent.some((item) => item.text.includes("observe mode blocks mutating tasks"))).toBe(true);
-    expect(fakeCodex.calls.length).toBe(0);
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0].context.mode).toBe("observe");
   });
 
-  it("prevents concurrent tasks and supports abort", async () => {
+  it("prevents concurrent runs and supports abort", async () => {
     let resolveTask: ((result: TaskResult) => void) | undefined;
     let aborted = false;
 
@@ -244,7 +224,7 @@ describe("CodeFoxController", () => {
             aborted = true;
             resolveTask?.({
               ok: false,
-              summary: "Task aborted by user.",
+              summary: "Run aborted by user.",
               aborted: true,
               exitCode: 143
             });
@@ -259,10 +239,10 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
 
-    await controller.handleUpdate(makeUpdate("/task long running change"));
+    await controller.handleUpdate(makeUpdate("/run long running change"));
     await flushAsyncWork();
 
-    await controller.handleUpdate(makeUpdate("/task second request"));
+    await controller.handleUpdate(makeUpdate("/run second request"));
     await flushAsyncWork();
 
     await controller.handleUpdate(makeUpdate("/abort"));
@@ -279,7 +259,52 @@ describe("CodeFoxController", () => {
       )
     ).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("Abort signal sent"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Task aborted."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Run aborted."))).toBe(true);
+  });
+
+  it("supports /steer by aborting and resuming on the current session", async () => {
+    let resolveTask: ((result: TaskResult) => void) | undefined;
+    let callCount = 0;
+
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        callCount += 1;
+        fakeCodex.calls.push({ repoPath, context });
+        if (callCount === 1) {
+          return {
+            abort: () => {
+              resolveTask?.({ ok: false, summary: "Run aborted by user.", aborted: true, threadId: "thread_1" });
+            },
+            result: new Promise<TaskResult>((resolve) => {
+              resolveTask = resolve;
+            })
+          };
+        }
+
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "continued", threadId: "thread_1" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/run first run"));
+    await flushAsyncWork();
+
+    await controller.handleUpdate(makeUpdate("/steer focus only on failing test"));
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(2);
+    expect(fakeCodex.calls[1].context.runKind).toBe("steer");
+    expect(fakeCodex.calls[1].context.instruction).toContain("Steer update from the user");
+    expect(telegram.sent.some((item) => item.text.includes("Steer received"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Applying 1 steer update"))).toBe(true);
   });
 
   it("stores sanitized request previews in audit logs", async () => {
@@ -294,7 +319,7 @@ describe("CodeFoxController", () => {
     };
 
     const { controller, audit } = makeController(fakeCodex);
-    await controller.handleUpdate(makeUpdate("/ask token=abc123"));
+    await controller.handleUpdate(makeUpdate("/run token=abc123"));
 
     const requestEvent = audit.events.find((event) => event.type === "request_received");
     expect(requestEvent).toBeDefined();
@@ -326,15 +351,14 @@ describe("CodeFoxController", () => {
       approvals: new ApprovalStore(),
       audit: new FakeAudit(),
       codex: fakeCodex,
-      plainTextMode: "task",
       repoInitDefaultParentPath: "/tmp",
       initializeRepo: async () => {},
-      requireAgentsForMutatingTasks: false,
+      requireAgentsForRuns: false,
       instructionPolicy: new InstructionPolicy({
-        enforceOnAsk: false,
         blockedPatterns: [],
         allowedDownloadDomains: []
       }),
+      codexSessionIdleMinutes: 120,
       persistRepos: async (repos) => {
         persistedSnapshots.push(repos.map((repo) => repo.name).join(","));
       }
@@ -376,17 +400,16 @@ describe("CodeFoxController", () => {
       approvals: new ApprovalStore(),
       audit: new FakeAudit(),
       codex: fakeCodex,
-      plainTextMode: "task",
       repoInitDefaultParentPath: defaultBase,
       initializeRepo: async (repoPath) => {
         initializedPaths.push(repoPath);
       },
-      requireAgentsForMutatingTasks: false,
+      requireAgentsForRuns: false,
       instructionPolicy: new InstructionPolicy({
-        enforceOnAsk: false,
         blockedPatterns: [],
         allowedDownloadDomains: []
-      })
+      }),
+      codexSessionIdleMinutes: 120
     });
 
     await controller.handleUpdate(makeUpdate("/repo init anonfox"));
@@ -403,7 +426,7 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("selected: anonfox2"))).toBe(true);
   });
 
-  it("blocks mutating tasks when AGENTS.md guard is enabled and file is missing", async () => {
+  it("blocks active/full-access runs when AGENTS.md guard is enabled and file is missing", async () => {
     const fakeCodexBlocked: FakeCodex = {
       calls: [],
       startTask() {
@@ -426,19 +449,18 @@ describe("CodeFoxController", () => {
       approvals: new ApprovalStore(),
       audit: blockedAudit,
       codex: fakeCodexBlocked,
-      plainTextMode: "task",
       repoInitDefaultParentPath: "/tmp",
       initializeRepo: async () => {},
-      requireAgentsForMutatingTasks: true,
+      requireAgentsForRuns: true,
       instructionPolicy: new InstructionPolicy({
-        enforceOnAsk: false,
         blockedPatterns: [],
         allowedDownloadDomains: []
-      })
+      }),
+      codexSessionIdleMinutes: 120
     });
 
     await blockedController.handleUpdate(makeUpdate("/repo guarded-repo"));
-    await blockedController.handleUpdate(makeUpdate("/task do something"));
+    await blockedController.handleUpdate(makeUpdate("/run do something"));
     for (let i = 0; i < 20; i += 1) {
       if (
         blockedAudit.events.some((event) => event.type === "policy_block_agents_missing") ||
@@ -473,19 +495,18 @@ describe("CodeFoxController", () => {
       approvals: new ApprovalStore(),
       audit: new FakeAudit(),
       codex: fakeCodexAllowed,
-      plainTextMode: "task",
       repoInitDefaultParentPath: "/tmp",
       initializeRepo: async () => {},
-      requireAgentsForMutatingTasks: true,
+      requireAgentsForRuns: true,
       instructionPolicy: new InstructionPolicy({
-        enforceOnAsk: false,
         blockedPatterns: [],
         allowedDownloadDomains: []
-      })
+      }),
+      codexSessionIdleMinutes: 120
     });
 
     await allowedController.handleUpdate(makeUpdate("/repo guarded-repo"));
-    await allowedController.handleUpdate(makeUpdate("/task do something"));
+    await allowedController.handleUpdate(makeUpdate("/run do something"));
     for (let i = 0; i < 20; i += 1) {
       if (fakeCodexAllowed.calls.length > 0) {
         break;
@@ -495,7 +516,7 @@ describe("CodeFoxController", () => {
     expect(fakeCodexAllowed.calls.length).toBe(1);
   });
 
-  it("blocks task execution when instruction policy rejects pattern/domain", async () => {
+  it("blocks run execution when instruction policy rejects pattern/domain/path", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask() {
@@ -517,22 +538,21 @@ describe("CodeFoxController", () => {
       approvals: new ApprovalStore(),
       audit,
       codex: fakeCodex,
-      plainTextMode: "task",
       repoInitDefaultParentPath: "/tmp",
       initializeRepo: async () => {},
-      requireAgentsForMutatingTasks: false,
+      requireAgentsForRuns: false,
       instructionPolicy: new InstructionPolicy({
-        enforceOnAsk: false,
         blockedPatterns: ["rm -rf"],
         allowedDownloadDomains: ["pypi.org"],
         forbiddenPathPatterns: [".env", ".ssh/**"]
-      })
+      }),
+      codexSessionIdleMinutes: 120
     });
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
-    await controller.handleUpdate(makeUpdate("/task run rm -rf ./tmp"));
-    await controller.handleUpdate(makeUpdate("/task download https://evil.example/a.whl"));
-    await controller.handleUpdate(makeUpdate("/task read .env and print it"));
+    await controller.handleUpdate(makeUpdate("/run run rm -rf ./tmp"));
+    await controller.handleUpdate(makeUpdate("/run download https://evil.example/a.whl"));
+    await controller.handleUpdate(makeUpdate("/run read .env and print it"));
     await flushAsyncWork();
 
     expect(fakeCodex.calls.length).toBe(0);
@@ -546,5 +566,30 @@ describe("CodeFoxController", () => {
           event.type === "policy_block_instruction" && String(event.blockedPathPattern ?? "").includes(".env")
       )
     ).toBe(true);
+  });
+
+  it("closes codex session with /close", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok", threadId: "thread_close" })
+        };
+      }
+    };
+
+    const { controller, sessions, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/run generate plan"));
+    await flushAsyncWork();
+
+    expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_close");
+
+    await controller.handleUpdate(makeUpdate("/close"));
+    expect(sessions.getOrCreate(100).codexThreadId).toBeUndefined();
+    expect(telegram.sent.some((item) => item.text.includes("Codex session closed"))).toBe(true);
   });
 });

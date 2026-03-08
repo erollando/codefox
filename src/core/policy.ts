@@ -1,5 +1,5 @@
 import { PolicyError } from "./errors.js";
-import type { PolicyMode, TaskType } from "../types/domain.js";
+import type { PolicyMode } from "../types/domain.js";
 
 export interface PolicyDecision {
   allowed: boolean;
@@ -8,21 +8,17 @@ export interface PolicyDecision {
 }
 
 export class PolicyEngine {
-  decide(mode: PolicyMode, taskType: TaskType): PolicyDecision {
-    if (taskType === "ask") {
-      return { allowed: true, requiresApproval: false };
-    }
-
+  decide(mode: PolicyMode): PolicyDecision {
     switch (mode) {
       case "observe":
-        return {
-          allowed: false,
-          requiresApproval: false,
-          reason: "observe mode blocks mutating tasks"
-        };
       case "active":
-      case "full-access":
         return { allowed: true, requiresApproval: false };
+      case "full-access":
+        return {
+          allowed: true,
+          requiresApproval: true,
+          reason: "full-access requires explicit approval"
+        };
       default:
         throw new PolicyError(`Unsupported mode '${mode}'`);
     }

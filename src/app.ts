@@ -67,11 +67,11 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     approvals,
     audit,
     codex,
-    plainTextMode: config.telegram.plainTextMode,
     persistRepos: async (repos) => persistRepos(resolvedConfigPath, repos),
     repoInitDefaultParentPath: config.repoInit.defaultParentPath,
-    requireAgentsForMutatingTasks: config.safety.requireAgentsForMutatingTasks,
-    instructionPolicy
+    requireAgentsForRuns: config.safety.requireAgentsForRuns,
+    instructionPolicy,
+    codexSessionIdleMinutes: config.state.codexSessionIdleMinutes
   });
 
   let started = false;
@@ -98,7 +98,7 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         type: "service_start",
         repos: config.repos.map((repo) => repo.name),
         defaultMode: config.policy.defaultMode,
-        plainTextMode: config.telegram.plainTextMode
+        codexSessionIdleMinutes: config.state.codexSessionIdleMinutes
       });
 
       await telegram.start((update) => controller.handleUpdate(update));

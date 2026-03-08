@@ -4,16 +4,14 @@
     "allowedChatIds": [123456789],
     "pollingTimeoutSeconds": 30,
     "pollIntervalMs": 1000,
-    "discardBacklogOnStart": true,
-    "plainTextMode": "task"
+    "discardBacklogOnStart": true
   },
   "repos": [],
   "_note_repos": "Optional: keep repos empty and use /repo init <name> [base-path], or replace with your real repo mappings.",
   "codex": {
     "command": "codex",
     "baseArgs": ["exec"],
-    "askArgTemplate": ["{instruction}"],
-    "taskArgTemplate": ["{instruction}"],
+    "runArgTemplate": ["{instruction}"],
     "repoArgTemplate": [],
     "timeoutMs": 1800000,
     "blockedEnvVars": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"],
@@ -28,9 +26,8 @@
     "defaultParentPath": "./git"
   },
   "safety": {
-    "requireAgentsForMutatingTasks": false,
+    "requireAgentsForRuns": false,
     "instructionPolicy": {
-      "enforceOnAsk": false,
       "blockedPatterns": [],
       "allowedDownloadDomains": [],
       "forbiddenPathPatterns": [
@@ -48,7 +45,8 @@
   "state": {
     "filePath": "./.codefox/state.json",
     "sessionTtlHours": 168,
-    "approvalTtlHours": 72
+    "approvalTtlHours": 72,
+    "codexSessionIdleMinutes": 120
   },
   "audit": {
     "logFilePath": "./logs/audit.log"

@@ -53,28 +53,34 @@ npm run verify
 ## Persistent State
 
 - Session and approval state are stored in `state.filePath` (default `./.codefox/state.json`).
-- This allows `/repo` and `/mode` state to survive restarts.
+- This allows `/repo`, `/mode`, and Codex session thread state to survive restarts.
 - Optional `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
+- `state.codexSessionIdleMinutes` closes stale Codex thread sessions after idle timeout.
 - If state file is missing/corrupt, CodeFox starts with empty in-memory state.
 
 ## Operational Commands (Telegram)
 
-- `/status` to inspect selected repo, mode, active request
+- `/status` to inspect selected repo, mode, active request, and codex session id
+- `/run <instruction>` to execute work
+- `/steer <instruction>` to steer an active run (interrupt + resume fallback)
+- `/close` to close stored Codex session thread explicitly
 - `/pending` to inspect the pending approval request details
+- `/approve` and `/deny` for approval flow
 - `/abort` to stop active Codex execution
 - `/repo add <name> <absolute-path>` to register a repo at runtime
 - `/repo init <name> [base-path]` to create, `git init`, register, and auto-select a repo
 - `/repo remove <name>` to remove a registered repo
 - `/repo info [name]` to inspect mapped repo path
 - `/mode <observe|active|full-access>` to set execution policy mode
+- `full-access` mode requires explicit approval per run
 - Approval ownership rule: only the user who created a pending request can approve or deny it.
-- Optional AGENTS guard: when enabled, `/task` requires `AGENTS.md` in repo root.
-- Optional instruction policy: when configured, `/task` or `/ask` can be blocked by:
+- Optional AGENTS guard: when enabled, `/run` in non-observe mode requires `AGENTS.md` in repo root.
+- Optional instruction policy can block:
   - blocked text patterns
   - forbidden path references (for example `.env`, `*.key`, `.ssh/**`)
   - download URLs outside allowed domains
 - If `forbiddenPathPatterns` is not configured, CodeFox uses a secure default set for common secret paths/files.
-- Codex subprocess environment is filtered by `codex.blockedEnvVars` before task start.
+- Codex subprocess environment is filtered by `codex.blockedEnvVars` before run start.
 
 ## Troubleshooting
 
@@ -86,8 +92,8 @@ npm run verify
 - verify bot privacy/chat permissions in Telegram
 - verify `telegram.discardBacklogOnStart` setting matches desired startup behavior
 
-3. Codex task failures:
-- verify `codex.command` and argument templates
+3. Codex run failures:
+- verify `codex.command` and `codex.runArgTemplate`
 - for Codex CLI use non-interactive mode (`codex.baseArgs` should include `exec`)
 - unless overridden in `baseArgs`, CodeFox injects sandbox by mode (`observe` read-only, `active` workspace-write, `full-access` danger-full-access)
 - verify Codex preflight in startup logs (`codex.preflightEnabled`, args, timeout)
@@ -96,6 +102,6 @@ npm run verify
 - for Python bootstrap tasks, use project interpreter-scoped pip (`.venv/bin/python -m pip ...` on Linux/macOS, `.venv\\Scripts\\python.exe -m pip ...` on Windows) instead of guessing `pip` vs `pip3`
 - if output shows package index/DNS failures (for example `/simple/...` retries or `Name or service not known`), treat as sandbox/network limitation; run bootstrap directly on host shell or switch to `/mode full-access` only in trusted environments
 
-4. Stuck long-running task:
+4. Stuck long-running run:
 - send `/abort`
 - check whether process exit is reflected in audit log

@@ -1,5 +1,3 @@
-import type { TaskType } from "../types/domain.js";
-
 export interface InstructionPolicyDecision {
   allowed: boolean;
   reason?: string;
@@ -9,7 +7,6 @@ export interface InstructionPolicyDecision {
 }
 
 export interface InstructionPolicyConfig {
-  enforceOnAsk: boolean;
   blockedPatterns: string[];
   allowedDownloadDomains: string[];
   forbiddenPathPatterns?: string[];
@@ -25,20 +22,12 @@ export class InstructionPolicy {
     this.blockedPatterns = config.blockedPatterns
       .map((entry) => entry.trim().toLowerCase())
       .filter(Boolean);
-    this.allowedDomains = config.allowedDownloadDomains
-      .map((entry) => normalizeDomain(entry))
-      .filter(Boolean);
-    this.forbiddenPathPatterns = (config.forbiddenPathPatterns ?? [])
-      .map((entry) => normalizePath(entry))
-      .filter(Boolean);
+    this.allowedDomains = config.allowedDownloadDomains.map((entry) => normalizeDomain(entry)).filter(Boolean);
+    this.forbiddenPathPatterns = (config.forbiddenPathPatterns ?? []).map((entry) => normalizePath(entry)).filter(Boolean);
     this.forbiddenPathMatchers = this.forbiddenPathPatterns.map((pattern) => makePathMatcher(pattern));
   }
 
-  decide(taskType: TaskType, instruction: string): InstructionPolicyDecision {
-    if (taskType === "ask" && !this.config.enforceOnAsk) {
-      return { allowed: true };
-    }
-
+  decide(instruction: string): InstructionPolicyDecision {
     const normalizedInstruction = instruction.toLowerCase();
 
     for (const blocked of this.blockedPatterns) {

@@ -14,6 +14,8 @@ export class SessionManager {
         mode: session.mode,
         selectedRepo: session.selectedRepo,
         activeRequestId: session.activeRequestId,
+        codexThreadId: session.codexThreadId,
+        codexLastActiveAt: session.codexLastActiveAt,
         updatedAt: session.updatedAt ?? new Date().toISOString()
       });
     }
@@ -65,6 +67,29 @@ export class SessionManager {
     session.updatedAt = new Date().toISOString();
     this.emitChange();
     return session;
+  }
+
+  setCodexThread(chatId: number, threadId?: string): SessionState {
+    const session = this.getOrCreate(chatId);
+    session.codexThreadId = threadId;
+    session.codexLastActiveAt = threadId ? new Date().toISOString() : undefined;
+    session.updatedAt = new Date().toISOString();
+    this.emitChange();
+    return session;
+  }
+
+  touchCodexSession(chatId: number): SessionState {
+    const session = this.getOrCreate(chatId);
+    if (session.codexThreadId) {
+      session.codexLastActiveAt = new Date().toISOString();
+      session.updatedAt = new Date().toISOString();
+      this.emitChange();
+    }
+    return session;
+  }
+
+  clearCodexSession(chatId: number): SessionState {
+    return this.setCodexThread(chatId, undefined);
   }
 
   list(): SessionState[] {

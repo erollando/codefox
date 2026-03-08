@@ -22,19 +22,16 @@ describe("AccessControl", () => {
 describe("PolicyEngine", () => {
   const policy = new PolicyEngine();
 
-  it("allows ask in all modes", () => {
-    expect(policy.decide("observe", "ask")).toEqual({ allowed: true, requiresApproval: false });
-    expect(policy.decide("active", "ask")).toEqual({ allowed: true, requiresApproval: false });
-    expect(policy.decide("full-access", "ask")).toEqual({ allowed: true, requiresApproval: false });
+  it("allows observe and active runs without approval", () => {
+    expect(policy.decide("observe")).toEqual({ allowed: true, requiresApproval: false });
+    expect(policy.decide("active")).toEqual({ allowed: true, requiresApproval: false });
   });
 
-  it("handles task mode constraints", () => {
-    expect(policy.decide("observe", "task")).toEqual({
-      allowed: false,
-      requiresApproval: false,
-      reason: "observe mode blocks mutating tasks"
+  it("requires approval for full-access runs", () => {
+    expect(policy.decide("full-access")).toEqual({
+      allowed: true,
+      requiresApproval: true,
+      reason: "full-access requires explicit approval"
     });
-    expect(policy.decide("active", "task")).toEqual({ allowed: true, requiresApproval: false });
-    expect(policy.decide("full-access", "task")).toEqual({ allowed: true, requiresApproval: false });
   });
 });

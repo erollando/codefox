@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ApprovalRequest, SessionState } from "../types/domain.js";
+import type { ApprovalRequest, PolicyMode, SessionState } from "../types/domain.js";
 
 export interface PersistedState {
   sessions: SessionState[];
@@ -16,6 +16,8 @@ const EMPTY_STATE: PersistedState = {
   sessions: [],
   approvals: []
 };
+
+const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
 
 export class JsonStateStore {
   private writeQueue: Promise<void> = Promise.resolve();
@@ -83,13 +85,22 @@ function sanitizeSessions(sessions: SessionState[]): SessionState[] {
   const now = new Date().toISOString();
   return sessions
     .filter((session) => typeof session?.chatId === "number" && Number.isSafeInteger(session.chatId))
-    .map((session) => ({
-      chatId: session.chatId,
-      mode: session.mode,
-      selectedRepo: typeof session.selectedRepo === "string" ? session.selectedRepo : undefined,
-      activeRequestId: typeof session.activeRequestId === "string" ? session.activeRequestId : undefined,
-      updatedAt: isValidIsoTimestamp(session.updatedAt) ? session.updatedAt : now
-    }));
+    .map((session) => {
+      const mode = isPolicyMode(session.mode) ? session.mode : "observe";
+      const codexThreadId = typeof session.codexThreadId === "string" ? session.codexThreadId : undefined;
+      const codexLastActiveAt =
+        codexThreadId && isValidIsoTimestamp(session.codexLastActiveAt) ? session.codexLastActiveAt : undefined;
+
+      return {
+        chatId: session.chatId,
+        mode,
+        selectedRepo: typeof session.selectedRepo === "string" ? session.selectedRepo : undefined,
+        activeRequestId: typeof session.activeRequestId === "string" ? session.activeRequestId : undefined,
+        codexThreadId,
+        codexLastActiveAt,
+        updatedAt: isValidIsoTimestamp(session.updatedAt) ? session.updatedAt : now
+      };
+    });
 }
 
 function sanitizeApprovals(approvals: ApprovalRequest[]): ApprovalRequest[] {
@@ -108,8 +119,7 @@ function sanitizeApprovals(approvals: ApprovalRequest[]): ApprovalRequest[] {
       chatId: approval.chatId,
       userId: approval.userId,
       repoName: approval.repoName,
-      mode: approval.mode,
-      taskType: approval.taskType,
+      mode: isPolicyMode(approval.mode) ? approval.mode : "observe",
       instruction: approval.instruction,
       createdAt: isValidIsoTimestamp(approval.createdAt) ? approval.createdAt : now
     }));
@@ -117,6 +127,10 @@ function sanitizeApprovals(approvals: ApprovalRequest[]): ApprovalRequest[] {
 
 function isValidIsoTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function isPolicyMode(value: unknown): value is PolicyMode {
+  return typeof value === "string" && POLICY_MODES.includes(value as PolicyMode);
 }
 
 export function pruneStateByTtl(

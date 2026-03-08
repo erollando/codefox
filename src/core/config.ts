@@ -1,10 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ConfigError } from "./errors.js";
-import type { AppConfig, PlainTextMode, PolicyMode, RepoConfig } from "../types/domain.js";
+import type { AppConfig, PolicyMode, RepoConfig } from "../types/domain.js";
 
 const MODES: PolicyMode[] = ["observe", "active", "full-access"];
-const PLAIN_TEXT_MODES: PlainTextMode[] = ["task", "ask"];
 const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
   ".env",
   ".env.*",
@@ -15,11 +14,8 @@ const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
   "credentials/**",
   "secrets/**"
 ] as const;
-const DEFAULT_CODEX_BLOCKED_ENV_VARS = [
-  "TELEGRAM_BOT_TOKEN",
-  "TELEGRAM_TOKEN",
-  "CODEFOX_*"
-] as const;
+const DEFAULT_CODEX_BLOCKED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"] as const;
+const DEFAULT_CODEX_SESSION_IDLE_MINUTES = 120;
 
 function isMode(value: string): value is PolicyMode {
   return MODES.includes(value as PolicyMode);
@@ -109,9 +105,7 @@ function isWithinPath(parentPath: string, candidatePath: string): boolean {
   return !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
-function assertNoOverlappingRepoRoots(
-  repos: Array<{ name: string; rootPath: string }>
-): void {
+function assertNoOverlappingRepoRoots(repos: Array<{ name: string; rootPath: string }>): void {
   for (let i = 0; i < repos.length; i += 1) {
     for (let j = i + 1; j < repos.length; j += 1) {
       const left = repos[i];
@@ -134,14 +128,6 @@ function mustMode(value: unknown, key: string): PolicyMode {
     throw new ConfigError(`${key} must be one of ${MODES.join(", ")}`);
   }
   return mode;
-}
-
-function mustPlainTextMode(value: unknown, key: string): PlainTextMode {
-  const mode = mustString(value, key);
-  if (!PLAIN_TEXT_MODES.includes(mode as PlainTextMode)) {
-    throw new ConfigError(`${key} must be one of ${PLAIN_TEXT_MODES.join(", ")}`);
-  }
-  return mode as PlainTextMode;
 }
 
 export async function loadConfig(configPath?: string): Promise<AppConfig> {
@@ -232,10 +218,7 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
       )
     : undefined;
 
-  const pollingTimeoutSeconds = mustNumber(
-    telegram.pollingTimeoutSeconds,
-    "telegram.pollingTimeoutSeconds"
-  );
+  const pollingTimeoutSeconds = mustNumber(telegram.pollingTimeoutSeconds, "telegram.pollingTimeoutSeconds");
   const pollIntervalMs = mustNumber(telegram.pollIntervalMs, "telegram.pollIntervalMs");
   assertPositiveInteger(pollingTimeoutSeconds, "telegram.pollingTimeoutSeconds");
   assertPositiveInteger(pollIntervalMs, "telegram.pollIntervalMs");
@@ -253,23 +236,29 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
 
   const timeoutMs = mustNumber(codex.timeoutMs, "codex.timeoutMs");
   assertPositiveInteger(timeoutMs, "codex.timeoutMs");
+
   const preflightTimeoutMs =
     typeof codex.preflightTimeoutMs === "undefined"
       ? 5000
       : mustNumber(codex.preflightTimeoutMs, "codex.preflightTimeoutMs");
   assertPositiveInteger(preflightTimeoutMs, "codex.preflightTimeoutMs");
+
   const baseArgs = mustArray<string>(codex.baseArgs, "codex.baseArgs");
-  const askArgTemplate = mustArray<string>(codex.askArgTemplate, "codex.askArgTemplate");
-  const taskArgTemplate = mustArray<string>(codex.taskArgTemplate, "codex.taskArgTemplate");
-  const repoArgTemplate = codex.repoArgTemplate
-    ? mustArray<string>(codex.repoArgTemplate, "codex.repoArgTemplate")
-    : [];
-  const preflightArgs = codex.preflightArgs
-    ? mustArray<string>(codex.preflightArgs, "codex.preflightArgs")
-    : ["--version"];
-  assertNonEmptyArray(askArgTemplate, "codex.askArgTemplate");
-  assertNonEmptyArray(taskArgTemplate, "codex.taskArgTemplate");
+  const runArgTemplate = mustArray<string>(codex.runArgTemplate, "codex.runArgTemplate");
+  const repoArgTemplate = codex.repoArgTemplate ? mustArray<string>(codex.repoArgTemplate, "codex.repoArgTemplate") : [];
+  const preflightArgs = codex.preflightArgs ? mustArray<string>(codex.preflightArgs, "codex.preflightArgs") : ["--version"];
+  assertNonEmptyArray(runArgTemplate, "codex.runArgTemplate");
   assertNonEmptyArray(preflightArgs, "codex.preflightArgs");
+
+  if (!runArgTemplate.some((value) => value.includes("{instruction}"))) {
+    throw new ConfigError("codex.runArgTemplate must include at least one '{instruction}' placeholder");
+  }
+
+  const codexSessionIdleMinutes =
+    typeof state.codexSessionIdleMinutes === "undefined"
+      ? DEFAULT_CODEX_SESSION_IDLE_MINUTES
+      : mustNumber(state.codexSessionIdleMinutes, "state.codexSessionIdleMinutes");
+  assertPositiveInteger(codexSessionIdleMinutes, "state.codexSessionIdleMinutes");
 
   return {
     telegram: {
@@ -279,15 +268,13 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
       pollingTimeoutSeconds,
       pollIntervalMs,
       discardBacklogOnStart:
-        typeof telegram.discardBacklogOnStart === "boolean" ? telegram.discardBacklogOnStart : true,
-      plainTextMode: mustPlainTextMode(telegram.plainTextMode, "telegram.plainTextMode")
+        typeof telegram.discardBacklogOnStart === "boolean" ? telegram.discardBacklogOnStart : true
     },
     repos: normalizedRepos,
     codex: {
       command: mustString(codex.command, "codex.command"),
       baseArgs,
-      askArgTemplate,
-      taskArgTemplate,
+      runArgTemplate,
       repoArgTemplate,
       timeoutMs,
       blockedEnvVars: codex.blockedEnvVars
@@ -301,32 +288,23 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
       defaultMode: mustMode(policy.defaultMode, "policy.defaultMode")
     },
     safety: {
-      requireAgentsForMutatingTasks: Boolean(safety.requireAgentsForMutatingTasks),
+      requireAgentsForRuns: Boolean(safety.requireAgentsForRuns),
       instructionPolicy: {
-        enforceOnAsk: Boolean(instructionPolicy.enforceOnAsk),
         blockedPatterns: instructionPolicy.blockedPatterns
           ? mustStringArray(instructionPolicy.blockedPatterns, "safety.instructionPolicy.blockedPatterns")
           : [],
         allowedDownloadDomains: instructionPolicy.allowedDownloadDomains
-          ? mustStringArray(
-              instructionPolicy.allowedDownloadDomains,
-              "safety.instructionPolicy.allowedDownloadDomains"
-            )
+          ? mustStringArray(instructionPolicy.allowedDownloadDomains, "safety.instructionPolicy.allowedDownloadDomains")
           : [],
         forbiddenPathPatterns: instructionPolicy.forbiddenPathPatterns
-          ? mustStringArray(
-              instructionPolicy.forbiddenPathPatterns,
-              "safety.instructionPolicy.forbiddenPathPatterns"
-            )
+          ? mustStringArray(instructionPolicy.forbiddenPathPatterns, "safety.instructionPolicy.forbiddenPathPatterns")
           : [...DEFAULT_FORBIDDEN_PATH_PATTERNS]
       }
     },
     repoInit: {
       defaultParentPath: resolveFromBase(
         baseDir,
-        repoInit.defaultParentPath
-          ? mustString(repoInit.defaultParentPath, "repoInit.defaultParentPath")
-          : "./git"
+        repoInit.defaultParentPath ? mustString(repoInit.defaultParentPath, "repoInit.defaultParentPath") : "./git"
       )
     },
     state: {
@@ -335,14 +313,14 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
         state.filePath ? mustString(state.filePath, "state.filePath") : "./.codefox/state.json"
       ),
       sessionTtlHours: parseOptionalPositiveNumber(state.sessionTtlHours, "state.sessionTtlHours"),
-      approvalTtlHours: parseOptionalPositiveNumber(state.approvalTtlHours, "state.approvalTtlHours")
+      approvalTtlHours: parseOptionalPositiveNumber(state.approvalTtlHours, "state.approvalTtlHours"),
+      codexSessionIdleMinutes
     },
     audit: {
       logFilePath: resolveFromBase(baseDir, mustString(audit.logFilePath, "audit.logFilePath"))
     }
   };
 }
-
 
 function parseOptionalPositiveNumber(value: unknown, key: string): number | undefined {
   if (typeof value === "undefined") {

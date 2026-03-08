@@ -1,7 +1,5 @@
 export type PolicyMode = "observe" | "active" | "full-access";
-
-export type TaskType = "ask" | "task";
-export type PlainTextMode = "task" | "ask";
+export type RunKind = "run" | "steer";
 
 export interface RepoConfig {
   name: string;
@@ -15,14 +13,12 @@ export interface TelegramConfig {
   pollingTimeoutSeconds: number;
   pollIntervalMs: number;
   discardBacklogOnStart: boolean;
-  plainTextMode: PlainTextMode;
 }
 
 export interface CodexConfig {
   command: string;
   baseArgs: string[];
-  askArgTemplate: string[];
-  taskArgTemplate: string[];
+  runArgTemplate: string[];
   repoArgTemplate: string[];
   timeoutMs: number;
   blockedEnvVars: string[];
@@ -36,9 +32,8 @@ export interface PolicyConfig {
 }
 
 export interface SafetyConfig {
-  requireAgentsForMutatingTasks: boolean;
+  requireAgentsForRuns: boolean;
   instructionPolicy: {
-    enforceOnAsk: boolean;
     blockedPatterns: string[];
     allowedDownloadDomains: string[];
     forbiddenPathPatterns: string[];
@@ -57,6 +52,7 @@ export interface StateConfig {
   filePath: string;
   sessionTtlHours?: number;
   approvalTtlHours?: number;
+  codexSessionIdleMinutes: number;
 }
 
 export interface AppConfig {
@@ -75,6 +71,8 @@ export interface SessionState {
   selectedRepo?: string;
   mode: PolicyMode;
   activeRequestId?: string;
+  codexThreadId?: string;
+  codexLastActiveAt?: string;
   updatedAt: string;
 }
 
@@ -84,7 +82,6 @@ export interface ApprovalRequest {
   userId: number;
   repoName: string;
   mode: PolicyMode;
-  taskType: TaskType;
   instruction: string;
   createdAt: string;
 }
@@ -95,9 +92,10 @@ export interface TaskContext {
   repoName: string;
   mode: PolicyMode;
   instruction: string;
-  taskType: TaskType;
   requestId: string;
+  runKind: RunKind;
   systemGuidance?: string[];
+  resumeThreadId?: string;
 }
 
 export interface TaskResult {
@@ -108,6 +106,8 @@ export interface TaskResult {
   approvalRequired?: boolean;
   aborted?: boolean;
   timedOut?: boolean;
+  threadId?: string;
+  resumeRejected?: boolean;
 }
 
 export interface ProgressEvent {

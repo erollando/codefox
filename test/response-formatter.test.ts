@@ -22,7 +22,7 @@ describe("response formatter", () => {
     const aborted = formatTaskResult(
       {
         ok: false,
-        summary: "Task aborted by user.",
+        summary: "Run aborted by user.",
         aborted: true
       },
       "payments-api",
@@ -31,15 +31,15 @@ describe("response formatter", () => {
     const timedOut = formatTaskResult(
       {
         ok: false,
-        summary: "Codex task timed out after 1ms.",
+        summary: "Codex run timed out after 1ms.",
         timedOut: true
       },
       "payments-api",
       "active"
     );
 
-    expect(aborted).toContain("Task aborted.");
-    expect(timedOut).toContain("Task timed out.");
+    expect(aborted).toContain("Run aborted.");
+    expect(timedOut).toContain("Run timed out.");
   });
 
   it("redacts sensitive tokens in summary and output", () => {

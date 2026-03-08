@@ -33,21 +33,19 @@ describe("createApp lifecycle", () => {
           allowedUserIds: [1],
           allowedChatIds: [100],
           pollingTimeoutSeconds: 1,
-          pollIntervalMs: 1,
-          plainTextMode: "task"
+          pollIntervalMs: 1
         },
         repos: [{ name: "payments-api", rootPath: tmpDir }],
         codex: {
           command: "codex",
           baseArgs: [],
-          askArgTemplate: ["{instruction}"],
-          taskArgTemplate: ["{instruction}"],
+          runArgTemplate: ["{instruction}"],
           repoArgTemplate: [],
           timeoutMs: 1000,
           preflightEnabled: false
         },
         policy: { defaultMode: "observe" },
-        state: { filePath: statePath },
+        state: { filePath: statePath, codexSessionIdleMinutes: 120 },
         audit: { logFilePath: logPath }
       }),
       "utf8"
@@ -94,7 +92,6 @@ describe("createApp lifecycle", () => {
               userId: 1,
               repoName: "payments-api",
               mode: "active",
-              taskType: "task",
               instruction: "fix tests",
               createdAt: "2026-01-01T11:00:00.000Z"
             },
@@ -104,7 +101,6 @@ describe("createApp lifecycle", () => {
               userId: 1,
               repoName: "payments-api",
               mode: "active",
-              taskType: "task",
               instruction: "fix tests",
               createdAt: "2000-01-01T11:00:00.000Z"
             }
@@ -123,15 +119,13 @@ describe("createApp lifecycle", () => {
           allowedUserIds: [1],
           allowedChatIds: [100],
           pollingTimeoutSeconds: 1,
-          pollIntervalMs: 1,
-          plainTextMode: "task"
+          pollIntervalMs: 1
         },
         repos: [{ name: "payments-api", rootPath: tmpDir }],
         codex: {
           command: "codex",
           baseArgs: [],
-          askArgTemplate: ["{instruction}"],
-          taskArgTemplate: ["{instruction}"],
+          runArgTemplate: ["{instruction}"],
           repoArgTemplate: [],
           timeoutMs: 1000,
           preflightEnabled: false
@@ -140,7 +134,8 @@ describe("createApp lifecycle", () => {
         state: {
           filePath: statePath,
           sessionTtlHours: 1,
-          approvalTtlHours: 1
+          approvalTtlHours: 1,
+          codexSessionIdleMinutes: 120
         },
         audit: { logFilePath: logPath }
       }),
@@ -179,7 +174,6 @@ describe("createApp lifecycle", () => {
         userId: 1,
         repoName: "payments-api",
         mode: "active",
-        taskType: "task",
         instruction: "fix tests",
         createdAt: "2026-01-01T11:00:00.000Z"
       }

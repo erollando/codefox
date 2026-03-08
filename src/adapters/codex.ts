@@ -26,6 +26,16 @@ const defaultRunner: ProcessRunner = {
   }
 };
 
+const RESUME_REJECTION_PATTERNS = [
+  /unknown thread/i,
+  /thread .* not found/i,
+  /invalid thread/i,
+  /cannot resume/i,
+  /failed to resume/i,
+  /resume rejected/i,
+  /thread .* expired/i
+] as const;
+
 export class CodexCliAdapter {
   constructor(
     private readonly config: CodexConfig,
@@ -94,11 +104,7 @@ export class CodexCliAdapter {
     });
   }
 
-  startTask(
-    repoPath: string,
-    context: TaskContext,
-    onProgress?: (line: string) => void | Promise<void>
-  ): RunningTask {
+  startTask(repoPath: string, context: TaskContext, onProgress?: (line: string) => void | Promise<void>): RunningTask {
     const args = this.buildArgs(repoPath, context);
     const childEnv = buildChildEnv(process.env, this.config.blockedEnvVars);
     const child = this.runner.spawn(this.config.command, args, {
@@ -113,6 +119,8 @@ export class CodexCliAdapter {
     let settled = false;
     let timedOut = false;
     let aborted = false;
+    let detectedThreadId: string | undefined;
+    let resumeRejected = false;
 
     const resolveOnce = (resolve: (result: TaskResult) => void, result: TaskResult): void => {
       if (settled) {
@@ -131,12 +139,20 @@ export class CodexCliAdapter {
       const text = chunk.toString();
       stdout += text;
       stdoutRemainder = emitLines(text, stdoutRemainder, onProgress);
+      detectedThreadId = detectThreadId(text) ?? detectedThreadId;
+      if (context.resumeThreadId && isResumeRejected(text)) {
+        resumeRejected = true;
+      }
     });
 
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
       stderr += text;
       stderrRemainder = emitLines(text, stderrRemainder, onProgress);
+      detectedThreadId = detectThreadId(text) ?? detectedThreadId;
+      if (context.resumeThreadId && isResumeRejected(text)) {
+        resumeRejected = true;
+      }
     });
 
     const result = new Promise<TaskResult>((resolve) => {
@@ -145,7 +161,9 @@ export class CodexCliAdapter {
         resolveOnce(resolve, {
           ok: false,
           summary: `Codex spawn failed: ${String(error)}`,
-          outputTail: [stdout, stderr].join("\n").trim()
+          outputTail: [stdout, stderr].join("\n").trim(),
+          threadId: detectedThreadId ?? context.resumeThreadId,
+          resumeRejected
         });
       });
 
@@ -154,6 +172,7 @@ export class CodexCliAdapter {
         flushRemainder(stdoutRemainder, onProgress);
         flushRemainder(stderrRemainder, onProgress);
         const combined = [stdout, stderr].join("\n").trim();
+        const combinedResumeRejected = context.resumeThreadId ? resumeRejected || isResumeRejected(combined) : false;
         const isOk = exitCode === 0 && !timedOut && !aborted;
         resolveOnce(resolve, {
           ok: isOk,
@@ -161,7 +180,9 @@ export class CodexCliAdapter {
           outputTail: combined,
           exitCode: exitCode ?? -1,
           timedOut,
-          aborted
+          aborted,
+          threadId: detectedThreadId ?? context.resumeThreadId,
+          resumeRejected: combinedResumeRejected
         });
       });
     });
@@ -178,15 +199,33 @@ export class CodexCliAdapter {
   private buildArgs(repoPath: string, context: TaskContext): string[] {
     const instruction = buildInstruction(context);
     const sandboxArgs = buildSandboxArgs(this.config.command, this.config.baseArgs, context.mode);
-    const repoArgs = this.config.repoArgTemplate.map((value) =>
-      value.replaceAll("{repoPath}", repoPath)
-    );
+    const repoArgs = this.config.repoArgTemplate.map((value) => value.replaceAll("{repoPath}", repoPath));
 
-    const template = context.taskType === "ask" ? this.config.askArgTemplate : this.config.taskArgTemplate;
-    const taskArgs = template.map((value) => value.replaceAll("{instruction}", instruction));
+    const templateHasThreadPlaceholder = this.config.runArgTemplate.some((value) => value.includes("{threadId}"));
+    const resumeArgs =
+      context.resumeThreadId && shouldInjectCodexResume(this.config.command, this.config.baseArgs) && !templateHasThreadPlaceholder
+        ? ["resume", context.resumeThreadId]
+        : [];
 
-    return [...this.config.baseArgs, ...sandboxArgs, ...repoArgs, ...taskArgs];
+    const runArgs = this.config.runArgTemplate
+      .map((value) => {
+        const replacedInstruction = value.replaceAll("{instruction}", instruction);
+        if (!context.resumeThreadId && replacedInstruction === "{threadId}") {
+          return "";
+        }
+        return replacedInstruction.replaceAll("{threadId}", context.resumeThreadId ?? "");
+      })
+      .filter((value) => value.length > 0);
+
+    return [...this.config.baseArgs, ...sandboxArgs, ...repoArgs, ...resumeArgs, ...runArgs];
   }
+}
+
+function shouldInjectCodexResume(command: string, baseArgs: string[]): boolean {
+  if (!isCodexCommand(command)) {
+    return false;
+  }
+  return baseArgs.includes("exec");
 }
 
 function buildSandboxArgs(command: string, baseArgs: string[], mode: TaskContext["mode"]): string[] {
@@ -220,10 +259,7 @@ function hasSandboxArgs(args: string[]): boolean {
   );
 }
 
-function buildChildEnv(
-  source: NodeJS.ProcessEnv,
-  blockedPatterns: string[]
-): NodeJS.ProcessEnv {
+function buildChildEnv(source: NodeJS.ProcessEnv, blockedPatterns: string[]): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
 
   for (const [key, value] of Object.entries(source)) {
@@ -260,11 +296,7 @@ function isBlockedEnvVar(name: string, patterns: string[]): boolean {
   return false;
 }
 
-function emitLines(
-  text: string,
-  previousRemainder: string,
-  onProgress?: (line: string) => void | Promise<void>
-): string {
+function emitLines(text: string, previousRemainder: string, onProgress?: (line: string) => void | Promise<void>): string {
   if (!onProgress) {
     return "";
   }
@@ -286,10 +318,7 @@ function emitLines(
   return remainder;
 }
 
-function flushRemainder(
-  remainder: string,
-  onProgress?: (line: string) => void | Promise<void>
-): void {
+function flushRemainder(remainder: string, onProgress?: (line: string) => void | Promise<void>): void {
   if (!onProgress) {
     return;
   }
@@ -303,23 +332,20 @@ function flushRemainder(
   }
 }
 
-function summarizeOutput(
-  exitCode: number,
-  output: string,
-  timedOut: boolean,
-  aborted: boolean,
-  timeoutMs: number
-): string {
+function summarizeOutput(exitCode: number, output: string, timedOut: boolean, aborted: boolean, timeoutMs: number): string {
   if (aborted) {
-    return "Task aborted by user.";
+    return "Run aborted by user.";
   }
 
   if (timedOut) {
-    return `Codex task timed out after ${timeoutMs}ms.`;
+    return `Codex run timed out after ${timeoutMs}ms.`;
   }
 
   if (exitCode === 0) {
-    const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const lines = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
     return lines[lines.length - 1] ?? "Completed successfully.";
   }
 
@@ -327,7 +353,10 @@ function summarizeOutput(
     return `Codex exited with code ${exitCode}`;
   }
 
-  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
   return lines[lines.length - 1].slice(0, 400);
 }
 
@@ -342,8 +371,45 @@ function buildInstruction(context: TaskContext): string {
     `repo: ${context.repoName}`,
     `mode: ${context.mode}`,
     `request_id: ${context.requestId}`,
+    `run_kind: ${context.runKind}`,
+    ...(context.resumeThreadId ? [`resume_thread_id: ${context.resumeThreadId}`] : []),
     ...guidanceBlock,
     "User instruction:",
     context.instruction
   ].join("\n");
+}
+
+function detectThreadId(text: string): string | undefined {
+  const jsonThread = matchLast(text, /"thread(?:_|-)id"\s*:\s*"([^"]+)"/gi);
+  if (jsonThread) {
+    return jsonThread;
+  }
+
+  const camelThread = matchLast(text, /"threadId"\s*:\s*"([^"]+)"/gi);
+  if (camelThread) {
+    return camelThread;
+  }
+
+  const labeled = matchLast(text, /thread(?:_|-|\s)+id\s*[:=]\s*([A-Za-z0-9._:-]+)/gi);
+  if (labeled) {
+    return labeled;
+  }
+
+  const threadToken = matchLast(text, /\b(thread_[A-Za-z0-9._:-]+)\b/g);
+  return threadToken;
+}
+
+function matchLast(text: string, pattern: RegExp): string | undefined {
+  let found: string | undefined;
+  for (const match of text.matchAll(pattern)) {
+    const value = match[1]?.trim();
+    if (value) {
+      found = value;
+    }
+  }
+  return found;
+}
+
+function isResumeRejected(text: string): boolean {
+  return RESUME_REJECTION_PATTERNS.some((pattern) => pattern.test(text));
 }

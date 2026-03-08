@@ -46,8 +46,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: ["exec"],
-        askArgTemplate: ["ask", "{instruction}"],
-        taskArgTemplate: ["task", "{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 5000,
         blockedEnvVars: [],
@@ -63,9 +62,9 @@ describe("CodexCliAdapter", () => {
       userId: 1,
       repoName: "payments-api",
       mode: "active",
-      taskType: "task",
       instruction: "fix tests",
       requestId: "abc123",
+      runKind: "run",
       systemGuidance: ["Never read .env files."]
     };
 
@@ -96,8 +95,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: [],
-        askArgTemplate: ["{instruction}"],
-        taskArgTemplate: ["{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 5000,
         blockedEnvVars: [],
@@ -113,9 +111,9 @@ describe("CodexCliAdapter", () => {
       userId: 1,
       repoName: "payments-api",
       mode: "active",
-      taskType: "ask",
       instruction: "status",
-      requestId: "def456"
+      requestId: "def456",
+      runKind: "run"
     };
 
     const running = adapter.startTask("/tmp/payments-api", context);
@@ -139,8 +137,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: [],
-        askArgTemplate: ["{instruction}"],
-        taskArgTemplate: ["{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 1,
         blockedEnvVars: [],
@@ -156,9 +153,9 @@ describe("CodexCliAdapter", () => {
       userId: 1,
       repoName: "payments-api",
       mode: "active",
-      taskType: "ask",
       instruction: "status",
-      requestId: "ghi789"
+      requestId: "ghi789",
+      runKind: "run"
     };
 
     const running = adapter.startTask("/tmp/payments-api", context);
@@ -189,8 +186,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: [],
-        askArgTemplate: ["{instruction}"],
-        taskArgTemplate: ["{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 5000,
         blockedEnvVars: [],
@@ -206,9 +202,9 @@ describe("CodexCliAdapter", () => {
       userId: 1,
       repoName: "payments-api",
       mode: "active",
-      taskType: "ask",
       instruction: "status",
-      requestId: "jkl012"
+      requestId: "jkl012",
+      runKind: "run"
     };
 
     const running = adapter.startTask("/tmp/payments-api", context, (line) => {
@@ -242,8 +238,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: [],
-        askArgTemplate: ["{instruction}"],
-        taskArgTemplate: ["{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 5000,
         blockedEnvVars: ["TELEGRAM_BOT_TOKEN", "CODEFOX_*"],
@@ -259,9 +254,9 @@ describe("CodexCliAdapter", () => {
       userId: 1,
       repoName: "payments-api",
       mode: "active",
-      taskType: "ask",
       instruction: "status",
-      requestId: "env001"
+      requestId: "env001",
+      runKind: "run"
     };
 
     try {
@@ -304,8 +299,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: [],
-        askArgTemplate: ["{instruction}"],
-        taskArgTemplate: ["{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 5000,
         blockedEnvVars: [],
@@ -334,8 +328,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: ["exec"],
-        askArgTemplate: ["{instruction}"],
-        taskArgTemplate: ["{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 5000,
         blockedEnvVars: [],
@@ -351,9 +344,9 @@ describe("CodexCliAdapter", () => {
       userId: 1,
       repoName: "payments-api",
       mode: "observe",
-      taskType: "ask",
       instruction: "status",
-      requestId: "obs001"
+      requestId: "obs001",
+      runKind: "run"
     };
 
     await adapter.startTask("/tmp/payments-api", context).result;
@@ -376,8 +369,7 @@ describe("CodexCliAdapter", () => {
       {
         command: "codex",
         baseArgs: ["exec"],
-        askArgTemplate: ["{instruction}"],
-        taskArgTemplate: ["{instruction}"],
+        runArgTemplate: ["{instruction}"],
         repoArgTemplate: [],
         timeoutMs: 5000,
         blockedEnvVars: [],
@@ -393,13 +385,59 @@ describe("CodexCliAdapter", () => {
       userId: 1,
       repoName: "payments-api",
       mode: "full-access",
-      taskType: "task",
       instruction: "install dependencies",
-      requestId: "full001"
+      requestId: "full001",
+      runKind: "run"
     };
 
     await adapter.startTask("/tmp/payments-api", context).result;
     expect(capturedArgs).toContain("--sandbox");
     expect(capturedArgs).toContain("danger-full-access");
+  });
+
+  it("injects codex resume args and captures thread id from output", async () => {
+    let capturedArgs: string[] = [];
+    const runner: ProcessRunner = {
+      spawn(_command, args) {
+        capturedArgs = args;
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData('{"thread_id":"thread_abc"}\n');
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "continue",
+      requestId: "resume001",
+      runKind: "steer",
+      resumeThreadId: "thread_old"
+    };
+
+    const result = await adapter.startTask("/tmp/payments-api", context).result;
+    expect(capturedArgs).toContain("resume");
+    expect(capturedArgs).toContain("thread_old");
+    expect(result.threadId).toBe("thread_abc");
   });
 });

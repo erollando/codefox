@@ -26,6 +26,8 @@ describe("JsonStateStore", () => {
           mode: "active",
           selectedRepo: "payments-api",
           activeRequestId: "abc",
+          codexThreadId: "thread_1",
+          codexLastActiveAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
       ],
@@ -36,7 +38,6 @@ describe("JsonStateStore", () => {
           userId: 1,
           repoName: "payments-api",
           mode: "active",
-          taskType: "task",
           instruction: "fix tests",
           createdAt: new Date().toISOString()
         }
@@ -47,6 +48,7 @@ describe("JsonStateStore", () => {
     expect(loaded.sessions.length).toBe(1);
     expect(loaded.approvals.length).toBe(1);
     expect(loaded.sessions[0].selectedRepo).toBe("payments-api");
+    expect(loaded.sessions[0].codexThreadId).toBe("thread_1");
     expect(typeof loaded.sessions[0].updatedAt).toBe("string");
 
     const raw = await readFile(statePath, "utf8");
@@ -59,7 +61,7 @@ describe("JsonStateStore", () => {
     await writeFile(
       statePath,
       JSON.stringify({
-        sessions: [{ chatId: "bad", mode: "active" }, { chatId: 1, mode: "observe" }],
+        sessions: [{ chatId: "bad", mode: "active" }, { chatId: 1, mode: "observe", codexThreadId: 2 }],
         approvals: [{ id: "x", chatId: "bad" }]
       }),
       "utf8"
@@ -74,6 +76,8 @@ describe("JsonStateStore", () => {
         mode: "observe",
         selectedRepo: undefined,
         activeRequestId: undefined,
+        codexThreadId: undefined,
+        codexLastActiveAt: undefined,
         updatedAt: expect.any(String)
       }
     ]);
@@ -103,7 +107,6 @@ describe("JsonStateStore", () => {
             userId: 1,
             repoName: "payments-api",
             mode: "active",
-            taskType: "task",
             instruction: "fix tests",
             createdAt: "2026-01-02T11:45:00.000Z"
           },
@@ -113,7 +116,6 @@ describe("JsonStateStore", () => {
             userId: 1,
             repoName: "payments-api",
             mode: "active",
-            taskType: "task",
             instruction: "fix tests",
             createdAt: "2025-12-30T11:45:00.000Z"
           }

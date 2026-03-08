@@ -12,23 +12,35 @@ It authenticates Telegram users/chats, maps requests to approved repositories, a
   - access control (user/chat allowlists)
   - repo root safety
   - policy modes (`observe`, `active`, `full-access`)
-- Codex adapter: CLI invocation with configurable argument templates.
+- Codex adapter: CLI invocation with `runArgTemplate`, mode sandbox mapping, and thread-resume support.
 - Audit logging: structured JSON lines with redacted previews for request/progress text.
+
+## Session model
+
+CodeFox keeps a Codex session thread per chat and reuses it until one of these events:
+
+- `/close`
+- repo change
+- mode change
+- idle timeout (`state.codexSessionIdleMinutes`)
+- resume rejection reported by Codex
+
+`/steer` during an active run is handled with deterministic fallback semantics:
+
+1. interrupt active run
+2. merge pending steer messages
+3. resume same Codex session thread
 
 ## Safety model
 
 - Unknown users/chats are denied.
-- `/task` is blocked in `observe` mode.
-- Approval prompts include requester identity and request timestamp.
-- Optional AGENTS guard can require `AGENTS.md` in repo root before mutating `/task` runs.
+- `observe` maps to read-only sandbox, `active` to workspace-write, `full-access` to danger-full-access.
+- `full-access` requires explicit `/approve` before each `/run`.
+- Optional AGENTS guard can require `AGENTS.md` before `/run` in non-observe modes.
 - Optional instruction policy can block risky patterns, forbidden file-path references (like `.env`/keys), and non-allowlisted download domains before Codex starts.
 - Forbidden path policy is also injected as execution guidance into Codex prompts.
 - If `forbiddenPathPatterns` is omitted, CodeFox applies a secure default set (`.env`, `.env.*`, `*.pem`, `*.key`, `.aws/**`, `.ssh/**`, `credentials/**`, `secrets/**`).
 - Codex subprocess env is filtered by `codex.blockedEnvVars` to avoid passing integration secrets.
-- Codex sandbox is auto-selected by policy mode when not explicitly configured in `baseArgs`:
-  - `observe` -> `read-only`
-  - `active` -> `workspace-write`
-  - `full-access` -> `danger-full-access`
 - Task summaries/output are redacted before Telegram/audit rendering to reduce accidental secret disclosure.
 - Task execution is constrained to configured repo roots.
 - Long Telegram responses are automatically split into ordered message parts instead of being silently truncated.
@@ -43,16 +55,17 @@ It authenticates Telegram users/chats, maps requests to approved repositories, a
 - `/repo remove <name>`
 - `/repo info [name]`
 - `/mode <observe|active|full-access>`
-- `/ask <question>`
-- `/task <instruction>`
+- `/observe | /active | /full-access`
+- `/run <instruction>`
+- `/steer <instruction>`
+- `/close`
 - `/status`
 - `/pending`
+- `/approve`
+- `/deny`
 - `/abort`
 
-Plain text behavior is controlled by `telegram.plainTextMode`:
-
-- `"task"` maps free text to `/task`
-- `"ask"` maps free text to `/ask`
+Plain text (non-slash) input is treated as `/run <text>`.
 
 ## Configuration
 
@@ -65,16 +78,14 @@ Copy the sample config to `config/codefox.config.json`:
     "allowedChatIds": [123456789],
     "pollingTimeoutSeconds": 30,
     "pollIntervalMs": 1000,
-    "discardBacklogOnStart": true,
-    "plainTextMode": "task"
+    "discardBacklogOnStart": true
   },
   "repos": [],
   "_note_repos": "Optional: keep repos empty and use /repo init <name> [base-path], or replace with your real repo mappings.",
   "codex": {
     "command": "codex",
     "baseArgs": ["exec"],
-    "askArgTemplate": ["{instruction}"],
-    "taskArgTemplate": ["{instruction}"],
+    "runArgTemplate": ["{instruction}"],
     "repoArgTemplate": [],
     "timeoutMs": 1800000,
     "blockedEnvVars": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"],
@@ -87,9 +98,8 @@ Copy the sample config to `config/codefox.config.json`:
     "defaultParentPath": "./git"
   },
   "safety": {
-    "requireAgentsForMutatingTasks": false,
+    "requireAgentsForRuns": false,
     "instructionPolicy": {
-      "enforceOnAsk": false,
       "blockedPatterns": [],
       "allowedDownloadDomains": [],
       "forbiddenPathPatterns": [
@@ -107,7 +117,8 @@ Copy the sample config to `config/codefox.config.json`:
   "state": {
     "filePath": "./.codefox/state.json",
     "sessionTtlHours": 168,
-    "approvalTtlHours": 72
+    "approvalTtlHours": 72,
+    "codexSessionIdleMinutes": 120
   },
   "audit": { "logFilePath": "./logs/audit.log" }
 }
@@ -115,6 +126,7 @@ Copy the sample config to `config/codefox.config.json`:
 
 `state.filePath` persists chat sessions and pending approvals across service restarts.
 If set, `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
+`state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.
 `/repo init <name>` creates `<defaultParentPath>/<name>`, runs `git init`, registers it, and auto-selects it for the chat.
 `telegram.discardBacklogOnStart` drops offline backlog updates on startup (recommended for safety).
 
@@ -129,28 +141,7 @@ CodeFox auto-loads `.env` from the project root on startup.
 
 Existing shell environment variables take precedence over values in `.env`.
 
-For Codex CLI, keep `codex.baseArgs` set to `["exec"]` so tasks run non-interactively.
-
-## Direct Codex check (no Telegram)
-
-You can validate Codex execution against a repo directly:
-
-```bash
-cd /home/enrico/git/anonfox
-codex exec --sandbox workspace-write "Install Python dependencies for this repo using the existing .venv and run tests."
-```
-
-If dependency download/install fails with index/DNS errors (`/simple/...`, `Name or service not known`, `No matching distribution found` for common packages), treat it as connectivity/sandbox restrictions first.
-If you need Codex itself to perform network installs from Telegram, use `/mode full-access` only in trusted local environments.
-
-For Python setup tasks, prefer:
-
-```bash
-.venv/bin/python -m pip install -e '.[dev,ner]'
-.venv/bin/python -m spacy download en_core_web_sm
-.venv/bin/python -m spacy download nl_core_news_sm
-.venv/bin/python -m pytest
-```
+For Codex CLI, keep `codex.baseArgs` set to `["exec"]` so runs are non-interactive.
 
 ## Run
 

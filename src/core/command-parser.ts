@@ -1,4 +1,4 @@
-import type { PlainTextMode, PolicyMode } from "../types/domain.js";
+import type { PolicyMode } from "../types/domain.js";
 
 export type ParsedCommand =
   | { type: "help" }
@@ -9,8 +9,9 @@ export type ParsedCommand =
   | { type: "repo_remove"; repoName: string }
   | { type: "repo_info"; repoName?: string }
   | { type: "mode"; mode: PolicyMode }
-  | { type: "ask"; instruction: string }
-  | { type: "task"; instruction: string }
+  | { type: "run"; instruction: string }
+  | { type: "steer"; instruction: string }
+  | { type: "close" }
   | { type: "status" }
   | { type: "pending" }
   | { type: "approve" }
@@ -37,23 +38,20 @@ function normalizeTelegramCommand(commandToken: string): string {
   return commandToken.slice(0, atIndex);
 }
 
-export function parseCommand(text: string, plainTextMode: PlainTextMode): ParsedCommand {
+export function parseCommand(text: string): ParsedCommand {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
     return { type: "unknown", raw: text };
   }
 
   if (!trimmed.startsWith("/")) {
-    if (plainTextMode === "task") {
-      return { type: "task", instruction: trimmed };
-    }
-    return { type: "ask", instruction: trimmed };
+    return { type: "run", instruction: trimmed };
   }
 
   const [rawCommand, arg] = parseWithArg(trimmed);
-  const command = normalizeTelegramCommand(rawCommand);
+  const command = normalizeTelegramCommand(rawCommand).toLowerCase();
 
-  switch (command.toLowerCase()) {
+  switch (command) {
     case "/help":
       return { type: "help" };
     case "/repos":
@@ -67,10 +65,18 @@ export function parseCommand(text: string, plainTextMode: PlainTextMode): Parsed
       return MODES.includes(arg as PolicyMode)
         ? { type: "mode", mode: arg as PolicyMode }
         : { type: "unknown", raw: text };
-    case "/ask":
-      return arg ? { type: "ask", instruction: arg } : { type: "unknown", raw: text };
-    case "/task":
-      return arg ? { type: "task", instruction: arg } : { type: "unknown", raw: text };
+    case "/observe":
+      return { type: "mode", mode: "observe" };
+    case "/active":
+      return { type: "mode", mode: "active" };
+    case "/full-access":
+      return { type: "mode", mode: "full-access" };
+    case "/run":
+      return arg ? { type: "run", instruction: arg } : { type: "unknown", raw: text };
+    case "/steer":
+      return arg ? { type: "steer", instruction: arg } : { type: "unknown", raw: text };
+    case "/close":
+      return { type: "close" };
     case "/status":
       return { type: "status" };
     case "/pending":

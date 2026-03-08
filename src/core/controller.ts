@@ -25,7 +25,7 @@ import {
 } from "./response-formatter.js";
 import type { SessionManager } from "./session-manager.js";
 import { makeRequestId } from "./ids.js";
-import type { PlainTextMode, PolicyMode, RepoConfig, TaskContext, TaskType } from "../types/domain.js";
+import type { PolicyMode, RepoConfig, RunKind, TaskContext } from "../types/domain.js";
 
 interface MessageSink {
   sendMessage(chatId: number, text: string): Promise<void>;
@@ -36,11 +36,13 @@ interface AuditSink {
 }
 
 interface CodexRunner {
-  startTask(
-    repoPath: string,
-    context: TaskContext,
-    onProgress?: (line: string) => void | Promise<void>
-  ): RunningTask;
+  startTask(repoPath: string, context: TaskContext, onProgress?: (line: string) => void | Promise<void>): RunningTask;
+}
+
+interface PendingSteer {
+  userId: number;
+  instruction: string;
+  createdAt: string;
 }
 
 export interface ControllerDeps {
@@ -52,17 +54,18 @@ export interface ControllerDeps {
   approvals: ApprovalStore;
   audit: AuditSink;
   codex: CodexRunner;
-  plainTextMode: PlainTextMode;
   persistRepos?: (repos: RepoConfig[]) => Promise<void>;
   repoInitDefaultParentPath: string;
   initializeRepo?: (repoPath: string) => Promise<void>;
-  requireAgentsForMutatingTasks: boolean;
+  requireAgentsForRuns: boolean;
   instructionPolicy: InstructionPolicy;
+  codexSessionIdleMinutes: number;
 }
 
 export class CodeFoxController {
   private readonly activeAborts = new Map<string, () => void>();
   private readonly executionAdmissionLock = new Set<number>();
+  private readonly pendingSteers = new Map<number, PendingSteer[]>();
 
   constructor(private readonly deps: ControllerDeps) {}
 
@@ -84,7 +87,7 @@ export class CodeFoxController {
     }
 
     const session = this.deps.sessions.getOrCreate(chatId);
-    const command = parseCommand(text, this.deps.plainTextMode);
+    const command = parseCommand(text);
 
     await this.deps.audit.log({
       type: "request_received",
@@ -94,7 +97,9 @@ export class CodeFoxController {
       textLength: text.length,
       parsedType: command.type,
       mode: session.mode,
-      repo: session.selectedRepo
+      repo: session.selectedRepo,
+      activeRequestId: session.activeRequestId,
+      codexThreadId: session.codexThreadId
     });
 
     switch (command.type) {
@@ -103,21 +108,11 @@ export class CodeFoxController {
         return;
       }
       case "repos": {
-        await this.deps.telegram.sendMessage(
-          chatId,
-          formatRepos(this.deps.repos.list().map((repo) => repo.name))
-        );
+        await this.deps.telegram.sendMessage(chatId, formatRepos(this.deps.repos.list().map((repo) => repo.name)));
         return;
       }
       case "repo": {
-        try {
-          this.deps.repos.get(command.repoName);
-          this.deps.sessions.setRepo(chatId, command.repoName);
-          await this.deps.telegram.sendMessage(chatId, `Repo set to ${command.repoName}.`);
-          await this.deps.audit.log({ type: "repo_selected", chatId, userId, repo: command.repoName });
-        } catch (error) {
-          await this.deps.telegram.sendMessage(chatId, formatError(String(error)));
-        }
+        await this.handleRepoSelect(chatId, userId, command.repoName);
         return;
       }
       case "repo_add": {
@@ -135,10 +130,7 @@ export class CodeFoxController {
       case "repo_info": {
         const targetName = command.repoName ?? session.selectedRepo;
         if (!targetName) {
-          await this.deps.telegram.sendMessage(
-            chatId,
-            "No repo selected. Use /repo <name> or /repo info <name>."
-          );
+          await this.deps.telegram.sendMessage(chatId, "No repo selected. Use /repo <name> or /repo info <name>.");
           return;
         }
         try {
@@ -150,13 +142,32 @@ export class CodeFoxController {
         return;
       }
       case "mode": {
+        const previousMode = session.mode;
         this.deps.sessions.setMode(chatId, command.mode);
+        if (previousMode !== command.mode) {
+          this.deps.sessions.clearCodexSession(chatId);
+          await this.deps.audit.log({
+            type: "codex_session_closed",
+            reason: "mode_change",
+            chatId,
+            userId,
+            previousMode,
+            nextMode: command.mode
+          });
+        }
         await this.deps.telegram.sendMessage(chatId, formatMode(command.mode));
         await this.deps.audit.log({ type: "mode_changed", chatId, userId, mode: command.mode });
         return;
       }
+      case "close": {
+        await this.handleCloseSession(chatId, userId);
+        return;
+      }
       case "status": {
-        await this.deps.telegram.sendMessage(chatId, formatSessionStatus(this.deps.sessions.getOrCreate(chatId)));
+        await this.deps.telegram.sendMessage(
+          chatId,
+          formatSessionStatus(this.deps.sessions.getOrCreate(chatId), this.deps.codexSessionIdleMinutes)
+        );
         return;
       }
       case "pending": {
@@ -169,116 +180,234 @@ export class CodeFoxController {
         return;
       }
       case "approve": {
-        const pending = this.deps.approvals.get(chatId);
-        if (!pending) {
-          await this.deps.telegram.sendMessage(chatId, "No pending approval.");
-          return;
-        }
-        if (pending.userId !== userId) {
-          await this.deps.audit.log({
-            type: "approval_unauthorized_attempt",
-            chatId,
-            userId,
-            requestId: pending.id,
-            pendingOwnerUserId: pending.userId
-          });
-          await this.deps.telegram.sendMessage(chatId, "Only the requesting user can approve this request.");
-          return;
-        }
-        if (session.activeRequestId) {
-          await this.deps.telegram.sendMessage(
-            chatId,
-            `Request ${session.activeRequestId} is already running. Use /status or /abort first.`
-          );
-          return;
-        }
-        this.deps.approvals.delete(chatId);
-        await this.deps.audit.log({ type: "approval_granted", chatId, userId, requestId: pending.id });
-        this.runDetached(
-          chatId,
-          this.executeTask(
-            pending.taskType,
-            pending.instruction,
-            pending.repoName,
-            pending.mode,
-            pending.id,
-            pending.userId,
-            pending.chatId
-          ),
-          "approve_execute_task"
-        );
+        await this.handleApprove(chatId, userId);
         return;
       }
       case "deny": {
-        const pending = this.deps.approvals.get(chatId);
-        if (!pending) {
-          await this.deps.telegram.sendMessage(chatId, "No pending approval.");
-          return;
-        }
-        if (pending.userId !== userId) {
-          await this.deps.audit.log({
-            type: "deny_unauthorized_attempt",
-            chatId,
-            userId,
-            requestId: pending.id,
-            pendingOwnerUserId: pending.userId
-          });
-          await this.deps.telegram.sendMessage(chatId, "Only the requesting user can deny this request.");
-          return;
-        }
-        this.deps.approvals.delete(chatId);
-        await this.deps.audit.log({ type: "approval_denied", chatId, userId, requestId: pending.id });
-        await this.deps.telegram.sendMessage(chatId, `Denied request ${pending.id}.`);
+        await this.handleDeny(chatId, userId);
         return;
       }
       case "abort": {
-        if (!session.activeRequestId) {
-          await this.deps.telegram.sendMessage(chatId, "No active request.");
-          return;
-        }
-        const abort = this.activeAborts.get(session.activeRequestId);
-        if (!abort) {
-          await this.deps.telegram.sendMessage(chatId, "Active request cannot be aborted right now.");
-          return;
-        }
-        abort();
-        await this.deps.audit.log({
-          type: "request_abort",
-          chatId,
-          userId,
-          requestId: session.activeRequestId
-        });
-        await this.deps.telegram.sendMessage(chatId, `Abort signal sent for ${session.activeRequestId}.`);
+        await this.handleAbort(chatId, userId);
         return;
       }
-      case "ask": {
+      case "run": {
         if (!session.selectedRepo) {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
         }
         this.runDetached(
           chatId,
-          this.executeOrEnqueue("ask", command.instruction, session.selectedRepo, session.mode, chatId, userId),
-          "ask_execute_or_enqueue"
+          this.executeOrEnqueue({
+            runKind: "run",
+            instruction: command.instruction,
+            repoName: session.selectedRepo,
+            mode: session.mode,
+            chatId,
+            userId
+          }),
+          "run_execute_or_enqueue"
         );
         return;
       }
-      case "task": {
-        if (!session.selectedRepo) {
-          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
-          return;
-        }
-        this.runDetached(
-          chatId,
-          this.executeOrEnqueue("task", command.instruction, session.selectedRepo, session.mode, chatId, userId),
-          "task_execute_or_enqueue"
-        );
+      case "steer": {
+        await this.handleSteer(chatId, userId, command.instruction);
         return;
       }
       default: {
         await this.deps.telegram.sendMessage(chatId, "Unknown command. Use /help.");
       }
     }
+  }
+
+  private async handleRepoSelect(chatId: number, userId: number, repoName: string): Promise<void> {
+    try {
+      this.deps.repos.get(repoName);
+      const session = this.deps.sessions.getOrCreate(chatId);
+      const previousRepo = session.selectedRepo;
+      this.deps.sessions.setRepo(chatId, repoName);
+
+      if (previousRepo && previousRepo !== repoName) {
+        this.deps.sessions.clearCodexSession(chatId);
+        await this.deps.audit.log({
+          type: "codex_session_closed",
+          reason: "repo_change",
+          chatId,
+          userId,
+          previousRepo,
+          nextRepo: repoName
+        });
+      }
+
+      await this.deps.telegram.sendMessage(chatId, `Repo set to ${repoName}.`);
+      await this.deps.audit.log({ type: "repo_selected", chatId, userId, repo: repoName });
+    } catch (error) {
+      await this.deps.telegram.sendMessage(chatId, formatError(String(error)));
+    }
+  }
+
+  private async handleCloseSession(chatId: number, userId: number): Promise<void> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (session.activeRequestId) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Request ${session.activeRequestId} is running. Abort it first with /abort, then /close.`
+      );
+      return;
+    }
+
+    if (!session.codexThreadId) {
+      await this.deps.telegram.sendMessage(chatId, "No active Codex session to close.");
+      return;
+    }
+
+    const closedThreadId = session.codexThreadId;
+    this.deps.sessions.clearCodexSession(chatId);
+    await this.deps.audit.log({
+      type: "codex_session_closed",
+      reason: "explicit_close",
+      chatId,
+      userId,
+      threadId: closedThreadId
+    });
+    await this.deps.telegram.sendMessage(chatId, `Codex session closed (${closedThreadId}).`);
+  }
+
+  private async handleApprove(chatId: number, userId: number): Promise<void> {
+    const pending = this.deps.approvals.get(chatId);
+    if (!pending) {
+      await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+      return;
+    }
+    if (pending.userId !== userId) {
+      await this.deps.audit.log({
+        type: "approval_unauthorized_attempt",
+        chatId,
+        userId,
+        requestId: pending.id,
+        pendingOwnerUserId: pending.userId
+      });
+      await this.deps.telegram.sendMessage(chatId, "Only the requesting user can approve this request.");
+      return;
+    }
+
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (session.activeRequestId) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Request ${session.activeRequestId} is already running. Use /status or /abort first.`
+      );
+      return;
+    }
+
+    this.deps.approvals.delete(chatId);
+    await this.deps.audit.log({ type: "approval_granted", chatId, userId, requestId: pending.id });
+    this.runDetached(
+      chatId,
+      this.executeTask({
+        runKind: "run",
+        instruction: pending.instruction,
+        repoName: pending.repoName,
+        mode: pending.mode,
+        requestId: pending.id,
+        userId,
+        chatId,
+        bypassApproval: true
+      }),
+      "approve_execute_task"
+    );
+  }
+
+  private async handleDeny(chatId: number, userId: number): Promise<void> {
+    const pending = this.deps.approvals.get(chatId);
+    if (!pending) {
+      await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+      return;
+    }
+    if (pending.userId !== userId) {
+      await this.deps.audit.log({
+        type: "deny_unauthorized_attempt",
+        chatId,
+        userId,
+        requestId: pending.id,
+        pendingOwnerUserId: pending.userId
+      });
+      await this.deps.telegram.sendMessage(chatId, "Only the requesting user can deny this request.");
+      return;
+    }
+
+    this.deps.approvals.delete(chatId);
+    await this.deps.audit.log({ type: "approval_denied", chatId, userId, requestId: pending.id });
+    await this.deps.telegram.sendMessage(chatId, `Denied request ${pending.id}.`);
+  }
+
+  private async handleAbort(chatId: number, userId: number): Promise<void> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (!session.activeRequestId) {
+      await this.deps.telegram.sendMessage(chatId, "No active request.");
+      return;
+    }
+    const abort = this.activeAborts.get(session.activeRequestId);
+    if (!abort) {
+      await this.deps.telegram.sendMessage(chatId, "Active request cannot be aborted right now.");
+      return;
+    }
+
+    this.pendingSteers.delete(chatId);
+    abort();
+    await this.deps.audit.log({
+      type: "request_abort",
+      chatId,
+      userId,
+      requestId: session.activeRequestId
+    });
+    await this.deps.telegram.sendMessage(chatId, `Abort signal sent for ${session.activeRequestId}.`);
+  }
+
+  private async handleSteer(chatId: number, userId: number, instruction: string): Promise<void> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (!session.selectedRepo) {
+      await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+      return;
+    }
+
+    if (!session.activeRequestId) {
+      await this.deps.telegram.sendMessage(chatId, "No active run to steer. Start one with /run.");
+      return;
+    }
+
+    const abort = this.activeAborts.get(session.activeRequestId);
+    if (!abort) {
+      await this.deps.telegram.sendMessage(chatId, "Active request cannot accept /steer right now.");
+      return;
+    }
+
+    const existing = this.pendingSteers.get(chatId) ?? [];
+    existing.push({ userId, instruction, createdAt: new Date().toISOString() });
+    this.pendingSteers.set(chatId, existing);
+
+    await this.deps.audit.log({
+      type: "steer_received",
+      chatId,
+      userId,
+      requestId: session.activeRequestId,
+      steerCount: existing.length,
+      instructionPreview: toAuditPreview(instruction)
+    });
+
+    if (existing.length === 1) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Steer received for ${session.activeRequestId}. Interrupting run and resuming the same Codex session.`
+      );
+      abort();
+      return;
+    }
+
+    await this.deps.telegram.sendMessage(
+      chatId,
+      `Additional steer captured (${existing.length} pending). Instructions will be merged into the next resume.`
+    );
   }
 
   private async handleRepoAdd(chatId: number, userId: number, repoName: string, repoPath: string): Promise<void> {
@@ -295,12 +424,7 @@ export class CodeFoxController {
     await this.registerRepo(chatId, userId, repoName, resolvedPath, "repo_added");
   }
 
-  private async handleRepoInit(
-    chatId: number,
-    userId: number,
-    repoName: string,
-    basePathOverride?: string
-  ): Promise<void> {
+  private async handleRepoInit(chatId: number, userId: number, repoName: string, basePathOverride?: string): Promise<void> {
     const parentPath = path.resolve(basePathOverride ?? this.deps.repoInitDefaultParentPath);
     const resolvedPath = path.resolve(parentPath, repoName);
     const existing = await stat(resolvedPath).catch(() => undefined);
@@ -382,6 +506,7 @@ export class CodeFoxController {
       const prefix = eventType === "repo_initialized" ? "Repo initialized and added" : "Repo added";
       if (eventType === "repo_initialized") {
         this.deps.sessions.setRepo(chatId, added.name);
+        this.deps.sessions.clearCodexSession(chatId);
       }
       await this.deps.telegram.sendMessage(
         chatId,
@@ -433,6 +558,7 @@ export class CodeFoxController {
       const hadSelectedRepo = session.selectedRepo === repoName;
       if (hadSelectedRepo) {
         this.deps.sessions.clearRepo(chatId);
+        this.deps.sessions.clearCodexSession(chatId);
       }
 
       if (this.deps.persistRepos) {
@@ -443,10 +569,7 @@ export class CodeFoxController {
           if (hadSelectedRepo) {
             this.deps.sessions.setRepo(chatId, removed.name);
           }
-          await this.deps.telegram.sendMessage(
-            chatId,
-            formatError(`Repo removal failed to persist: ${String(persistError)}`)
-          );
+          await this.deps.telegram.sendMessage(chatId, formatError(`Repo removal failed to persist: ${String(persistError)}`));
           return;
         }
       }
@@ -464,14 +587,16 @@ export class CodeFoxController {
     }
   }
 
-  private async executeOrEnqueue(
-    taskType: TaskType,
-    instruction: string,
-    repoName: string,
-    mode: PolicyMode,
-    chatId: number,
-    userId: number
-  ): Promise<void> {
+  private async executeOrEnqueue(params: {
+    runKind: RunKind;
+    instruction: string;
+    repoName: string;
+    mode: PolicyMode;
+    chatId: number;
+    userId: number;
+    bypassApproval?: boolean;
+  }): Promise<void> {
+    const { runKind, instruction, repoName, mode, chatId, userId } = params;
     if (this.executionAdmissionLock.has(chatId)) {
       await this.deps.telegram.sendMessage(chatId, "Another request is currently being scheduled for this chat.");
       return;
@@ -488,10 +613,9 @@ export class CodeFoxController {
         return;
       }
 
-      const decision = this.deps.policy.decide(mode, taskType);
       const requestId = makeRequestId();
 
-      const instructionDecision = this.deps.instructionPolicy.decide(taskType, instruction);
+      const instructionDecision = this.deps.instructionPolicy.decide(instruction);
       if (!instructionDecision.allowed) {
         await this.deps.audit.log({
           type: "policy_block_instruction",
@@ -499,7 +623,7 @@ export class CodeFoxController {
           userId,
           repo: repoName,
           mode,
-          taskType,
+          runKind,
           requestId,
           reason: instructionDecision.reason,
           matchedPattern: instructionDecision.matchedPattern,
@@ -513,13 +637,13 @@ export class CodeFoxController {
               ? `Instruction references blocked domain: ${instructionDecision.blockedDomain}`
               : instructionDecision.blockedPathPattern
                 ? `Instruction references forbidden path pattern: ${instructionDecision.blockedPathPattern}`
-              : `Instruction blocked by policy (${instructionDecision.matchedPattern ?? "pattern"}).`
+                : `Instruction blocked by policy (${instructionDecision.matchedPattern ?? "pattern"}).`
           )
         );
         return;
       }
 
-      if (taskType === "task" && this.deps.requireAgentsForMutatingTasks) {
+      if (mode !== "observe" && this.deps.requireAgentsForRuns) {
         const repo = this.deps.repos.get(repoName);
         const agentsPath = path.join(repo.rootPath, "AGENTS.md");
         const agentsStat = await stat(agentsPath).catch(() => undefined);
@@ -534,28 +658,29 @@ export class CodeFoxController {
           });
           await this.deps.telegram.sendMessage(
             chatId,
-            `Missing AGENTS.md in repo root (${agentsPath}). Create it before running /task.`
+            `Missing AGENTS.md in repo root (${agentsPath}). Create it before running /run in ${mode} mode.`
           );
           return;
         }
       }
 
+      const decision = this.deps.policy.decide(mode);
       if (!decision.allowed) {
-        await this.deps.telegram.sendMessage(chatId, formatError(decision.reason ?? "Task blocked by policy."));
+        await this.deps.telegram.sendMessage(chatId, formatError(decision.reason ?? "Run blocked by policy."));
         await this.deps.audit.log({
           type: "policy_block",
           chatId,
           userId,
           repo: repoName,
           mode,
-          taskType,
+          runKind,
           requestId,
           reason: decision.reason
         });
         return;
       }
 
-      if (decision.requiresApproval) {
+      if (decision.requiresApproval && !params.bypassApproval) {
         const existingPending = this.deps.approvals.get(chatId);
         if (existingPending) {
           await this.deps.telegram.sendMessage(
@@ -571,7 +696,6 @@ export class CodeFoxController {
           userId,
           repoName,
           mode,
-          taskType,
           instruction,
           createdAt: new Date().toISOString()
         });
@@ -588,12 +712,12 @@ export class CodeFoxController {
           userId,
           repo: repoName,
           mode,
-          taskType,
+          runKind,
           requestId
         });
         await this.deps.telegram.sendMessage(
           chatId,
-          formatApprovalPending(requestId, repoName, mode, taskType, toAuditPreview(instruction, 180), {
+          formatApprovalPending(requestId, repoName, mode, toAuditPreview(instruction, 180), {
             requesterUserId: pending.userId,
             createdAt: pending.createdAt
           })
@@ -601,37 +725,54 @@ export class CodeFoxController {
         return;
       }
 
-      await this.executeTask(taskType, instruction, repoName, mode, requestId, userId, chatId);
+      await this.executeTask({
+        runKind,
+        instruction,
+        repoName,
+        mode,
+        requestId,
+        userId,
+        chatId,
+        bypassApproval: Boolean(params.bypassApproval)
+      });
     } finally {
       this.executionAdmissionLock.delete(chatId);
     }
   }
 
-  private async executeTask(
-    taskType: TaskType,
-    instruction: string,
-    repoName: string,
-    mode: PolicyMode,
-    requestId: string,
-    userId: number,
-    chatId: number
-  ): Promise<void> {
+  private async executeTask(params: {
+    runKind: RunKind;
+    instruction: string;
+    repoName: string;
+    mode: PolicyMode;
+    requestId: string;
+    userId: number;
+    chatId: number;
+    bypassApproval: boolean;
+  }): Promise<void> {
+    const { runKind, instruction, repoName, mode, requestId, userId, chatId } = params;
+
     let resultSent = false;
+    let runResultResumeRejected = false;
+
     try {
       const repo = this.deps.repos.get(repoName);
+      const resumeThreadId = await this.resolveResumeThreadId(chatId, userId);
+
       const context: TaskContext = {
         chatId,
         userId,
         repoName,
         mode,
         instruction,
-        taskType,
         requestId,
-        systemGuidance: this.deps.instructionPolicy.buildExecutionGuidance()
+        runKind,
+        systemGuidance: this.deps.instructionPolicy.buildExecutionGuidance(),
+        resumeThreadId
       };
 
       this.deps.sessions.setActiveRequest(chatId, requestId);
-      await this.deps.telegram.sendMessage(chatId, formatTaskStart(repoName, mode, requestId));
+      await this.deps.telegram.sendMessage(chatId, formatTaskStart(repoName, mode, requestId, runKind, Boolean(resumeThreadId)));
 
       await this.deps.audit.log({
         type: "codex_start",
@@ -640,7 +781,8 @@ export class CodeFoxController {
         userId,
         repo: repoName,
         mode,
-        taskType
+        runKind,
+        resumeThreadId
       });
 
       const running = this.deps.codex.startTask(repo.rootPath, context, async (line) => {
@@ -656,6 +798,17 @@ export class CodeFoxController {
       this.activeAborts.set(requestId, running.abort);
 
       const result = await running.result;
+      runResultResumeRejected = Boolean(result.resumeRejected);
+
+      if (result.threadId) {
+        this.deps.sessions.setCodexThread(chatId, result.threadId);
+      } else if (resumeThreadId) {
+        this.deps.sessions.touchCodexSession(chatId);
+      }
+
+      if (result.resumeRejected) {
+        this.deps.sessions.clearCodexSession(chatId);
+      }
 
       await this.deps.audit.log({
         type: "codex_finish",
@@ -666,12 +819,21 @@ export class CodeFoxController {
         exitCode: result.exitCode,
         aborted: result.aborted,
         timedOut: result.timedOut,
+        resumeRejected: result.resumeRejected,
+        threadId: result.threadId,
         summaryPreview: toAuditPreview(result.summary, 400),
         summaryLength: result.summary.length
       });
 
       await this.deps.telegram.sendMessage(chatId, formatTaskResult(result, repoName, mode));
       resultSent = true;
+
+      if (result.resumeRejected) {
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "Stored Codex session could not be resumed and was closed. Next /run will start a new session."
+        );
+      }
     } catch (error) {
       await this.deps.audit.log({
         type: "codex_orchestration_error",
@@ -681,10 +843,7 @@ export class CodeFoxController {
         error: String(error)
       });
       if (!resultSent) {
-        await this.deps.telegram.sendMessage(
-          chatId,
-          formatError("Internal execution error. Check audit logs for details.")
-        );
+        await this.deps.telegram.sendMessage(chatId, formatError("Internal execution error. Check audit logs for details."));
       }
     } finally {
       this.activeAborts.delete(requestId);
@@ -692,7 +851,99 @@ export class CodeFoxController {
       if (session.activeRequestId === requestId) {
         this.deps.sessions.setActiveRequest(chatId, undefined);
       }
+
+      if (!runResultResumeRejected) {
+        queueMicrotask(() => {
+          this.runDetached(chatId, this.consumePendingSteers(chatId), "consume_pending_steers");
+        });
+      } else {
+        this.pendingSteers.delete(chatId);
+      }
     }
+  }
+
+  private async resolveResumeThreadId(chatId: number, userId: number): Promise<string | undefined> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (!session.codexThreadId) {
+      return undefined;
+    }
+
+    const lastActiveMs = session.codexLastActiveAt ? Date.parse(session.codexLastActiveAt) : Number.NaN;
+    if (!Number.isFinite(lastActiveMs)) {
+      this.deps.sessions.clearCodexSession(chatId);
+      await this.deps.audit.log({
+        type: "codex_session_closed",
+        reason: "invalid_last_active",
+        chatId,
+        userId
+      });
+      return undefined;
+    }
+
+    const idleMs = Date.now() - lastActiveMs;
+    const maxIdleMs = this.deps.codexSessionIdleMinutes * 60 * 1000;
+    if (idleMs <= maxIdleMs) {
+      return session.codexThreadId;
+    }
+
+    const expiredThreadId = session.codexThreadId;
+    this.deps.sessions.clearCodexSession(chatId);
+    await this.deps.audit.log({
+      type: "codex_session_closed",
+      reason: "idle_timeout",
+      chatId,
+      userId,
+      threadId: expiredThreadId,
+      idleMinutes: Math.floor(idleMs / 60000),
+      maxIdleMinutes: this.deps.codexSessionIdleMinutes
+    });
+    await this.deps.telegram.sendMessage(
+      chatId,
+      `Previous Codex session expired after idle timeout (${this.deps.codexSessionIdleMinutes}m). Starting a new session.`
+    );
+    return undefined;
+  }
+
+  private async consumePendingSteers(chatId: number): Promise<void> {
+    const steers = this.pendingSteers.get(chatId);
+    if (!steers || steers.length === 0) {
+      return;
+    }
+
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (session.activeRequestId) {
+      return;
+    }
+
+    this.pendingSteers.delete(chatId);
+
+    if (!session.selectedRepo) {
+      await this.deps.telegram.sendMessage(chatId, "Dropped pending steer because no repo is selected.");
+      return;
+    }
+
+    const mergedInstruction = buildSteerInstruction(steers.map((item) => item.instruction));
+    const steerUserId = steers[steers.length - 1].userId;
+
+    await this.deps.audit.log({
+      type: "steer_dispatch",
+      chatId,
+      userId: steerUserId,
+      steerCount: steers.length,
+      instructionPreview: toAuditPreview(mergedInstruction)
+    });
+
+    await this.deps.telegram.sendMessage(chatId, `Applying ${steers.length} steer update(s) on the current Codex session.`);
+
+    await this.executeOrEnqueue({
+      runKind: "steer",
+      instruction: mergedInstruction,
+      repoName: session.selectedRepo,
+      mode: session.mode,
+      chatId,
+      userId: steerUserId,
+      bypassApproval: true
+    });
   }
 
   private runDetached(chatId: number, operation: Promise<void>, label: string): void {
@@ -709,15 +960,29 @@ export class CodeFoxController {
       }
 
       try {
-        await this.deps.telegram.sendMessage(
-          chatId,
-          formatError("Internal scheduling error. Check audit logs for details.")
-        );
+        await this.deps.telegram.sendMessage(chatId, formatError("Internal scheduling error. Check audit logs for details."));
       } catch (sendError) {
         console.error(`Failed to send detached error message: ${String(sendError)}`);
       }
     });
   }
+}
+
+function buildSteerInstruction(instructions: string[]): string {
+  const cleaned = instructions.map((entry) => entry.trim()).filter(Boolean);
+  if (cleaned.length === 1) {
+    return [
+      "Steer update from the user:",
+      cleaned[0],
+      "Continue from the current session state and incorporate this direction."
+    ].join("\n");
+  }
+
+  return [
+    "Steer update from the user:",
+    "Merge all guidance items below and continue from the current session state.",
+    ...cleaned.map((entry, index) => `${index + 1}. ${entry}`)
+  ].join("\n");
 }
 
 export function createControllerFromAdapters(params: {
@@ -729,12 +994,12 @@ export function createControllerFromAdapters(params: {
   approvals: ApprovalStore;
   audit: AuditLogger;
   codex: CodexCliAdapter;
-  plainTextMode: PlainTextMode;
   persistRepos?: (repos: RepoConfig[]) => Promise<void>;
   repoInitDefaultParentPath: string;
   initializeRepo?: (repoPath: string) => Promise<void>;
-  requireAgentsForMutatingTasks: boolean;
+  requireAgentsForRuns: boolean;
   instructionPolicy: InstructionPolicy;
+  codexSessionIdleMinutes: number;
 }): CodeFoxController {
   return new CodeFoxController({
     telegram: params.telegram,
@@ -745,11 +1010,11 @@ export function createControllerFromAdapters(params: {
     approvals: params.approvals,
     audit: params.audit,
     codex: params.codex,
-    plainTextMode: params.plainTextMode,
     persistRepos: params.persistRepos,
     repoInitDefaultParentPath: params.repoInitDefaultParentPath,
     initializeRepo: params.initializeRepo,
-    requireAgentsForMutatingTasks: params.requireAgentsForMutatingTasks,
-    instructionPolicy: params.instructionPolicy
+    requireAgentsForRuns: params.requireAgentsForRuns,
+    instructionPolicy: params.instructionPolicy,
+    codexSessionIdleMinutes: params.codexSessionIdleMinutes
   });
 }
