@@ -28,6 +28,7 @@ import { makeRequestId } from "./ids.js";
 import { AGENT_TEMPLATE_NAMES, PLAYBOOK_FILE_NAMES, applyAgentTemplate, applyPlaybookDocs } from "./agent-files.js";
 import type {
   AgentTemplateName,
+  CodexReasoningEffort,
   PolicyMode,
   RepoConfig,
   RunKind,
@@ -81,6 +82,7 @@ export interface ControllerDeps {
   requireAgentsForRuns: boolean;
   instructionPolicy: InstructionPolicy;
   codexSessionIdleMinutes: number;
+  codexDefaultReasoningEffort?: CodexReasoningEffort;
 }
 
 export class CodeFoxController {
@@ -243,7 +245,11 @@ export class CodeFoxController {
       case "status": {
         await this.deps.telegram.sendMessage(
           chatId,
-          formatSessionStatus(this.deps.sessions.getOrCreate(chatId), this.deps.codexSessionIdleMinutes)
+          formatSessionStatus(
+            this.deps.sessions.getOrCreate(chatId),
+            this.deps.codexSessionIdleMinutes,
+            this.deps.codexDefaultReasoningEffort
+          )
         );
         return;
       }
@@ -301,9 +307,21 @@ export class CodeFoxController {
   }
 
   private async handleRepoSelect(chatId: number, userId: number, repoName: string): Promise<void> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (this.executionAdmissionLock.has(chatId)) {
+      await this.deps.telegram.sendMessage(chatId, "Another request is currently being scheduled for this chat.");
+      return;
+    }
+    if (session.activeRequestId) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Request ${session.activeRequestId} is running. Abort it first with /abort, then switch repo.`
+      );
+      return;
+    }
+
     try {
       this.deps.repos.get(repoName);
-      const session = this.deps.sessions.getOrCreate(chatId);
       const previousRepo = session.selectedRepo;
       this.deps.sessions.setRepo(chatId, repoName);
 
@@ -1163,6 +1181,11 @@ export class CodeFoxController {
         this.deps.sessions.clearCodexSession(chatId);
       }
 
+      this.deps.sessions.setLastRunMetadata(chatId, {
+        reasoningEffort: result.reasoningEffort,
+        tokenUsage: result.tokenUsage
+      });
+
       await this.deps.audit.log({
         type: "codex_finish",
         requestId,
@@ -1174,6 +1197,8 @@ export class CodeFoxController {
         timedOut: result.timedOut,
         resumeRejected: result.resumeRejected,
         threadId: result.threadId,
+        reasoningEffort: result.reasoningEffort,
+        tokenUsage: result.tokenUsage,
         summaryPreview: toAuditPreview(result.summary, 400),
         summaryLength: result.summary.length
       });
@@ -1250,9 +1275,10 @@ export class CodeFoxController {
       idleMinutes: Math.floor(idleMs / 60000),
       maxIdleMinutes: this.deps.codexSessionIdleMinutes
     });
+    const idleMinutes = Math.floor(idleMs / 60000);
     await this.deps.telegram.sendMessage(
       chatId,
-      `Previous Codex session expired after idle timeout (${this.deps.codexSessionIdleMinutes}m). Starting a new session.`
+      `Previous Codex session was idle for ${idleMinutes}m (limit ${this.deps.codexSessionIdleMinutes}m). Starting a new session.`
     );
     return undefined;
   }
@@ -1373,6 +1399,7 @@ export function createControllerFromAdapters(params: {
   requireAgentsForRuns: boolean;
   instructionPolicy: InstructionPolicy;
   codexSessionIdleMinutes: number;
+  codexDefaultReasoningEffort?: CodexReasoningEffort;
 }): CodeFoxController {
   return new CodeFoxController({
     telegram: params.telegram,
@@ -1388,6 +1415,7 @@ export function createControllerFromAdapters(params: {
     initializeRepo: params.initializeRepo,
     requireAgentsForRuns: params.requireAgentsForRuns,
     instructionPolicy: params.instructionPolicy,
-    codexSessionIdleMinutes: params.codexSessionIdleMinutes
+    codexSessionIdleMinutes: params.codexSessionIdleMinutes,
+    codexDefaultReasoningEffort: params.codexDefaultReasoningEffort
   });
 }

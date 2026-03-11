@@ -71,7 +71,8 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     repoInitDefaultParentPath: config.repoInit.defaultParentPath,
     requireAgentsForRuns: config.safety.requireAgentsForRuns,
     instructionPolicy,
-    codexSessionIdleMinutes: config.state.codexSessionIdleMinutes
+    codexSessionIdleMinutes: config.state.codexSessionIdleMinutes,
+    codexDefaultReasoningEffort: config.codex.reasoningEffort
   });
 
   let started = false;

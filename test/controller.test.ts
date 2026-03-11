@@ -401,6 +401,66 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("Applying 1 steer update"))).toBe(true);
   });
 
+  it("blocks repo switching while a request is running", async () => {
+    let resolveTask: ((result: TaskResult) => void) | undefined;
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {
+            resolveTask?.({ ok: false, summary: "Run aborted by user.", aborted: true });
+          },
+          result: new Promise<TaskResult>((resolve) => {
+            resolveTask = resolve;
+          })
+        };
+      }
+    };
+
+    const telegram = new FakeTelegram();
+    const sessions = new SessionManager("active");
+    const controller = new CodeFoxController({
+      telegram,
+      access: new AccessControl([1], [100]),
+      repos: new RepoRegistry([
+        { name: "payments-api", rootPath: "/tmp/payments-api" },
+        { name: "codefox", rootPath: "/tmp/codefox" }
+      ]),
+      sessions,
+      policy: new PolicyEngine(),
+      approvals: new ApprovalStore(),
+      audit: new FakeAudit(),
+      codex: fakeCodex,
+      repoInitDefaultParentPath: "/tmp",
+      initializeRepo: async () => {},
+      requireAgentsForRuns: false,
+      instructionPolicy: new InstructionPolicy({
+        blockedPatterns: [],
+        allowedDownloadDomains: []
+      }),
+      codexSessionIdleMinutes: 120
+    });
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/run long operation"));
+    await flushAsyncWork();
+
+    await controller.handleUpdate(makeUpdate("/repo codefox"));
+
+    expect(sessions.getOrCreate(100).selectedRepo).toBe("payments-api");
+    expect(
+      telegram.sent.some(
+        (item) =>
+          item.text.includes("Abort it first with /abort") ||
+          item.text.includes("currently being scheduled")
+      )
+    ).toBe(true);
+
+    resolveTask?.({ ok: true, summary: "done", threadId: "thread_1" });
+    await flushAsyncWork();
+  });
+
   it("stores sanitized request previews in audit logs", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],

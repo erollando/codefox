@@ -530,6 +530,59 @@ describe("CodexCliAdapter", () => {
     expect(result.summary).toBe("Yes, this is the answer.");
   });
 
+  it("uses the latest codex message block instead of early planning/tool chatter", async () => {
+    const runner: ProcessRunner = {
+      spawn() {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("codex\n");
+          child.stdout.emitData("I'm going to check staged changes and remotes.\n");
+          child.stdout.emitData("exec\n");
+          child.stdout.emitData("/bin/bash -lc 'git status --short --branch' in /home/enrico/git/codefoxexec\n");
+          child.stdout.emitData("codex\n");
+          child.stdout.emitData("Done.\n");
+          child.stdout.emitData("- Committed: d0807dc on main\n");
+          child.stdout.emitData("- Pushed to: origin/main\n");
+          child.stdout.emitData("tokens used\n");
+          child.stdout.emitData("123\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "commit and push",
+      requestId: "sum002",
+      runKind: "run"
+    };
+
+    const result = await adapter.startTask("/tmp/payments-api", context).result;
+    expect(result.summary).toContain("Done.");
+    expect(result.summary).toContain("Committed: d0807dc");
+    expect(result.summary).not.toContain("I'm going to check");
+    expect(result.summary).not.toContain("git status");
+  });
+
   it("prepends codex global runtime flags from config", async () => {
     let capturedArgs: string[] = [];
     const runner: ProcessRunner = {

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ApprovalRequest, CodexReasoningEffort, PolicyMode, SessionState } from "../types/domain.js";
+import type { ApprovalRequest, CodexReasoningEffort, PolicyMode, SessionState, TaskTokenUsage } from "../types/domain.js";
 
 export interface PersistedState {
   sessions: SessionState[];
@@ -96,6 +96,13 @@ function sanitizeSessions(sessions: SessionState[]): SessionState[] {
         REASONING_EFFORTS.includes(session.reasoningEffortOverride as CodexReasoningEffort)
           ? (session.reasoningEffortOverride as CodexReasoningEffort)
           : undefined;
+      const lastReasoningEffort =
+        typeof session.lastReasoningEffort === "string" &&
+        REASONING_EFFORTS.includes(session.lastReasoningEffort as CodexReasoningEffort)
+          ? (session.lastReasoningEffort as CodexReasoningEffort)
+          : undefined;
+      const lastTokenUsage = sanitizeTokenUsage(session.lastTokenUsage);
+      const lastRunAt = isValidIsoTimestamp(session.lastRunAt) ? session.lastRunAt : undefined;
 
       return {
         chatId: session.chatId,
@@ -105,9 +112,51 @@ function sanitizeSessions(sessions: SessionState[]): SessionState[] {
         codexThreadId,
         codexLastActiveAt,
         reasoningEffortOverride,
+        lastReasoningEffort,
+        lastTokenUsage,
+        lastRunAt,
         updatedAt: isValidIsoTimestamp(session.updatedAt) ? session.updatedAt : now
       };
     });
+}
+
+function sanitizeTokenUsage(value: unknown): TaskTokenUsage | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const usage = value as Record<string, unknown>;
+  const normalized: TaskTokenUsage = {
+    total: toNonNegativeInteger(usage.total),
+    input: toNonNegativeInteger(usage.input),
+    output: toNonNegativeInteger(usage.output),
+    reasoning: toNonNegativeInteger(usage.reasoning),
+    cachedInput: toNonNegativeInteger(usage.cachedInput),
+    remaining: toNonNegativeInteger(usage.remaining)
+  };
+
+  if (
+    typeof normalized.total === "undefined" &&
+    typeof normalized.input === "undefined" &&
+    typeof normalized.output === "undefined" &&
+    typeof normalized.reasoning === "undefined" &&
+    typeof normalized.cachedInput === "undefined" &&
+    typeof normalized.remaining === "undefined"
+  ) {
+    return undefined;
+  }
+
+  return normalized;
+}
+
+function toNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  if (value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 function sanitizeApprovals(approvals: ApprovalRequest[]): ApprovalRequest[] {

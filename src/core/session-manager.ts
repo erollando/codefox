@@ -1,4 +1,4 @@
-import type { CodexReasoningEffort, PolicyMode, SessionState } from "../types/domain.js";
+import type { CodexReasoningEffort, PolicyMode, SessionState, TaskTokenUsage } from "../types/domain.js";
 
 export class SessionManager {
   private readonly sessions = new Map<number, SessionState>();
@@ -17,6 +17,9 @@ export class SessionManager {
         codexThreadId: session.codexThreadId,
         codexLastActiveAt: session.codexLastActiveAt,
         reasoningEffortOverride: session.reasoningEffortOverride,
+        lastReasoningEffort: session.lastReasoningEffort,
+        lastTokenUsage: session.lastTokenUsage ? { ...session.lastTokenUsage } : undefined,
+        lastRunAt: session.lastRunAt,
         updatedAt: session.updatedAt ?? new Date().toISOString()
       });
     }
@@ -74,6 +77,16 @@ export class SessionManager {
     const session = this.getOrCreate(chatId);
     session.activeRequestId = requestId;
     session.updatedAt = new Date().toISOString();
+    this.emitChange();
+    return session;
+  }
+
+  setLastRunMetadata(chatId: number, metadata: { reasoningEffort?: CodexReasoningEffort; tokenUsage?: TaskTokenUsage }): SessionState {
+    const session = this.getOrCreate(chatId);
+    session.lastReasoningEffort = metadata.reasoningEffort;
+    session.lastTokenUsage = metadata.tokenUsage ? { ...metadata.tokenUsage } : undefined;
+    session.lastRunAt = new Date().toISOString();
+    session.updatedAt = session.lastRunAt;
     this.emitChange();
     return session;
   }

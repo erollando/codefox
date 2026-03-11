@@ -100,7 +100,7 @@ Copy the sample config to `config/codefox.config.json`:
     "command": "codex",
     "baseArgs": ["exec"],
     "model": "gpt-5.3-codex",
-    "reasoningEffort": "high",
+    "reasoningEffort": "default",
     "configOverrides": [],
     "runArgTemplate": ["{instruction}"],
     "repoArgTemplate": [],

@@ -477,12 +477,7 @@ function extractAssistantSummary(output: string): string | undefined {
     return codexSummary.slice(0, 400);
   }
 
-  const lines = normalized
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !isNoiseLine(line));
-  const last = lines[lines.length - 1];
-  return last ? last.slice(0, 400) : undefined;
+  return undefined;
 }
 
 function extractJsonAgentMessage(text: string): string | undefined {
@@ -508,38 +503,44 @@ function extractJsonAgentMessage(text: string): string | undefined {
 }
 
 function extractPlainCodexMessage(text: string): string | undefined {
+  const lines = text.split("\n");
   let last: string | undefined;
-  const pattern = /(?:^|\n)codex\s*\n([\s\S]*?)(?=\n(?:tokens used|$))/g;
-  for (const match of text.matchAll(pattern)) {
-    const candidate = (match[1] ?? "").trim();
+
+  let inCodexBlock = false;
+  let currentBlock: string[] = [];
+
+  const flushCurrent = (): void => {
+    if (currentBlock.length === 0) {
+      return;
+    }
+    const candidate = currentBlock.join("\n").trim();
     if (candidate) {
       last = candidate;
     }
-  }
-  return last;
-}
+    currentBlock = [];
+  };
 
-function isNoiseLine(line: string): boolean {
-  const normalized = line.toLowerCase();
-  if (normalized === "--------") {
-    return true;
+  for (const line of lines) {
+    const normalized = line.trim().toLowerCase();
+    if (normalized === "codex") {
+      flushCurrent();
+      inCodexBlock = true;
+      continue;
+    }
+
+    if (!inCodexBlock) {
+      continue;
+    }
+
+    if (normalized === "user" || normalized === "exec" || normalized === "tokens used") {
+      flushCurrent();
+      inCodexBlock = false;
+      continue;
+    }
+
+    currentBlock.push(line);
   }
-  if (normalized === "user" || normalized === "codex" || normalized === "tokens used") {
-    return true;
-  }
-  if (/^[0-9][0-9,]*$/.test(line)) {
-    return true;
-  }
-  return (
-    normalized.startsWith("openai codex ") ||
-    normalized.startsWith("workdir:") ||
-    normalized.startsWith("model:") ||
-    normalized.startsWith("provider:") ||
-    normalized.startsWith("approval:") ||
-    normalized.startsWith("sandbox:") ||
-    normalized.startsWith("reasoning effort:") ||
-    normalized.startsWith("reasoning summaries:") ||
-    normalized.startsWith("session id:") ||
-    normalized.startsWith("mcp startup:")
-  );
+
+  flushCurrent();
+  return last;
 }

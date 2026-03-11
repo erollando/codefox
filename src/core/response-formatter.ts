@@ -1,4 +1,4 @@
-import type { ApprovalRequest, PolicyMode, RunKind, SessionState, TaskResult } from "../types/domain.js";
+import type { ApprovalRequest, CodexReasoningEffort, PolicyMode, RunKind, SessionState, TaskResult } from "../types/domain.js";
 import { redactSensitive } from "./sanitize.js";
 
 const TELEGRAM_OUTPUT_LIMIT = 1200;
@@ -58,19 +58,35 @@ export function formatMode(mode: PolicyMode): string {
   }
 }
 
-export function formatSessionStatus(session: SessionState, codexSessionIdleMinutes: number): string {
+export function formatSessionStatus(
+  session: SessionState,
+  codexSessionIdleMinutes: number,
+  codexDefaultReasoningEffort?: CodexReasoningEffort
+): string {
   const codexSession =
     session.codexThreadId && session.codexLastActiveAt
       ? `${session.codexThreadId} (last active ${session.codexLastActiveAt}, idle timeout ${codexSessionIdleMinutes}m)`
       : "none";
+  const effectiveReasoning = session.reasoningEffortOverride ?? codexDefaultReasoningEffort ?? "default";
+  const reasoningSource = session.reasoningEffortOverride
+    ? "chat override"
+    : codexDefaultReasoningEffort
+      ? "config default"
+      : "no default";
+  const lastTokensUsed = session.lastTokenUsage?.total;
+  const lastTokensRemaining = session.lastTokenUsage?.remaining;
 
   return [
     "Status:",
     `repo: ${session.selectedRepo ?? "(not selected)"}`,
     `mode: ${session.mode}`,
-    `reasoning: ${session.reasoningEffortOverride ?? "default"}`,
+    `reasoning (next run): ${effectiveReasoning} (${reasoningSource})`,
     `active request: ${session.activeRequestId ?? "none"}`,
-    `codex session: ${codexSession}`
+    `codex session: ${codexSession}`,
+    `last run: ${session.lastRunAt ?? "none"}`,
+    `last reasoning: ${session.lastReasoningEffort ?? "unknown"}`,
+    `last tokens used: ${typeof lastTokensUsed === "number" ? formatTokenCount(lastTokensUsed) : "unknown"}`,
+    `last tokens remaining: ${typeof lastTokensRemaining === "number" ? formatTokenCount(lastTokensRemaining) : "unavailable"}`
   ].join("\n");
 }
 
@@ -106,6 +122,16 @@ export function formatTaskResult(result: TaskResult, repo: string, mode: PolicyM
     `mode: ${mode}`,
     `summary: ${safeSummary}`
   ];
+
+  if (result.reasoningEffort) {
+    lines.push(`reasoning: ${result.reasoningEffort}`);
+  }
+  if (typeof result.tokenUsage?.total === "number") {
+    lines.push(`tokens used: ${formatTokenCount(result.tokenUsage.total)}`);
+  }
+  if (typeof result.tokenUsage?.remaining === "number") {
+    lines.push(`tokens remaining: ${formatTokenCount(result.tokenUsage.remaining)}`);
+  }
 
   if (result.threadId) {
     lines.push(`codex session: ${result.threadId}`);
@@ -154,4 +180,8 @@ export function formatPendingApproval(approval: ApprovalRequest): string {
 
 export function formatError(message: string): string {
   return `Error: ${message}`;
+}
+
+function formatTokenCount(value: number): string {
+  return value.toLocaleString("en-US");
 }

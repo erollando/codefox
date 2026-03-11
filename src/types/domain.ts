@@ -4,6 +4,15 @@ export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhig
 export type TaskAttachmentKind = "image" | "document";
 export type AgentTemplateName = "python" | "java" | "nodejs";
 
+export interface TaskTokenUsage {
+  total?: number;
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cachedInput?: number;
+  remaining?: number;
+}
+
 export interface TaskAttachment {
   kind: TaskAttachmentKind;
   localPath: string;
@@ -88,6 +97,9 @@ export interface SessionState {
   codexThreadId?: string;
   codexLastActiveAt?: string;
   reasoningEffortOverride?: CodexReasoningEffort;
+  lastReasoningEffort?: CodexReasoningEffort;
+  lastTokenUsage?: TaskTokenUsage;
+  lastRunAt?: string;
   updatedAt: string;
 }
 
@@ -125,6 +137,8 @@ export interface TaskResult {
   timedOut?: boolean;
   threadId?: string;
   resumeRejected?: boolean;
+  reasoningEffort?: CodexReasoningEffort;
+  tokenUsage?: TaskTokenUsage;
 }
 
 export interface ProgressEvent {
