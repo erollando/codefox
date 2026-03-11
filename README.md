@@ -154,6 +154,16 @@ Codex runtime options you can set in `codex`:
 - `profile`: maps to `--profile` (optional)
 - `configOverrides`: additional `-c key=value` entries passed through to Codex
 
+Jira MCP bridge example (`jira-mcp-bridge` repo at `/home/enrico/git/jira-mcp-bridge`):
+
+```json
+"configOverrides": [
+  "mcp_servers={ \"jira-mcp-bridge\" = { command = \"bash\", args = [\"-lc\", \"cd /home/enrico/git/jira-mcp-bridge && exec /home/enrico/git/jira-mcp-bridge/.venv/bin/python -m server\"], env = { ACLI_PATH = \"acli\" } } }"
+]
+```
+
+After updating config, restart CodeFox so new Codex runs load the MCP server.
+
 ## Environment variables
 
 CodeFox auto-loads `.env` from the project root on startup.
