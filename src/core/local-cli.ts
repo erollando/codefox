@@ -217,7 +217,7 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
 interface HandoffParsedArgs {
   chatId?: number;
   taskId?: string;
-  remainingSummary: string;
+  remainingSummary?: string;
   workId?: string;
   capabilityRef?: string;
   completedWork: string[];
@@ -449,19 +449,12 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
     };
   }
 
-  if (!remainingSummary || remainingSummary.trim().length === 0) {
-    return {
-      ok: false,
-      error: "handoff command requires --remaining <summary>."
-    };
-  }
-
   return {
     ok: true,
     args: {
       chatId,
       taskId: taskId?.trim(),
-      remainingSummary: remainingSummary.trim(),
+      remainingSummary: remainingSummary?.trim(),
       workId: workId?.trim(),
       capabilityRef: capabilityRef?.trim(),
       completedWork,
@@ -668,6 +661,7 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
 
   const session = pruned.sessions.find((entry) => entry.chatId === chatId);
   const taskId = resolveTaskId(args, session);
+  const remainingSummary = resolveRemainingSummary(args, session);
   const workId = args.workId || "rw-1";
   const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
   const handoffResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
@@ -687,7 +681,7 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
       remainingWork: [
         {
           id: workId,
-          summary: args.remainingSummary as string,
+          summary: remainingSummary,
           ...(args.capabilityRef ? { requestedCapabilityRef: args.capabilityRef } : {})
         }
       ],
@@ -713,7 +707,7 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
   output.log(`handoff id: ${handoffId}`);
   output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
   output.log(`spec ref: ${specRevisionRef.value}`);
-  output.log(`remaining work: ${workId} (${args.remainingSummary as string})`);
+  output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
   output.log("Next steps in Telegram:");
   output.log("  /handoff show");
   output.log(`  /handoff continue ${workId}`);
@@ -737,6 +731,28 @@ function resolveTaskId(
     return `TASK-${session.codexThreadId.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 20)}`;
   }
   return `TASK-${randomUUID().slice(0, 8)}`;
+}
+
+function resolveRemainingSummary(
+  args: LocalCliParsedArgs,
+  session?: {
+    activeRequestId?: string;
+    codexThreadId?: string;
+  }
+): string {
+  if (args.remainingSummary && args.remainingSummary.trim().length > 0) {
+    return args.remainingSummary.trim();
+  }
+  if (args.capabilityRef && args.capabilityRef.trim().length > 0) {
+    return `Continue remaining work requiring ${args.capabilityRef.trim()}`;
+  }
+  if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
+    return `Continue remaining work from request ${session.activeRequestId.trim()}`;
+  }
+  if (session?.codexThreadId && session.codexThreadId.trim().length > 0) {
+    return `Continue remaining work from Codex session ${session.codexThreadId.trim()}`;
+  }
+  return "Continue remaining handoff work";
 }
 
 function resolveHandoffContext(
@@ -962,7 +978,7 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] specs",
     "  npm run local:cli -- [--config <path>] session <chatId>",
     "  npm run local:cli -- [--config <path>] [--user <id>] send <chatId> <command-text>",
-    "  npm run local:cli -- [--config <path>] handoff [chatId] --remaining <summary> [options]",
+    "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
     "    options: [--work-id <id>] [--capability <ref>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
     "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>]",

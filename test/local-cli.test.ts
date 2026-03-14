@@ -60,7 +60,7 @@ describe("local CLI", () => {
   });
 
   it("parses handoff command without chatId and taskId", () => {
-    const parsed = parseLocalCliArgs(["handoff", "--remaining", "Run regression suite"]);
+    const parsed = parseLocalCliArgs(["handoff"]);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || !parsed.args) {
       return;
@@ -68,7 +68,7 @@ describe("local CLI", () => {
     expect(parsed.args.command).toBe("handoff");
     expect(parsed.args.chatId).toBeUndefined();
     expect(parsed.args.taskId).toBeUndefined();
-    expect(parsed.args.remainingSummary).toBe("Run regression suite");
+    expect(parsed.args.remainingSummary).toBeUndefined();
   });
 
   it("returns parse errors for invalid session command", () => {
@@ -561,8 +561,6 @@ describe("local CLI", () => {
           "--config",
           configPath,
           "handoff",
-          "--remaining",
-          "Run full regression checks",
           "--capability",
           "repo.run_checks",
           "--completed",
@@ -608,6 +606,13 @@ describe("local CLI", () => {
     const handoffBody = relayRequests[3]?.body;
     expect(typeof handoffBody?.taskId).toBe("string");
     expect(String(handoffBody?.taskId)).toContain("TASK-");
+    expect(handoffBody?.remainingWork).toEqual([
+      {
+        id: "rw-1",
+        summary: "Continue remaining work requiring repo.run_checks",
+        requestedCapabilityRef: "repo.run_checks"
+      }
+    ]);
     expect(handoffBody?.specRevisionRef).toBe("v2");
   });
 });

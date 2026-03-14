@@ -13,6 +13,12 @@ The practical outcome: you can start from your desk, continue from your phone, a
 - Receive structured progress and approval checkpoints during execution.
 - Continue long-running work remotely via external Codex handoff into CodeFox.
 
+## Setup
+One-time: configure your codefox.config.json ...
+Optionally link to mcp like jira
+...
+
+
 ## Start Here
 
 ```bash
@@ -205,12 +211,13 @@ npm run local:cli -- approvals
 npm run local:cli -- specs
 npm run local:cli -- session 100
 npm run local:cli -- send 100 "/status"
-npm run handoff:cli -- --config ./config/codefox.config.json --remaining "Run full regression checks" --capability repo.run_checks --completed "Endpoint implemented"
+npm run handoff:cli -- --config ./config/codefox.config.json --capability repo.run_checks --completed "Endpoint implemented"
 ```
 
 `send` writes a command envelope into `<state-dir>/local-command-queue/inbox`.
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
+`--remaining` is optional and auto-derived from available context (`--capability`, active request id, Codex thread id) when omitted.
 
 ## Configuration
 
