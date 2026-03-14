@@ -249,7 +249,11 @@ npm run local:cli -- sessions
 npm run local:cli -- approvals
 npm run local:cli -- specs
 npm run local:cli -- session 100
+npm run local:cli -- send 100 "/status"
 ```
+
+`send` writes a command envelope into a local queue (`<state-dir>/local-command-queue/inbox`).
+When CodeFox is running, it consumes queued local commands and executes them through the same controller/policy/audit path used for Telegram input.
 
 ## Validate
 

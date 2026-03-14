@@ -17,6 +17,19 @@ describe("local CLI", () => {
     expect(parsed.args.configPath).toBe("./config/custom.json");
   });
 
+  it("parses send command with optional --user", () => {
+    const parsed = parseLocalCliArgs(["--config", "./config/custom.json", "--user", "9", "send", "100", "/status"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || !parsed.args) {
+      return;
+    }
+
+    expect(parsed.args.command).toBe("send");
+    expect(parsed.args.chatId).toBe(100);
+    expect(parsed.args.userId).toBe(9);
+    expect(parsed.args.text).toBe("/status");
+  });
+
   it("returns parse errors for invalid session command", () => {
     const missing = parseLocalCliArgs(["session"]);
     expect(missing.ok).toBe(false);
@@ -192,5 +205,93 @@ describe("local CLI", () => {
     expect(rendered).toContain("Session 100:");
     expect(rendered).toContain("capability=repo.prepare_branch");
     expect(rendered).toContain("current spec: v2 (approved, approved)");
+  });
+
+  it("queues local send commands to inbox", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-cli-send-"));
+    const repoPath = path.join(tmpDir, "repo");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+    const statePath = path.join(tmpDir, "state.json");
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          telegram: {
+            token: "dummy",
+            allowedUserIds: [7],
+            allowedChatIds: [100],
+            pollingTimeoutSeconds: 30,
+            pollIntervalMs: 1000,
+            discardBacklogOnStart: true
+          },
+          repos: [{ name: "payments-api", rootPath: repoPath }],
+          codex: {
+            command: "codex",
+            baseArgs: ["exec"],
+            runArgTemplate: ["{instruction}"],
+            repoArgTemplate: [],
+            timeoutMs: 60000,
+            blockedEnvVars: [],
+            preflightEnabled: false,
+            preflightArgs: ["--version"],
+            preflightTimeoutMs: 1000
+          },
+          policy: {
+            defaultMode: "observe"
+          },
+          safety: {
+            requireAgentsForRuns: false,
+            instructionPolicy: {
+              blockedPatterns: [],
+              allowedDownloadDomains: [],
+              forbiddenPathPatterns: []
+            }
+          },
+          repoInit: {
+            defaultParentPath: tmpDir
+          },
+          state: {
+            filePath: statePath,
+            codexSessionIdleMinutes: 120
+          },
+          audit: {
+            logFilePath: path.join(tmpDir, "audit.log")
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const output = {
+      log(line: string) {
+        logs.push(line);
+      },
+      error(line: string) {
+        errors.push(line);
+      }
+    };
+
+    try {
+      const code = await runLocalCli(["--config", configPath, "send", "100", "/status"], output);
+      expect(code).toBe(0);
+    } finally {
+      if (typeof previousToken === "undefined") {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      }
+    }
+
+    expect(errors).toEqual([]);
+    expect(logs.join("\n")).toContain("Queued local command");
+    expect(logs.join("\n")).toContain("Queue inbox:");
   });
 });

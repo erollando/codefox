@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
+import { defaultLocalCommandQueuePath } from "../src/core/local-command-queue.js";
 
 describe("createApp lifecycle", () => {
   const originalToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -258,5 +259,81 @@ describe("createApp lifecycle", () => {
 
     const logs = await readFile(logPath, "utf8");
     expect(logs).toContain('"type":"state_active_requests_cleared"');
+  });
+
+  it("processes queued local CLI commands through controller", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-test-"));
+    const logPath = path.join(tmpDir, "audit.log");
+    const statePath = path.join(tmpDir, "state.json");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        telegram: {
+          allowedUserIds: [1],
+          allowedChatIds: [100],
+          pollingTimeoutSeconds: 1,
+          pollIntervalMs: 1
+        },
+        repos: [{ name: "payments-api", rootPath: tmpDir }],
+        codex: {
+          command: "codex",
+          baseArgs: [],
+          runArgTemplate: ["{instruction}"],
+          repoArgTemplate: [],
+          timeoutMs: 1000,
+          preflightEnabled: false
+        },
+        policy: { defaultMode: "observe" },
+        state: { filePath: statePath, codexSessionIdleMinutes: 120 },
+        audit: { logFilePath: logPath }
+      }),
+      "utf8"
+    );
+
+    const queueInbox = path.join(defaultLocalCommandQueuePath(statePath), "inbox");
+    await mkdir(queueInbox, { recursive: true });
+    await writeFile(
+      path.join(queueInbox, "2026-03-14T12-00-00.000Z_lcmd_00000001.json"),
+      JSON.stringify(
+        {
+          id: "lcmd_00000001",
+          chatId: 100,
+          userId: 1,
+          text: "/status",
+          createdAt: "2026-03-14T12:00:00.000Z",
+          source: "local-cli"
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const fetchMock = vi.fn(async (url: string) => {
+      const method = url.split("/").at(-1);
+      if (method === "getUpdates") {
+        return {
+          ok: true,
+          json: async () => ({ ok: true, result: [] })
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: true })
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const app = await createApp(configPath);
+    const startPromise = app.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await app.stop();
+    await Promise.race([startPromise, new Promise((resolve) => setTimeout(resolve, 250))]);
+
+    const logs = await readFile(logPath, "utf8");
+    expect(logs).toContain('"type":"local_command_received"');
+    expect(logs).toContain('"type":"local_command_processed"');
   });
 });

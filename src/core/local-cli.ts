@@ -1,4 +1,5 @@
 import { loadConfig, resolveConfigPath } from "./config.js";
+import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
 import { JsonStateStore, pruneStateByTtl } from "./state-store.js";
 import { getCurrentRevision } from "./spec-workflow.js";
 import type { PersistedSpecWorkflow } from "./state-store.js";
@@ -9,8 +10,10 @@ export interface LocalCliOutput {
 }
 
 export interface LocalCliParsedArgs {
-  command: "help" | "sessions" | "approvals" | "specs" | "session";
+  command: "help" | "sessions" | "approvals" | "specs" | "session" | "send";
   chatId?: number;
+  userId?: number;
+  text?: string;
   configPath?: string;
 }
 
@@ -22,6 +25,7 @@ export interface LocalCliParseResult {
 
 export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
   let configPath: string | undefined;
+  let userId: number | undefined;
   const positional: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -35,6 +39,25 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
         };
       }
       configPath = next;
+      index += 1;
+      continue;
+    }
+    if (token === "--user") {
+      const next = argv[index + 1];
+      if (!next) {
+        return {
+          ok: false,
+          error: "Missing value for --user."
+        };
+      }
+      const parsedUserId = Number(next);
+      if (!Number.isSafeInteger(parsedUserId) || parsedUserId <= 0) {
+        return {
+          ok: false,
+          error: "userId must be a positive integer."
+        };
+      }
+      userId = parsedUserId;
       index += 1;
       continue;
     }
@@ -88,6 +111,40 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
     };
   }
 
+  if (command === "send") {
+    const chatIdRaw = positional[1];
+    const text = positional.slice(2).join(" ").trim();
+    if (!chatIdRaw) {
+      return {
+        ok: false,
+        error: "send command requires <chatId> <command-text>."
+      };
+    }
+    const chatId = Number(chatIdRaw);
+    if (!Number.isSafeInteger(chatId) || chatId <= 0) {
+      return {
+        ok: false,
+        error: "chatId must be a positive integer."
+      };
+    }
+    if (!text) {
+      return {
+        ok: false,
+        error: "send command requires non-empty <command-text>."
+      };
+    }
+    return {
+      ok: true,
+      args: {
+        command: "send",
+        chatId,
+        userId,
+        text,
+        configPath
+      }
+    };
+  }
+
   return {
     ok: false,
     error: `Unknown command '${command}'.`
@@ -110,6 +167,27 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
 
   const resolvedConfigPath = resolveConfigPath(args.configPath);
   const config = await loadConfig(resolvedConfigPath);
+
+  if (args.command === "send") {
+    const effectiveUserId = args.userId ?? config.telegram.allowedUserIds[0];
+    if (!effectiveUserId) {
+      output.error("No allowed user id configured. Use --user <id> or set telegram.allowedUserIds.");
+      return 1;
+    }
+
+    const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
+    const queued = await queue.enqueue({
+      chatId: args.chatId as number,
+      userId: effectiveUserId,
+      text: args.text as string
+    });
+    output.log(
+      `Queued local command ${queued.id} for chat ${queued.chatId} user ${queued.userId}: ${queued.text}`
+    );
+    output.log(`Queue inbox: ${queue.inboxPath()}`);
+    return 0;
+  }
+
   const store = new JsonStateStore(config.state.filePath);
   const loaded = await store.load();
   const pruned = pruneStateByTtl(loaded, {
@@ -153,6 +231,7 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] approvals",
     "  npm run local:cli -- [--config <path>] specs",
     "  npm run local:cli -- [--config <path>] session <chatId>",
+    "  npm run local:cli -- [--config <path>] [--user <id>] send <chatId> <command-text>",
     "  npm run local:cli -- help"
   ].join("\n");
 }

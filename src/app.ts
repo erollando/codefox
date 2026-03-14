@@ -6,11 +6,13 @@ import { AuditLogger } from "./core/audit-logger.js";
 import { loadConfig, persistRepos, resolveConfigPath } from "./core/config.js";
 import { CodeFoxController, createControllerFromAdapters } from "./core/controller.js";
 import { InstructionPolicy } from "./core/instruction-policy.js";
+import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./core/local-command-queue.js";
 import { PolicyEngine } from "./core/policy.js";
 import { RepoRegistry } from "./core/repo-registry.js";
 import { SessionManager } from "./core/session-manager.js";
 import { SpecPolicyEngine } from "./core/spec-policy.js";
 import { JsonStateStore, pruneStateByTtl } from "./core/state-store.js";
+import type { TelegramUpdate } from "./adapters/telegram.js";
 
 export interface AppRuntime {
   start(): Promise<void>;
@@ -75,6 +77,7 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
   await codex.ensureAvailable();
   const codexRuntimeInfo = codex.getRuntimeInfo();
   const instructionPolicy = new InstructionPolicy(config.safety.instructionPolicy);
+  const localCommandQueue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
 
   controller = createControllerFromAdapters({
     telegram,
@@ -142,6 +145,33 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         });
       }
 
+      await localCommandQueue.start(async (command) => {
+        await audit.log({
+          type: "local_command_received",
+          commandId: command.id,
+          chatId: command.chatId,
+          userId: command.userId,
+          source: command.source
+        });
+        try {
+          await controller.handleUpdate(buildLocalCommandUpdate(command));
+          await audit.log({
+            type: "local_command_processed",
+            commandId: command.id,
+            chatId: command.chatId,
+            userId: command.userId
+          });
+        } catch (error) {
+          await audit.log({
+            type: "local_command_failed",
+            commandId: command.id,
+            chatId: command.chatId,
+            userId: command.userId,
+            error: String(error)
+          });
+          throw error;
+        }
+      });
       await telegram.start((update) => controller.handleUpdate(update));
     },
     async stop(): Promise<void> {
@@ -149,6 +179,7 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         return;
       }
       stopped = true;
+      localCommandQueue.stop();
       const shutdown = await controller.shutdown();
       telegram.stop();
       await stateStore.flush();
@@ -157,6 +188,22 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         abortedActiveRequests: shutdown.abortedRequestIds,
         pendingActiveRequestsAfterStop: shutdown.pendingRequestIds
       });
+    }
+  };
+}
+
+function buildLocalCommandUpdate(command: { id: string; chatId: number; userId: number; text: string }): TelegramUpdate {
+  return {
+    update_id: Number.parseInt(command.id.replace(/\D/g, "").slice(0, 9) || "1", 10),
+    message: {
+      message_id: Number.parseInt(command.id.replace(/\D/g, "").slice(0, 9) || "1", 10),
+      text: command.text,
+      from: {
+        id: command.userId
+      },
+      chat: {
+        id: command.chatId
+      }
     }
   };
 }
