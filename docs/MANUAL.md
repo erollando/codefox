@@ -13,11 +13,16 @@ Use this page as the index for detailed operational docs.
 3. **Use local REPL / local controls**
 - Read: [OPERATIONS.md](./OPERATIONS.md#external-relay-optional)
 
-4. **Handoff from external Codex to CodeFox**
+4. **Use local web UI**
+- Start: `npm run ui`
+- Open: `http://127.0.0.1:8789`
+- Read: [OPERATIONS.md](./OPERATIONS.md#external-relay-optional)
+
+5. **Handoff from external Codex to CodeFox**
 - Read: [DEMO_REMOTE_HANDOFF.md](./DEMO_REMOTE_HANDOFF.md)
 - Transcript: [demo-outputs/remote-handoff-transcript.txt](./demo-outputs/remote-handoff-transcript.txt)
 
-5. **Understand the product quickly (end-user view)**
+6. **Understand the product quickly (end-user view)**
 - Read: [DEMO_ONE_PAGE_STORY.md](./DEMO_ONE_PAGE_STORY.md)
 
 ## Quick Pointers
@@ -25,3 +30,11 @@ Use this page as the index for detailed operational docs.
 - If you only want the shortest path, start with [README.md](../README.md).
 - If a run looks too concise, use `/details` for expanded context.
 - For relay/handoff issues, use the troubleshooting section in [OPERATIONS.md](./OPERATIONS.md#troubleshooting).
+
+## Local UI Notes
+
+- UI auto-starts CodeFox runtime if it is not already running.
+- Default bind is local-only (`127.0.0.1`) for safety.
+- For phone/LAN access on trusted networks: `npm run ui -- --host 0.0.0.0 --port 8789`.
+- Mobile mode is automatic on small screens; force with `?mobile=1`.
+- Quick actions at the top are the primary interaction controls; transcript area is the main scroll region.
