@@ -38,6 +38,8 @@ What happens:
 
 ### Goal 2: Handoff desk work to phone
 
+Prerequisite: set `"externalRelay": { "enabled": true, ... }` in `config/codefox.config.json` (and set relay token env var if configured).
+
 At your desk (same machine where CodeFox is running):
 
 ```bash
