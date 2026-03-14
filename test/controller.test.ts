@@ -190,6 +190,28 @@ describe("CodeFoxController", () => {
     expect(String(statusEvent?.viewId ?? "")).toMatch(/^view_[a-f0-9]{8}$/);
   });
 
+  it("returns explicit technical context via /details", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/details"));
+
+    const details = telegram.sent.at(-1)?.text ?? "";
+    expect(details).toContain("Status:");
+    expect(details).toContain("pending approval: none");
+    expect(details).toContain("external handoff: none");
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status", "/handoff show", "/pending"]);
+  });
+
   it("returns full policy summary for /policy and supports mode override", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
@@ -318,7 +340,7 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0].context.runKind).toBe("run");
     expect(fakeCodex.calls[0].context.mode).toBe("active");
     expect(fakeCodex.calls[0].context.capability?.ref).toBe("repo.run_checks");
-    expect(telegram.sent.some((item) => item.text.includes("Running ") && item.text.includes("(active, run)."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Working on your request in payments-api (active)."))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("Completed:"))).toBe(true);
     expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_1");
     expect(
@@ -424,7 +446,7 @@ describe("CodeFoxController", () => {
     await flushAsyncWork();
 
     expect(fakeCodex.calls.length).toBe(0);
-    expect(telegram.sent.some((item) => item.text.includes("Capability policy blocked run"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Run blocked by capability policy"))).toBe(true);
     expect(
       audit.events.some(
         (event) => event.type === "capability_policy_block" && event.reasonCode === "local_presence_required"
@@ -1310,6 +1332,8 @@ describe("CodeFoxController", () => {
         (item) =>
           item.text.includes("already running") ||
           item.text.includes("Use /status or /abort") ||
+          item.text.includes("Run ") ||
+          item.text.includes("send plain text to steer") ||
           item.text.includes("currently being scheduled")
       )
     ).toBe(true);
@@ -1504,6 +1528,7 @@ describe("CodeFoxController", () => {
       telegram.sent.some(
         (item) =>
           item.text.includes("Abort it first with /abort") ||
+          item.text.includes("Run ") ||
           item.text.includes("currently being scheduled")
       )
     ).toBe(true);

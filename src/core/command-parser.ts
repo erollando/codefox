@@ -29,6 +29,7 @@ export type ParsedCommand =
   | { type: "steer"; instruction: string }
   | { type: "close" }
   | { type: "status" }
+  | { type: "details" }
   | { type: "pending" }
   | { type: "handoff"; action: "status" | "show" | "continue" | "clear"; workId?: string }
   | { type: "approve" }
@@ -133,6 +134,8 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "close" };
     case "/status":
       return { type: "status" };
+    case "/details":
+      return { type: "details" };
     case "/pending":
       return { type: "pending" };
     case "/handoff":

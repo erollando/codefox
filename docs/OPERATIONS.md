@@ -66,11 +66,13 @@ npm run verify
 ## Operational Commands (Telegram)
 
 - `/status` to inspect selected repo, mode, active request, and codex session id
+- `/details` for expanded technical context (session + handoff + approval pointers)
 - `/handoff [status|show|continue [work-id]|clear]` to inspect and continue external handoff bundles
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
 - Plain text while a run is active is treated as steer guidance automatically.
+- Run updates are concise by default; ask `/details` when you need full technical context.
 - `/close` to close stored Codex session thread explicitly
 - `/abort` to stop active Codex execution
 - `/repo add <name> <absolute-path>` to register a repo at runtime

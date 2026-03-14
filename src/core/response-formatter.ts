@@ -45,6 +45,7 @@ export function formatHelp(): string {
     "/steer <instruction>",
     "/close",
     "/status",
+    "/details",
     "/handoff [status|show|continue [work-id]|clear]",
     "/audit <view_id>",
     "/abort"
@@ -193,13 +194,16 @@ export function formatSessionStatus(
 export function formatTaskStart(
   repo: string,
   mode: PolicyMode,
-  requestId: string,
+  _requestId: string,
   runKind: RunKind,
   resumed: boolean,
   _resumeThreadId?: string
 ): string {
   const continuationSuffix = resumed ? " Continuing previous Codex context." : "";
-  return `Running ${requestId} in ${repo} (${mode}, ${runKind}).${continuationSuffix}`;
+  if (runKind === "steer") {
+    return `Applying steer update in ${repo} (${mode}).${continuationSuffix}`;
+  }
+  return `Working on your request in ${repo} (${mode}).${continuationSuffix}`;
 }
 
 export function formatTaskResult(result: TaskResult, repo: string, mode: PolicyMode): string {

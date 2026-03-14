@@ -161,6 +161,7 @@ describe("parseCommand", () => {
       instruction: "use a smaller patch"
     });
     expect(parseCommand("/close")).toEqual({ type: "close" });
+    expect(parseCommand("/details")).toEqual({ type: "details" });
     expect(parseCommand("/pending")).toEqual({ type: "pending" });
     expect(parseCommand("/handoff")).toEqual({ type: "handoff", action: "status" });
     expect(parseCommand("/handoff status")).toEqual({ type: "handoff", action: "status" });

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatAuditLookup, formatError, formatPolicySummary, formatSessionStatus, formatTaskResult } from "../src/core/response-formatter.js";
+import {
+  formatAuditLookup,
+  formatError,
+  formatPolicySummary,
+  formatSessionStatus,
+  formatTaskResult,
+  formatTaskStart
+} from "../src/core/response-formatter.js";
 import { formatCapabilitiesSummary } from "../src/core/response-formatter.js";
 
 describe("response formatter", () => {
@@ -199,5 +206,14 @@ describe("response formatter", () => {
   it("avoids duplicate error prefixing", () => {
     expect(formatError("Error: Unknown repository 'x'")).toBe("Error: Unknown repository 'x'");
     expect(formatError("Unknown repository 'x'")).toBe("Error: Unknown repository 'x'");
+  });
+
+  it("keeps task-start messages concise by default", () => {
+    const runStart = formatTaskStart("payments-api", "active", "req_123", "run", false);
+    const steerStart = formatTaskStart("payments-api", "active", "req_456", "steer", true);
+
+    expect(runStart).toBe("Working on your request in payments-api (active).");
+    expect(steerStart).toContain("Applying steer update in payments-api (active).");
+    expect(runStart).not.toContain("req_123");
   });
 });

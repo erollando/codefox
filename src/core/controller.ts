@@ -654,6 +654,26 @@ export class CodeFoxController {
         );
         return;
       }
+      case "details": {
+        const currentSession = this.deps.sessions.getOrCreate(chatId);
+        const handoffState = this.externalHandoffs.get(chatId);
+        const pending = this.deps.approvals.get(chatId);
+        const detailLines = [
+          formatSessionStatus(
+            currentSession,
+            this.deps.codexSessionIdleMinutes,
+            this.deps.codexDefaultReasoningEffort,
+            this.specPolicy.forMode(currentSession.mode)
+          ),
+          `pending approval: ${pending?.id ?? "none"}`,
+          `external handoff: ${handoffState?.bundle.handoffId ?? "none"}`,
+          handoffState ? `handoff remaining: ${countOutstandingHandoffWork(handoffState)}` : ""
+        ].filter(Boolean);
+        await this.deps.telegram.sendMessage(chatId, detailLines.join("\n"), {
+          commandButtons: ["/status", "/handoff show", "/pending"]
+        });
+        return;
+      }
       case "pending": {
         const pending = this.deps.approvals.get(chatId);
         if (!pending) {
@@ -775,7 +795,7 @@ export class CodeFoxController {
   private async handleRepoSelect(chatId: number, userId: number, repoName: string): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     if (this.executionAdmissionLock.has(chatId)) {
-      await this.deps.telegram.sendMessage(chatId, this.formatAdmissionBusyMessage(chatId));
+      await this.sendAdmissionBusyMessage(chatId);
       return;
     }
     if (session.activeRequestId) {
@@ -1384,7 +1404,10 @@ export class CodeFoxController {
     }
 
     if (!session.activeRequestId) {
-      await this.deps.telegram.sendMessage(chatId, "No active run to steer. Start one with /act <pack.action> <instruction>.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No active run to steer.\nNext: start a run with plain text or /run <instruction>."
+      );
       return;
     }
 
@@ -1905,7 +1928,7 @@ export class CodeFoxController {
   }): Promise<void> {
     const { runKind, instruction, repoName, mode, chatId, userId } = params;
     if (this.executionAdmissionLock.has(chatId)) {
-      await this.deps.telegram.sendMessage(chatId, this.formatAdmissionBusyMessage(chatId));
+      await this.sendAdmissionBusyMessage(chatId);
       return;
     }
     this.executionAdmissionLock.add(chatId);
@@ -1941,7 +1964,13 @@ export class CodeFoxController {
             capabilityPack: params.capabilityAction?.pack,
             capabilityAction: params.capabilityAction?.action
           });
-          await this.deps.telegram.sendMessage(chatId, `Capability policy blocked run: ${trimTerminalPunctuation(capabilityDecision.reason)}.`);
+          await this.deps.telegram.sendMessage(
+            chatId,
+            [
+              `Run blocked by capability policy: ${trimTerminalPunctuation(capabilityDecision.reason)}.`,
+              "Next: use /capabilities to inspect allowed actions, or adjust mode with /mode."
+            ].join("\n")
+          );
           return;
         }
 
@@ -1981,13 +2010,16 @@ export class CodeFoxController {
         });
         await this.deps.telegram.sendMessage(
           chatId,
-          formatError(
-            instructionDecision.blockedDomain
-              ? `Instruction references blocked domain: ${instructionDecision.blockedDomain}`
-              : instructionDecision.blockedPathPattern
-                ? `Instruction references forbidden path pattern: ${instructionDecision.blockedPathPattern}`
-                : `Instruction blocked by policy (${instructionDecision.matchedPattern ?? "pattern"}).`
-          )
+          [
+            formatError(
+              instructionDecision.blockedDomain
+                ? `Instruction references blocked domain: ${instructionDecision.blockedDomain}`
+                : instructionDecision.blockedPathPattern
+                  ? `Instruction references forbidden path pattern: ${instructionDecision.blockedPathPattern}`
+                  : `Instruction blocked by policy (${instructionDecision.matchedPattern ?? "pattern"}).`
+            ),
+            "Next: remove blocked references and retry."
+          ].join("\n")
         );
         return;
       }
@@ -2015,7 +2047,10 @@ export class CodeFoxController {
 
       const decision = this.deps.policy.decide(mode);
       if (!decision.allowed) {
-        await this.deps.telegram.sendMessage(chatId, formatError(decision.reason ?? "Run blocked by policy."));
+        await this.deps.telegram.sendMessage(
+          chatId,
+          `${formatError(decision.reason ?? "Run blocked by policy.")}\nNext: switch mode with /mode observe|active|full-access and retry.`
+        );
         await this.deps.audit.log({
           type: "policy_block",
           chatId,
@@ -2359,12 +2394,32 @@ export class CodeFoxController {
     });
   }
 
-  private formatAdmissionBusyMessage(chatId: number): string {
+  private async sendAdmissionBusyMessage(chatId: number): Promise<void> {
+    const session = this.deps.sessions.getOrCreate(chatId);
     const source = this.executionAdmissionSource.get(chatId);
     if (source === "handoff_continue") {
-      return "Handoff continuation is being scheduled for this chat. Wait for that update, then send the next request.";
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Handoff continuation is being scheduled. Next: wait for the continuation update, or check /handoff status.",
+        { commandButtons: ["/handoff status", "/status"] }
+      );
+      return;
     }
-    return "Another request is currently being scheduled for this chat.";
+
+    if (session.activeRequestId) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Run ${session.activeRequestId} is active.\nNext: send plain text to steer, use /status for context, or /abort to stop.`,
+        { commandButtons: ["/status", "/abort"] }
+      );
+      return;
+    }
+
+    await this.deps.telegram.sendMessage(
+      chatId,
+      "A request is currently being scheduled for this chat.\nNext: wait a moment, then retry or use /status.",
+      { commandButtons: ["/status"] }
+    );
   }
 
   private validateHandoffSpecRef(chatId: number, specRevisionRef: string): { accepted: boolean; reason?: string } {
@@ -2555,6 +2610,10 @@ function formatExternalHandoffDetail(state: ExternalHandoffState): string {
     lines.push(`unresolved questions: ${state.bundle.unresolvedQuestions.join(" | ")}`);
   }
   return lines.join("\n");
+}
+
+function countOutstandingHandoffWork(state: ExternalHandoffState): number {
+  return state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id)).length;
 }
 
 function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
