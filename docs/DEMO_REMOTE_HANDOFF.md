@@ -25,6 +25,98 @@ If CodeFox is started late:
 - It still works if steps 2-4 happen before step 6.
 - Earlier desk-side progress is not present in CodeFox history.
 
+## How external bind works (concrete)
+
+Prerequisites:
+- `externalRelay.enabled` is `true` in CodeFox config.
+- If auth is enabled, use `Authorization: Bearer <token>` on relay requests.
+- A Telegram session route already exists (repo + mode selected in chat).
+
+1. External client discovers active routes:
+
+```bash
+curl -s http://127.0.0.1:8787/v1/external-codex/routes
+```
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "routes": [
+    { "sessionId": "chat:100/repo:payments-api/mode:active", "chatId": 100 }
+  ]
+}
+```
+
+2. External client binds to one `sessionId`:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/v1/external-codex/bind \
+  -H 'content-type: application/json' \
+  -d '{
+    "clientId": "vscode-codex-demo",
+    "session": { "sessionId": "chat:100/repo:payments-api/mode:active" },
+    "requestedSchemaVersion": "v1",
+    "requestedCapabilityClasses": ["progress", "approval_request", "completion", "handoff_bundle"],
+    "requestedLeaseSeconds": 600
+  }'
+```
+
+3. CodeFox returns a lease:
+
+```json
+{
+  "ok": true,
+  "lease": {
+    "leaseId": "lease_...",
+    "clientId": "vscode-codex-demo",
+    "session": { "sessionId": "chat:100/repo:payments-api/mode:active" },
+    "schemaVersion": "v1",
+    "capabilityClasses": ["progress", "approval_request", "completion", "handoff_bundle"],
+    "createdAt": "...",
+    "lastHeartbeatAt": "...",
+    "expiresAt": "..."
+  },
+  "manifest": {
+    "schemaVersion": "v1",
+    "capabilityClasses": ["progress", "blocker", "approval_request", "completion", "handoff_bundle"],
+    "maxLeaseSeconds": 600
+  }
+}
+```
+
+From this point:
+- Send events with `POST /v1/external-codex/event` using that `leaseId`.
+- Send handoff with `POST /v1/external-codex/handoff` using that `leaseId`.
+- Optionally refresh with `POST /v1/external-codex/heartbeat`.
+- Revoke with `POST /v1/external-codex/revoke` when done.
+
+## What you do in VS Code
+
+At the desk, your external client (plugin/skill) should expose this flow:
+
+1. Attach to CodeFox session
+- Choose the target session route (for example `chat:100/repo:payments-api/mode:active`).
+- Client performs `GET /v1/external-codex/routes` then `POST /v1/external-codex/bind`.
+
+2. Work normally in VS Code
+- Keep coding and running steps in the external client.
+- Client reports structured updates with `POST /v1/external-codex/event`.
+- If CodeFox asks for approval, approve from Telegram (`/approve` or `/deny`).
+
+3. Hand off before leaving desk
+- Trigger handoff in client.
+- Client sends `POST /v1/external-codex/handoff` with completed work + remaining work.
+- CodeFox confirms handoff in chat.
+
+4. Continue from phone
+- Run `/handoff show`.
+- Run `/handoff continue <work-id>`.
+
+If your current VS Code integration does not automate this yet:
+- Use the same endpoints directly (`routes`, `bind`, `event`, `handoff`) from a script or terminal.
+
 ## Real execution (runnable now)
 
 Run:

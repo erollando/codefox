@@ -23,6 +23,11 @@ Handoff steps:
 
 You can start CodeFox from the beginning, or start it before handoff.
 
+In VS Code, your external client action is simple:
+- attach to CodeFox session,
+- work as usual while reporting progress,
+- trigger handoff when you leave the desk.
+
 Command + reply transcript:
 
 ```text
