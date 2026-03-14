@@ -965,11 +965,45 @@ function resolveHandoffContext(
 
   if (typeof args.chatId === "number") {
     const chatId = args.chatId;
+    const routedForChat = routes.filter((route) => route.chatId === chatId);
+    if (routedForChat.length > 0) {
+      const session = sessions.find((entry) => entry.chatId === chatId);
+      if (session?.selectedRepo) {
+        const persistedSessionId =
+          session.mode === "observe" || session.mode === "active" || session.mode === "full-access"
+            ? buildExternalSessionId(chatId, session.selectedRepo, session.mode)
+            : undefined;
+        if (persistedSessionId) {
+          const exactRoute = routedForChat.find((route) => route.sessionId === persistedSessionId);
+          if (exactRoute) {
+            return {
+              ok: true,
+              value: {
+                chatId,
+                sessionId: exactRoute.sessionId,
+                autoSelected: false
+              }
+            };
+          }
+        }
+      }
+
+      const selectedRoute = pickPreferredRoute(routedForChat, sessions);
+      return {
+        ok: true,
+        value: {
+          chatId,
+          sessionId: selectedRoute.sessionId,
+          autoSelected: true
+        }
+      };
+    }
+
     const session = sessions.find((entry) => entry.chatId === chatId);
     if (!session) {
       return {
         ok: false,
-        error: `No persisted session found for chatId ${chatId}.`
+        error: `No persisted session found for chatId ${chatId} and no active relay route.`
       };
     }
     if (!session.selectedRepo) {
@@ -1001,20 +1035,7 @@ function resolveHandoffContext(
     };
   }
 
-  const chooseRoute = (): { sessionId: string; chatId: number } => {
-    if (routes.length === 1) {
-      return routes[0];
-    }
-    const ranked = routes
-      .map((route) => ({
-        route,
-        updatedAt: sessions.find((entry) => entry.chatId === route.chatId)?.updatedAt ?? ""
-      }))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    return ranked[0]?.route ?? routes[0];
-  };
-
-  const selectedRoute = chooseRoute();
+  const selectedRoute = pickPreferredRoute(routes, sessions);
   return {
     ok: true,
     value: {
@@ -1035,14 +1056,22 @@ function resolveSourceRepoMetadata(
     return undefined;
   }
   const resolvedOverride = repoPathOverride?.trim();
-  const candidatePath = resolvedOverride
-    ? path.resolve(resolvedOverride)
-    : detectCurrentGitRoot() ?? path.resolve(process.cwd());
+  const candidatePath = resolvedOverride ? path.resolve(resolvedOverride) : detectCurrentGitRoot();
+  if (!candidatePath) {
+    return { name: route.repoName };
+  }
   const currentDirName = path.basename(candidatePath);
-  if (currentDirName !== route.repoName) {
+  const normalizedRepo = normalizeRepoToken(route.repoName);
+  const normalizedDir = normalizeRepoToken(currentDirName);
+  const likelyMatch = normalizedRepo.length > 0 && normalizedDir.length > 0 && normalizedDir.includes(normalizedRepo);
+  if (!likelyMatch) {
     if (resolvedOverride) {
       output.log(
         `Ignoring --repo-path '${candidatePath}' because it does not match source repo '${route.repoName}'.`
+      );
+    } else {
+      output.log(
+        `Detected git repo '${candidatePath}', but it does not look like route repo '${route.repoName}'. Sending name-only source metadata.`
       );
     }
     return { name: route.repoName };
@@ -1066,6 +1095,26 @@ function detectCurrentGitRoot(): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function normalizeRepoToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function pickPreferredRoute(
+  routes: Array<{ sessionId: string; chatId: number }>,
+  sessions: Array<{ chatId: number; updatedAt: string }>
+): { sessionId: string; chatId: number } {
+  if (routes.length === 1) {
+    return routes[0];
+  }
+  const ranked = routes
+    .map((route) => ({
+      route,
+      updatedAt: sessions.find((entry) => entry.chatId === route.chatId)?.updatedAt ?? ""
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.route.sessionId.localeCompare(right.route.sessionId));
+  return ranked[0]?.route ?? routes[0];
+}
+
 async function chooseRouteForHandoff(
   sessions: Array<{ chatId: number; selectedRepo?: string; mode: string; updatedAt: string }>,
   routes: Array<{ sessionId: string; chatId: number }>,
@@ -1079,7 +1128,10 @@ async function chooseRouteForHandoff(
       route,
       updatedAt: sessions.find((entry) => entry.chatId === route.chatId)?.updatedAt ?? ""
     }))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    .sort(
+      (left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) || left.route.sessionId.localeCompare(right.route.sessionId)
+    );
   const defaultRoute = ranked[0]?.route;
   if (!defaultRoute) {
     return undefined;

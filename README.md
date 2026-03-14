@@ -129,6 +129,7 @@ Notes:
 
 - Plain text (non-slash) input is treated as `/run <text>`.
 - While a run is active, plain text is treated as steer guidance (same behavior as `/steer <text>`).
+- Natural handoff continuation phrases like `continue handoff` or `resume from desk` map to `/handoff continue` when a handoff is available.
 - Untyped `/run` is allowed in every mode; `/act` remains available when you want explicit typed capability routing.
 - Run start/progress replies are concise by default; use `/details` for technical context.
 
@@ -225,6 +226,7 @@ When CodeFox is running, it consumes queued local commands through the same cont
 `chat:cli` starts a persistent chat-like shell so you can send commands/questions without repeating `chatId` every time.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
 When multiple active routes exist, `handoff:cli` shows them clearly and lets you choose; Enter keeps the most recently used route.
+When `chatId` is provided but local session state is missing/stale, `handoff:cli` can still resolve via active relay routes.
 `--remaining` is optional and auto-derived from available context (active request id, Codex thread id) when omitted.
 Use `--repo-path <absolute-path>` only when you want to override automatic source repo path detection.
 Handoff bundles include source repo metadata; on `/handoff continue`, CodeFox auto-aligns to the source repo and can auto-register it when the bundle includes a valid local path.

@@ -72,6 +72,7 @@ npm run verify
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
 - Plain text while a run is active is treated as steer guidance automatically.
+- Natural phrases like `continue handoff` and `resume from desk` auto-map to handoff continuation when available.
 - Run updates are concise by default; ask `/details` when you need full technical context.
 - `/close` to close stored Codex session thread explicitly
 - `/abort` to stop active Codex execution
@@ -109,6 +110,7 @@ npm run verify
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
   - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--repo-path <path>`, `--start-if-missing`, `--no-start-if-missing`.
   - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-generates task id, auto-derives remaining summary, and if multiple routes exist asks for an explicit route choice with default to most recently used).
+  - If explicit `chatId` is provided but local session state is missing, route resolution falls back to active relay routes for that chat.
   - Handoff payload includes source repo metadata; `/handoff continue` auto-aligns repo and can auto-register when source path is provided.
   - If relay is unreachable, handoff CLI prompts to start CodeFox automatically on interactive terminals.
   - When handoff CLI auto-starts CodeFox in background, it prints a PID/direct stop command and writes `<state-dir>/codefox.dev.pid`.

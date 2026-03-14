@@ -836,4 +836,190 @@ describe("local CLI", () => {
     expect(persisted.specWorkflows?.[0]?.chatId).toBe(100);
     expect(persisted.specWorkflows?.[0]?.workflow.revisions.at(-1)?.status).toBe("approved");
   });
+
+  it("resolves explicit chat handoff using active relay routes when persisted session is missing", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-cli-handoff-route-chat-"));
+    const repoPath = path.join(tmpDir, "repo");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+    const statePath = path.join(tmpDir, "state.json");
+    const relayToken = "relay-test-token";
+    const relayRequests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+
+    const relayServer = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      req.on("end", () => {
+        const auth = req.headers.authorization ?? "";
+        if (auth !== `Bearer ${relayToken}`) {
+          res.statusCode = 401;
+          res.end(`${JSON.stringify({ ok: false, error: "Unauthorized" })}\n`);
+          return;
+        }
+        const method = req.method ?? "GET";
+        const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+        const pathName = requestUrl.pathname;
+        const rawBody = Buffer.concat(chunks).toString("utf8").trim();
+        const body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : undefined;
+        relayRequests.push({ method, path: pathName, body });
+
+        if (method === "GET" && pathName === "/v1/external-codex/routes") {
+          res.statusCode = 200;
+          res.end(
+            `${JSON.stringify({
+              ok: true,
+              routes: [{ sessionId: "chat:100/repo:payments-api/mode:active", chatId: 100 }]
+            })}\n`
+          );
+          return;
+        }
+        if (method === "POST" && pathName === "/v1/external-codex/bind") {
+          res.statusCode = 200;
+          res.end(
+            `${JSON.stringify({
+              ok: true,
+              lease: {
+                leaseId: "lease_test_route_chat",
+                schemaVersion: "v1",
+                session: { sessionId: "chat:100/repo:payments-api/mode:active" }
+              },
+              manifest: {
+                schemaVersion: "v1",
+                capabilityClasses: ["progress", "blocker", "approval_request", "completion", "handoff_bundle"],
+                maxLeaseSeconds: 600
+              }
+            })}\n`
+          );
+          return;
+        }
+        if (method === "POST" && (pathName === "/v1/external-codex/event" || pathName === "/v1/external-codex/handoff")) {
+          res.statusCode = 202;
+          res.end(`${JSON.stringify({ decision: { ok: true }, relayed: true })}\n`);
+          return;
+        }
+        if (method === "POST" && pathName === "/v1/external-codex/revoke") {
+          res.statusCode = 202;
+          res.end(`${JSON.stringify({ ok: true })}\n`);
+          return;
+        }
+
+        res.statusCode = 404;
+        res.end(`${JSON.stringify({ ok: false, error: "Not found" })}\n`);
+      });
+    });
+
+    await new Promise<void>((resolve) => relayServer.listen(0, "127.0.0.1", () => resolve()));
+    const relayAddress = relayServer.address();
+    const relayPort = typeof relayAddress === "object" && relayAddress ? relayAddress.port : 0;
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          telegram: {
+            token: "dummy",
+            allowedUserIds: [7],
+            allowedChatIds: [100],
+            pollingTimeoutSeconds: 30,
+            pollIntervalMs: 1000,
+            discardBacklogOnStart: true
+          },
+          repos: [{ name: "payments-api", rootPath: repoPath }],
+          codex: {
+            command: "codex",
+            baseArgs: ["exec"],
+            runArgTemplate: ["{instruction}"],
+            repoArgTemplate: [],
+            timeoutMs: 60000,
+            blockedEnvVars: [],
+            preflightEnabled: false,
+            preflightArgs: ["--version"],
+            preflightTimeoutMs: 1000
+          },
+          policy: {
+            defaultMode: "observe"
+          },
+          safety: {
+            requireAgentsForRuns: false,
+            instructionPolicy: {
+              blockedPatterns: [],
+              allowedDownloadDomains: [],
+              forbiddenPathPatterns: []
+            }
+          },
+          repoInit: {
+            defaultParentPath: tmpDir
+          },
+          state: {
+            filePath: statePath,
+            codexSessionIdleMinutes: 120
+          },
+          audit: {
+            logFilePath: path.join(tmpDir, "audit.log")
+          },
+          externalRelay: {
+            enabled: true,
+            host: "127.0.0.1",
+            port: relayPort,
+            authTokenEnvVar: "CODEFOX_EXTERNAL_RELAY_TOKEN"
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          sessions: [],
+          approvals: [],
+          specWorkflows: []
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    const previousRelayToken = process.env.CODEFOX_EXTERNAL_RELAY_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    process.env.CODEFOX_EXTERNAL_RELAY_TOKEN = relayToken;
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const output = {
+      log(line: string) {
+        logs.push(line);
+      },
+      error(line: string) {
+        errors.push(line);
+      }
+    };
+
+    let code = 1;
+    try {
+      code = await runLocalCli(["--config", configPath, "handoff", "100"], output);
+    } finally {
+      await new Promise<void>((resolve, reject) => relayServer.close((error) => (error ? reject(error) : resolve())));
+      if (typeof previousToken === "undefined") {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      }
+      if (typeof previousRelayToken === "undefined") {
+        delete process.env.CODEFOX_EXTERNAL_RELAY_TOKEN;
+      } else {
+        process.env.CODEFOX_EXTERNAL_RELAY_TOKEN = previousRelayToken;
+      }
+    }
+
+    expect(code).toBe(0);
+    expect(errors).toEqual([]);
+    expect(logs.join("\n")).toContain("Auto-selected session chat:100/repo:payments-api/mode:active");
+    const bindBody = relayRequests.find((request) => request.path === "/v1/external-codex/bind")?.body;
+    expect(bindBody?.session).toEqual({ sessionId: "chat:100/repo:payments-api/mode:active" });
+  });
 });

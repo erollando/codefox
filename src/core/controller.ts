@@ -759,6 +759,17 @@ export class CodeFoxController {
           await this.handleSteer(chatId, userId, command.instruction, attachments);
           return;
         }
+        if (!isExplicitRunCommand && isHandoffContinuationIntent(text)) {
+          if (!this.externalHandoffs.has(chatId)) {
+            await this.deps.telegram.sendMessage(
+              chatId,
+              "No external handoff is available for this chat.\nNext: run `npm run handoff:cli` from your desk session, then retry."
+            );
+            return;
+          }
+          await this.handleHandoffCommand(chatId, userId, { type: "handoff", action: "continue" });
+          return;
+        }
         if (!session.selectedRepo) {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
@@ -1246,17 +1257,27 @@ export class CodeFoxController {
     if (state.sourceRepoName && session.selectedRepo !== state.sourceRepoName) {
       if (!this.deps.repos.has(state.sourceRepoName)) {
         if (state.sourceRepoPath) {
-          const registered = await this.tryRegisterSourceRepoFromHandoff(chatId, userId, state.sourceRepoName, state.sourceRepoPath);
-          if (!registered) {
+          const registeredPath = await this.tryRegisterSourceRepoFromHandoff(
+            chatId,
+            userId,
+            state.sourceRepoName,
+            state.sourceRepoPath
+          );
+          if (!registeredPath) {
             await this.deps.telegram.sendMessage(
               chatId,
               `Cannot continue handoff ${state.bundle.handoffId}: source repo '${state.sourceRepoName}' could not be auto-registered from '${state.sourceRepoPath}'. Use /repo add ${state.sourceRepoName} <absolute-path>.`
             );
             return;
           }
+          this.externalHandoffs.set(chatId, {
+            ...state,
+            sourceRepoPath: registeredPath
+          });
+          this.persistState();
           await this.deps.telegram.sendMessage(
             chatId,
-            `Handoff source repo auto-registered: ${state.sourceRepoName}\npath: ${state.sourceRepoPath}`
+            `Handoff source repo auto-registered: ${state.sourceRepoName}\npath: ${registeredPath}`
           );
         } else {
           await this.deps.telegram.sendMessage(
@@ -1464,7 +1485,7 @@ export class CodeFoxController {
     userId: number,
     repoName: string,
     sourceRepoPath: string
-  ): Promise<boolean> {
+  ): Promise<string | undefined> {
     const resolvedPath = path.resolve(sourceRepoPath);
     const target = await stat(resolvedPath).catch(() => undefined);
     if (!target?.isDirectory()) {
@@ -1476,11 +1497,52 @@ export class CodeFoxController {
         path: resolvedPath,
         reason: "path_not_directory"
       });
-      return false;
+      return undefined;
     }
 
-    await this.registerRepo(chatId, userId, repoName, resolvedPath, "repo_added_from_handoff");
-    return this.deps.repos.has(repoName);
+    const gitRoot = await this.detectGitTopLevel(resolvedPath);
+    if (!gitRoot) {
+      await this.deps.audit.log({
+        type: "external_handoff_repo_auto_register_failed",
+        chatId,
+        userId,
+        repo: repoName,
+        path: resolvedPath,
+        reason: "not_git_repo"
+      });
+      return undefined;
+    }
+
+    const canonicalPath = path.resolve(gitRoot);
+    await this.registerRepo(chatId, userId, repoName, canonicalPath, "repo_added_from_handoff");
+    if (!this.deps.repos.has(repoName)) {
+      return undefined;
+    }
+    return canonicalPath;
+  }
+
+  private async detectGitTopLevel(repoPath: string): Promise<string | undefined> {
+    return await new Promise((resolve) => {
+      const child = spawn("git", ["rev-parse", "--show-toplevel"], {
+        cwd: repoPath,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      let stdout = "";
+      child.stdout.on("data", (chunk: Buffer | string) => {
+        stdout += chunk.toString();
+      });
+      child.on("error", () => {
+        resolve(undefined);
+      });
+      child.on("close", (code) => {
+        if (code !== 0) {
+          resolve(undefined);
+          return;
+        }
+        const trimmed = stdout.trim();
+        resolve(trimmed.length > 0 ? trimmed : undefined);
+      });
+    });
   }
 
   private async handleRepoInit(chatId: number, userId: number, repoName: string, basePathOverride?: string): Promise<void> {
@@ -2566,6 +2628,18 @@ function addAuditRef(message: string, viewId: string): string {
 
 function trimTerminalPunctuation(input: string): string {
   return input.trim().replace(/[.!\s]+$/g, "");
+}
+
+function isHandoffContinuationIntent(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || normalized.startsWith("/")) {
+    return false;
+  }
+  return (
+    /^(continue|resume)\s+(handoff|desk session|from desk)\b/.test(normalized) ||
+    /^(continue|resume)\s+my\s+(handoff|desk session)\b/.test(normalized) ||
+    /^(continue|resume)\s+the\s+(handoff|desk session)\b/.test(normalized)
+  );
 }
 
 function formatExternalHandoffStatus(state: ExternalHandoffState): string {
