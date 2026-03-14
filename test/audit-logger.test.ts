@@ -17,4 +17,21 @@ describe("AuditLogger", () => {
     expect(content).toContain('"type":"second_event"');
     expect(content).not.toContain('"type":"first_event"');
   });
+
+  it("finds the latest event by viewId", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-audit-"));
+    const logPath = path.join(tmpDir, "audit.log");
+    const logger = new AuditLogger(logPath, false, 1024 * 1024);
+
+    await logger.log({ type: "status_viewed", viewId: "view_1234abcd", mode: "active" });
+    await logger.log({ type: "policy_viewed", viewId: "view_1234abcd", mode: "full-access" });
+    await logger.log({ type: "status_viewed", viewId: "view_deadbeef", mode: "observe" });
+
+    const found = await logger.findByViewId("view_1234abcd");
+    const missing = await logger.findByViewId("view_missing");
+
+    expect(found?.type).toBe("policy_viewed");
+    expect(found?.viewId).toBe("view_1234abcd");
+    expect(missing).toBeUndefined();
+  });
 });

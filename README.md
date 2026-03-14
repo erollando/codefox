@@ -49,10 +49,13 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 
 - `/help`
 - `/repos`
+- `/capabilities [mail|calendar|repo|jira|ops|docs]`
 - `/spec template`
 - `/spec draft <intent>`
+- `/spec clarify <note>`
 - `/spec show`
 - `/spec status`
+- `/spec diff`
 - `/spec approve [force]`
 - `/spec clear`
 - `/repo <name>`
@@ -66,26 +69,43 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 - `/repo info [name]`
 - `/mode <observe|active|full-access>`
 - `/observe | /active | /full-access`
+- `/policy [observe|active|full-access]`
+- `/act <pack.action> <instruction>`
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (alias: `/effort`)
 - `/run <instruction>`
 - `/steer <instruction>`
 - `/close`
 - `/status`
+- `/audit <view_id>`
 - `/abort`
+
+`/status` also reports effective spec-policy behavior for the current mode (run gate, force-approval behavior, and required approval sections).
+`/policy` prints a broader policy snapshot (current/effective mode, global guards, instruction-policy summary, and per-mode spec policy).
+Both `/status` and `/policy` include an `audit ref` token that maps to the corresponding audit event.
+Use `/audit <view_id>` to fetch the corresponding audit event details from chat.
+Use `/capabilities` to inspect capability-pack action coverage and `/capabilities <pack>` for detailed action contracts (inputs, audit fields, rollback hints).
+In `active` and `full-access` modes, use typed capability execution via `/act ...`; untyped `/run` is blocked by capability policy.
 
 Plain text (non-slash) input is treated as `/run <text>`.
 
 Spec workflow:
 
 - `/spec draft ...` creates a structured execution spec draft for the current chat.
-- If a draft exists and is not approved, `/run` is blocked until `/spec approve` (or `/spec clear`).
+- Draft initialization creates a revision chain with `v0(raw)` and `v1(interpreted)`.
+- `/spec clarify ...` creates a new clarified revision (`v2+`) and records assumptions/context updates.
+- `/spec diff` shows line-level changes between the latest two revisions.
+- In `active` and `full-access` modes, `/run` and `/act` require an approved current spec.
+- In `active` and `full-access` modes, `/spec approve` requires non-empty mutating-mode sections (including `CONSTRAINTS` and `DONE WHEN`).
+- `/spec approve force` is only a bypass path for `observe` mode.
+- In `observe` mode, `/run` remains allowed without a spec.
 - `/spec show` renders the current spec text for review and auditability.
 
 Image/document prompts:
 
 - Upload an image or document, then send `/run <question>` to analyze it.
+- You can also use `/act <pack.action> <instruction>` so typed runs consume the same one-shot attachment context.
 - You can also upload with a caption; caption text is treated like normal input (`/run` for plain text captions, or a slash command).
-- Uploaded attachment context is one-shot: it is consumed by the next `/run` or `/steer` unless you upload again.
+- Uploaded attachment context is one-shot: it is consumed by the next `/run`, `/act`, or `/steer` unless you upload again.
 
 Repo bootstrap and local agent docs:
 
@@ -123,7 +143,19 @@ Copy the sample config to `config/codefox.config.json`:
     "preflightArgs": ["--version"],
     "preflightTimeoutMs": 5000
   },
-  "policy": { "defaultMode": "observe" },
+  "policy": {
+    "defaultMode": "observe",
+    "specPolicy": {
+      "active": {
+        "requiredSectionsForApproval": ["CONSTRAINTS", "DONE_WHEN"],
+        "allowForceApproval": false
+      },
+      "full-access": {
+        "requiredSectionsForApproval": ["CONSTRAINTS", "DONE_WHEN"],
+        "allowForceApproval": false
+      }
+    }
+  },
   "repoInit": {
     "defaultParentPath": "/home/<your-user>/git"
   },
@@ -154,11 +186,12 @@ Copy the sample config to `config/codefox.config.json`:
 }
 ```
 
-`state.filePath` persists chat sessions (and any legacy pending approval records) across service restarts.
+`state.filePath` persists chat sessions, pending approvals, and spec workflow revisions across service restarts.
 Any stale `activeRequestId` values from a previous process are cleared on startup.
 If set, `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
 `state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.
 `audit.maxFileBytes` bounds the audit log file size (default 5 MiB) by truncating when the limit is reached.
+`policy.specPolicy` optionally overrides mode-specific spec requirements (`requireApprovedSpecForRun`, `allowForceApproval`, `requiredSectionsForApproval`).
 `/repo init <name>` creates `<defaultParentPath>/<name>`, runs `git init`, registers it, and auto-selects it for the chat.
 `telegram.discardBacklogOnStart` drops offline backlog updates on startup (recommended for safety).
 

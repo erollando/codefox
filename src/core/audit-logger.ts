@@ -1,4 +1,4 @@
-import { appendFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export interface AuditEvent {
@@ -48,6 +48,31 @@ export class AuditLogger {
     if (this.mirrorToStdout) {
       console.log(line.trim());
     }
+  }
+
+  async findByViewId(viewId: string): Promise<AuditEvent | undefined> {
+    await this.writeQueue;
+    const raw = await readFile(this.logFilePath, "utf8").catch(() => "");
+    if (!raw) {
+      return undefined;
+    }
+
+    const lines = raw.trim().split("\n").reverse();
+    for (const line of lines) {
+      if (!line) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as AuditEvent;
+        if (parsed && typeof parsed === "object" && parsed.viewId === viewId) {
+          return parsed;
+        }
+      } catch {
+        // Ignore malformed lines.
+      }
+    }
+
+    return undefined;
   }
 
   private async readFileSize(): Promise<number> {

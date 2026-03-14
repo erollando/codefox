@@ -5,17 +5,22 @@ import type { CodexCliAdapter, RunningTask } from "../adapters/codex.js";
 import type { TelegramAdapter, TelegramDocument, TelegramPhotoSize, TelegramUpdate } from "../adapters/telegram.js";
 import type { AccessControl } from "./auth.js";
 import type { AuditEventInput, AuditLogger } from "./audit-logger.js";
+import { CapabilityRegistry, toCapabilityRef, type CapabilityActionSpec } from "./capability-registry.js";
 import { parseCommand, type ParsedCommand } from "./command-parser.js";
 import type { ApprovalStore } from "./approval-store.js";
 import type { PolicyEngine } from "./policy.js";
 import type { RepoRegistry } from "./repo-registry.js";
 import { toAuditPreview } from "./sanitize.js";
 import type { InstructionPolicy } from "./instruction-policy.js";
+import { SpecPolicyEngine } from "./spec-policy.js";
 import {
   formatApprovalPending,
+  formatAuditLookup,
+  formatCapabilitiesSummary,
   formatError,
   formatHelp,
   formatMode,
+  formatPolicySummary,
   formatPendingApproval,
   formatRepoInfo,
   formatRepos,
@@ -24,15 +29,18 @@ import {
   formatTaskStart
 } from "./response-formatter.js";
 import type { SessionManager } from "./session-manager.js";
-import { makeRequestId } from "./ids.js";
+import { makeRequestId, makeViewId } from "./ids.js";
 import { AGENT_TEMPLATE_NAMES, PLAYBOOK_FILE_NAMES, applyAgentTemplate, applyPlaybookDocs } from "./agent-files.js";
 import {
-  approveSpecDraft,
+  addClarification,
+  approveCurrentRevision,
   buildSpecTemplate,
-  createSpecDraft,
-  listMissingRequiredSections,
-  renderSpecDraft,
-  type SpecDraft
+  createInitialWorkflow,
+  getCurrentRevision,
+  renderLatestDiff,
+  renderSpecRevision,
+  renderSpecStatus,
+  type SpecWorkflowState
 } from "./spec-workflow.js";
 import type {
   AgentTemplateName,
@@ -55,6 +63,7 @@ interface MessageSink {
 
 interface AuditSink {
   log(event: AuditEventInput): Promise<void>;
+  findByViewId?(viewId: string): Promise<Record<string, unknown> | undefined>;
 }
 
 interface CodexRunner {
@@ -75,8 +84,16 @@ interface IncomingAttachment {
   mimeType?: string;
 }
 
+interface CapabilityAdmissionDecision {
+  allowed: boolean;
+  requiresApproval: boolean;
+  reasonCode: string;
+  reason: string;
+}
+
 const SHUTDOWN_ABORT_TIMEOUT_MS = 5000;
 const SHUTDOWN_ABORT_POLL_INTERVAL_MS = 50;
+const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
 
 export interface ControllerShutdownResult {
   abortedRequestIds: string[];
@@ -99,6 +116,10 @@ export interface ControllerDeps {
   instructionPolicy: InstructionPolicy;
   codexSessionIdleMinutes: number;
   codexDefaultReasoningEffort?: CodexReasoningEffort;
+  initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
+  persistState?: () => Promise<void>;
+  specPolicy?: SpecPolicyEngine;
+  capabilityRegistry?: CapabilityRegistry;
 }
 
 export class CodeFoxController {
@@ -106,9 +127,29 @@ export class CodeFoxController {
   private readonly executionAdmissionLock = new Set<number>();
   private readonly pendingSteers = new Map<number, PendingSteer[]>();
   private readonly attachmentContext = new Map<number, TaskAttachment[]>();
-  private readonly specDrafts = new Map<number, SpecDraft>();
+  private readonly specDrafts = new Map<number, SpecWorkflowState>();
+  private readonly specPolicy: SpecPolicyEngine;
+  private readonly capabilityRegistry: CapabilityRegistry;
 
-  constructor(private readonly deps: ControllerDeps) {}
+  constructor(private readonly deps: ControllerDeps) {
+    this.specPolicy = deps.specPolicy ?? new SpecPolicyEngine();
+    this.capabilityRegistry = deps.capabilityRegistry ?? new CapabilityRegistry();
+    for (const entry of deps.initialSpecWorkflows ?? []) {
+      if (!Number.isSafeInteger(entry.chatId) || entry.workflow.revisions.length === 0) {
+        continue;
+      }
+      this.specDrafts.set(entry.chatId, cloneSpecWorkflow(entry.workflow));
+    }
+  }
+
+  listSpecWorkflows(): Array<{ chatId: number; workflow: SpecWorkflowState }> {
+    return [...this.specDrafts.entries()]
+      .sort(([leftChatId], [rightChatId]) => leftChatId - rightChatId)
+      .map(([chatId, workflow]) => ({
+        chatId,
+        workflow: cloneSpecWorkflow(workflow)
+      }));
+  }
 
   async shutdown(): Promise<ControllerShutdownResult> {
     const active = [...this.activeAborts.entries()];
@@ -219,6 +260,31 @@ export class CodeFoxController {
         await this.deps.telegram.sendMessage(chatId, formatRepos(this.deps.repos.list().map((repo) => repo.name)));
         return;
       }
+      case "capabilities": {
+        const currentSession = this.deps.sessions.getOrCreate(chatId);
+        const mode = currentSession.mode;
+        const actions = command.pack
+          ? this.capabilityRegistry.listActions(command.pack)
+          : this.capabilityRegistry.listActions();
+        await this.deps.audit.log({
+          type: "capabilities_viewed",
+          chatId,
+          userId,
+          mode,
+          pack: command.pack,
+          actionCount: actions.length
+        });
+        await this.deps.telegram.sendMessage(
+          chatId,
+          formatCapabilitiesSummary({
+            mode,
+            pack: command.pack,
+            packs: this.capabilityRegistry.listPacks(mode),
+            actions
+          })
+        );
+        return;
+      }
       case "spec": {
         await this.handleSpecCommand(chatId, userId, command);
         return;
@@ -303,17 +369,63 @@ export class CodeFoxController {
         });
         return;
       }
+      case "policy": {
+        const currentSession = this.deps.sessions.getOrCreate(chatId);
+        const effectiveMode = command.mode ?? currentSession.mode;
+        const viewId = makeViewId();
+        const instructionPolicySummary = this.deps.instructionPolicy.summary();
+        await this.deps.audit.log({
+          type: "policy_viewed",
+          viewId,
+          chatId,
+          userId,
+          currentMode: currentSession.mode,
+          effectiveMode,
+          requireAgentsForRuns: this.deps.requireAgentsForRuns,
+          instructionPolicy: instructionPolicySummary
+        });
+        await this.deps.telegram.sendMessage(
+          chatId,
+          addAuditRef(
+            formatPolicySummary({
+              currentMode: currentSession.mode,
+              effectiveMode,
+              requireAgentsForRuns: this.deps.requireAgentsForRuns,
+              instructionPolicy: instructionPolicySummary,
+              specPolicies: POLICY_MODES.map((mode) => this.specPolicy.forMode(mode))
+            }),
+            viewId
+          )
+        );
+        return;
+      }
       case "close": {
         await this.handleCloseSession(chatId, userId);
         return;
       }
       case "status": {
+        const currentSession = this.deps.sessions.getOrCreate(chatId);
+        const viewId = makeViewId();
+        await this.deps.audit.log({
+          type: "status_viewed",
+          viewId,
+          chatId,
+          userId,
+          mode: currentSession.mode,
+          repo: currentSession.selectedRepo,
+          activeRequestId: currentSession.activeRequestId,
+          codexThreadId: currentSession.codexThreadId
+        });
         await this.deps.telegram.sendMessage(
           chatId,
-          formatSessionStatus(
-            this.deps.sessions.getOrCreate(chatId),
-            this.deps.codexSessionIdleMinutes,
-            this.deps.codexDefaultReasoningEffort
+          addAuditRef(
+            formatSessionStatus(
+              currentSession,
+              this.deps.codexSessionIdleMinutes,
+              this.deps.codexDefaultReasoningEffort,
+              this.specPolicy.forMode(currentSession.mode)
+            ),
+            viewId
           )
         );
         return;
@@ -339,17 +451,71 @@ export class CodeFoxController {
         await this.handleAbort(chatId, userId);
         return;
       }
+      case "audit": {
+        const event = this.deps.audit.findByViewId ? await this.deps.audit.findByViewId(command.viewId) : undefined;
+        await this.deps.audit.log({
+          type: "audit_view_lookup",
+          chatId,
+          userId,
+          viewId: command.viewId,
+          found: Boolean(event)
+        });
+        await this.deps.telegram.sendMessage(chatId, formatAuditLookup(command.viewId, event));
+        return;
+      }
+      case "act": {
+        if (!session.selectedRepo) {
+          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+          return;
+        }
+        const specGateMessage = this.getSpecRunGateMessage(chatId, session.mode);
+        if (specGateMessage) {
+          await this.deps.telegram.sendMessage(chatId, specGateMessage);
+          return;
+        }
+        const capabilityAction = this.capabilityRegistry.resolveAction(command.capabilityRef);
+        if (!capabilityAction) {
+          await this.deps.audit.log({
+            type: "capability_policy_block",
+            chatId,
+            userId,
+            mode: session.mode,
+            runKind: "run",
+            reasonCode: "unknown_capability_action",
+            capabilityRef: command.capabilityRef
+          });
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Unknown capability action '${command.capabilityRef}'. Use /capabilities to list available actions.`
+          );
+          return;
+        }
+
+        const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
+        this.runDetached(
+          chatId,
+          this.executeOrEnqueue({
+            runKind: "run",
+            instruction: command.instruction,
+            repoName: session.selectedRepo,
+            mode: session.mode,
+            chatId,
+            userId,
+            attachments,
+            capabilityAction
+          }),
+          "act_execute_or_enqueue"
+        );
+        return;
+      }
       case "run": {
         if (!session.selectedRepo) {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
         }
-        const spec = this.specDrafts.get(chatId);
-        if (spec && spec.status !== "approved") {
-          await this.deps.telegram.sendMessage(
-            chatId,
-            `Spec v${spec.version} is ${spec.status}. Use /spec approve before /run, or /spec clear to discard it.`
-          );
+        const specGateMessage = this.getSpecRunGateMessage(chatId, session.mode);
+        if (specGateMessage) {
+          await this.deps.telegram.sendMessage(chatId, specGateMessage);
           return;
         }
         const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
@@ -362,7 +528,8 @@ export class CodeFoxController {
             mode: session.mode,
             chatId,
             userId,
-            attachments
+            attachments,
+            capabilityAction: undefined
           }),
           "run_execute_or_enqueue"
         );
@@ -428,24 +595,30 @@ export class CodeFoxController {
     }
 
     if (command.action === "draft") {
-      const previous = this.specDrafts.get(chatId);
-      const draft = createSpecDraft(command.intent ?? "", previous?.version ?? 0);
-      this.specDrafts.set(chatId, draft);
-      const missing = listMissingRequiredSections(draft);
+      const workflow = createInitialWorkflow(command.intent ?? "");
+      this.specDrafts.set(chatId, workflow);
+      this.persistState();
+      const currentRevision = getCurrentRevision(workflow);
+      const mode = this.deps.sessions.getOrCreate(chatId).mode;
+      const missing = this.specPolicy.listMissingSectionsForMode(currentRevision, mode);
 
       await this.deps.audit.log({
         type: "spec_draft_created",
         chatId,
         userId,
-        version: draft.version,
+        version: currentRevision.version,
+        stage: currentRevision.stage,
+        revisionCount: workflow.revisions.length,
         missingRequiredSections: missing
       });
       await this.deps.telegram.sendMessage(
         chatId,
         [
-          `Spec draft v${draft.version} created.`,
-          `status: ${draft.status}`,
-          `missing required sections: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+          "Spec lifecycle initialized.",
+          "versions: v0(raw), v1(interpreted)",
+          `current: v${currentRevision.version} (${currentRevision.stage}, ${currentRevision.status})`,
+          `missing sections for mode ${mode}: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+          "Use /spec clarify <note> to refine.",
           "Use /spec show to review.",
           "Use /spec approve to allow /run."
         ].join("\n")
@@ -453,71 +626,135 @@ export class CodeFoxController {
       return;
     }
 
-    if (command.action === "show") {
-      const draft = this.specDrafts.get(chatId);
-      if (!draft) {
+    if (command.action === "clarify") {
+      const workflow = this.specDrafts.get(chatId);
+      if (!workflow) {
         await this.deps.telegram.sendMessage(chatId, "No spec draft. Use /spec draft <intent> first.");
         return;
       }
-      await this.deps.telegram.sendMessage(chatId, renderSpecDraft(draft));
-      return;
-    }
 
-    if (command.action === "status") {
-      const draft = this.specDrafts.get(chatId);
-      if (!draft) {
-        await this.deps.telegram.sendMessage(chatId, "Spec status: none. Use /spec draft <intent>.");
-        return;
-      }
-      const missing = listMissingRequiredSections(draft);
+      const next = addClarification(workflow, command.clarification ?? "");
+      this.specDrafts.set(chatId, next);
+      this.persistState();
+      const currentRevision = getCurrentRevision(next);
+      const mode = this.deps.sessions.getOrCreate(chatId).mode;
+      const missing = this.specPolicy.listMissingSectionsForMode(currentRevision, mode);
+
+      await this.deps.audit.log({
+        type: "spec_clarified",
+        chatId,
+        userId,
+        version: currentRevision.version,
+        stage: currentRevision.stage,
+        revisionCount: next.revisions.length,
+        missingRequiredSections: missing
+      });
       await this.deps.telegram.sendMessage(
         chatId,
         [
-          `Spec status: v${draft.version} (${draft.status})`,
-          `missing required sections: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
-          `updated: ${draft.updatedAt}`
+          `Spec clarified to v${currentRevision.version}.`,
+          `current: (${currentRevision.stage}, ${currentRevision.status})`,
+          `missing sections for mode ${mode}: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+          "Use /spec diff to inspect changes."
         ].join("\n")
       );
       return;
     }
 
+    if (command.action === "show") {
+      const workflow = this.specDrafts.get(chatId);
+      if (!workflow) {
+        await this.deps.telegram.sendMessage(chatId, "No spec draft. Use /spec draft <intent> first.");
+        return;
+      }
+      await this.deps.telegram.sendMessage(chatId, renderSpecRevision(getCurrentRevision(workflow)));
+      return;
+    }
+
+    if (command.action === "status") {
+      const workflow = this.specDrafts.get(chatId);
+      if (!workflow) {
+        await this.deps.telegram.sendMessage(chatId, "Spec status: none. Use /spec draft <intent>.");
+        return;
+      }
+      const mode = this.deps.sessions.getOrCreate(chatId).mode;
+      const currentRevision = getCurrentRevision(workflow);
+      const missingForMode = this.specPolicy.listMissingSectionsForMode(currentRevision, mode);
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          renderSpecStatus(workflow),
+          `missing sections for mode ${mode}: ${missingForMode.length > 0 ? missingForMode.join(", ") : "(none)"}`
+        ].join("\n")
+      );
+      return;
+    }
+
+    if (command.action === "diff") {
+      const workflow = this.specDrafts.get(chatId);
+      if (!workflow) {
+        await this.deps.telegram.sendMessage(chatId, "No spec draft. Use /spec draft <intent> first.");
+        return;
+      }
+      await this.deps.telegram.sendMessage(chatId, renderLatestDiff(workflow));
+      return;
+    }
+
     if (command.action === "approve") {
-      const draft = this.specDrafts.get(chatId);
-      if (!draft) {
+      const workflow = this.specDrafts.get(chatId);
+      if (!workflow) {
         await this.deps.telegram.sendMessage(chatId, "No spec draft to approve. Use /spec draft <intent> first.");
         return;
       }
 
-      const missing = listMissingRequiredSections(draft);
-      if (missing.length > 0 && !command.force) {
-        await this.deps.telegram.sendMessage(
-          chatId,
-          `Spec v${draft.version} has missing required sections (${missing.join(", ")}). Use /spec approve force to override.`
-        );
-        return;
+      const currentRevision = getCurrentRevision(workflow);
+      const mode = this.deps.sessions.getOrCreate(chatId).mode;
+      const modePolicy = this.specPolicy.forMode(mode);
+      const missing = this.specPolicy.listMissingSectionsForMode(currentRevision, mode);
+      if (missing.length > 0) {
+        if (!modePolicy.allowForceApproval) {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Spec v${currentRevision.version} is missing sections required for mode ${mode} (${missing.join(", ")}). Add clarifications before approval.`
+          );
+          return;
+        }
+        if (!command.force) {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Spec v${currentRevision.version} has missing required sections (${missing.join(", ")}). Use /spec approve force to override in observe mode.`
+          );
+          return;
+        }
       }
 
-      const approved = approveSpecDraft(draft);
+      const approved = approveCurrentRevision(workflow);
       this.specDrafts.set(chatId, approved);
+      this.persistState();
+      const approvedRevision = getCurrentRevision(approved);
       await this.deps.audit.log({
         type: "spec_approved",
         chatId,
         userId,
-        version: approved.version,
+        version: approvedRevision.version,
+        stage: approvedRevision.stage,
         forced: Boolean(command.force),
+        mode,
         missingRequiredSections: missing
       });
-      await this.deps.telegram.sendMessage(chatId, `Spec v${approved.version} approved. /run is now allowed.`);
+      await this.deps.telegram.sendMessage(chatId, `Spec v${approvedRevision.version} approved. /run is now allowed.`);
       return;
     }
 
     if (command.action === "clear") {
-      const existing = this.specDrafts.get(chatId);
-      if (!existing) {
+      const existingWorkflow = this.specDrafts.get(chatId);
+      if (!existingWorkflow) {
         await this.deps.telegram.sendMessage(chatId, "No spec draft to clear.");
         return;
       }
+      const existing = getCurrentRevision(existingWorkflow);
       this.specDrafts.delete(chatId);
+      this.persistState();
       await this.deps.audit.log({
         type: "spec_cleared",
         chatId,
@@ -585,21 +822,51 @@ export class CodeFoxController {
     }
 
     this.deps.approvals.delete(chatId);
-    await this.deps.audit.log({ type: "approval_granted", chatId, userId, requestId: pending.id });
+    const capabilityAction = pending.capabilityRef ? this.capabilityRegistry.resolveAction(pending.capabilityRef) : undefined;
+    if (!capabilityAction) {
+      await this.deps.audit.log({
+        type: "capability_policy_block",
+        chatId,
+        userId,
+        mode: pending.mode,
+        runKind: "run",
+        requestId: pending.id,
+        reasonCode: pending.capabilityRef ? "unknown_capability_action" : "capability_required",
+        capabilityRef: pending.capabilityRef
+      });
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Capability policy blocked run: ${
+          pending.capabilityRef
+            ? `Unknown capability action '${pending.capabilityRef}'.`
+            : "Select a typed action with /act <pack.action> <instruction>."
+        }`
+      );
+      return;
+    }
+
+    await this.deps.audit.log({
+      type: "approval_granted",
+      chatId,
+      userId,
+      requestId: pending.id,
+      capabilityRef: toCapabilityRef(capabilityAction)
+    });
     this.runDetached(
       chatId,
-      this.executeTask({
+      this.executeOrEnqueue({
         runKind: "run",
         instruction: pending.instruction,
         repoName: pending.repoName,
         mode: pending.mode,
-        requestId: pending.id,
         userId,
         chatId,
         bypassApproval: true,
-        attachments: []
+        attachments: [],
+        capabilityAction,
+        requestId: pending.id
       }),
-      "approve_execute_task"
+      "approve_execute_or_enqueue"
     );
   }
 
@@ -662,7 +929,7 @@ export class CodeFoxController {
     }
 
     if (!session.activeRequestId) {
-      await this.deps.telegram.sendMessage(chatId, "No active run to steer. Start one with /run.");
+      await this.deps.telegram.sendMessage(chatId, "No active run to steer. Start one with /act <pack.action> <instruction>.");
       return;
     }
 
@@ -1148,6 +1415,8 @@ export class CodeFoxController {
     userId: number;
     bypassApproval?: boolean;
     attachments?: TaskAttachment[];
+    capabilityAction?: CapabilityActionSpec;
+    requestId?: string;
   }): Promise<void> {
     const { runKind, instruction, repoName, mode, chatId, userId } = params;
     if (this.executionAdmissionLock.has(chatId)) {
@@ -1166,7 +1435,48 @@ export class CodeFoxController {
         return;
       }
 
-      const requestId = makeRequestId();
+      const requestId = params.requestId ?? makeRequestId();
+      const capabilityDecision =
+        runKind === "run"
+          ? this.decideCapabilityAdmission(mode, params.capabilityAction)
+          : { allowed: true, requiresApproval: false, reasonCode: "not_applicable", reason: "Steer bypasses capability admission." };
+
+      if (runKind === "run") {
+        if (!capabilityDecision.allowed) {
+          await this.deps.audit.log({
+            type: "capability_policy_block",
+            chatId,
+            userId,
+            repo: repoName,
+            mode,
+            runKind,
+            requestId,
+            reasonCode: capabilityDecision.reasonCode,
+            capabilityPack: params.capabilityAction?.pack,
+            capabilityAction: params.capabilityAction?.action
+          });
+          await this.deps.telegram.sendMessage(chatId, `Capability policy blocked run: ${capabilityDecision.reason}.`);
+          return;
+        }
+
+        await this.deps.audit.log({
+          type: "capability_policy_decision",
+          chatId,
+          userId,
+          repo: repoName,
+          mode,
+          runKind,
+          requestId,
+          requiresApproval: capabilityDecision.requiresApproval,
+          reasonCode: capabilityDecision.reasonCode,
+          capabilityPack: params.capabilityAction?.pack,
+          capabilityAction: params.capabilityAction?.action,
+          capabilityRef: params.capabilityAction ? toCapabilityRef(params.capabilityAction) : undefined,
+          capabilityRiskLevel: params.capabilityAction?.riskLevel,
+          capabilityApprovalLevel: params.capabilityAction?.approvalLevel,
+          capabilityExecutionContext: params.capabilityAction?.executionContext
+        });
+      }
 
       const instructionDecision = this.deps.instructionPolicy.decide(instruction);
       if (!instructionDecision.allowed) {
@@ -1233,7 +1543,7 @@ export class CodeFoxController {
         return;
       }
 
-      if (decision.requiresApproval && !params.bypassApproval) {
+      if ((decision.requiresApproval || capabilityDecision.requiresApproval) && !params.bypassApproval) {
         const existingPending = this.deps.approvals.get(chatId);
         if (existingPending) {
           await this.deps.telegram.sendMessage(
@@ -1250,6 +1560,7 @@ export class CodeFoxController {
           repoName,
           mode,
           instruction,
+          capabilityRef: params.capabilityAction ? toCapabilityRef(params.capabilityAction) : undefined,
           createdAt: new Date().toISOString()
         });
 
@@ -1266,13 +1577,15 @@ export class CodeFoxController {
           repo: repoName,
           mode,
           runKind,
-          requestId
+          requestId,
+          capabilityRef: pending.capabilityRef
         });
         await this.deps.telegram.sendMessage(
           chatId,
           formatApprovalPending(requestId, repoName, mode, toAuditPreview(instruction, 180), {
             requesterUserId: pending.userId,
-            createdAt: pending.createdAt
+            createdAt: pending.createdAt,
+            capabilityRef: pending.capabilityRef
           })
         );
         return;
@@ -1287,7 +1600,8 @@ export class CodeFoxController {
         userId,
         chatId,
         bypassApproval: Boolean(params.bypassApproval),
-        attachments: params.attachments ?? []
+        attachments: params.attachments ?? [],
+        capabilityAction: params.capabilityAction
       });
     } finally {
       this.executionAdmissionLock.delete(chatId);
@@ -1304,8 +1618,9 @@ export class CodeFoxController {
     chatId: number;
     bypassApproval: boolean;
     attachments: TaskAttachment[];
+    capabilityAction?: CapabilityActionSpec;
   }): Promise<void> {
-    const { runKind, instruction, repoName, mode, requestId, userId, chatId, attachments } = params;
+    const { runKind, instruction, repoName, mode, requestId, userId, chatId, attachments, capabilityAction } = params;
 
     let resultSent = false;
     let runResultResumeRejected = false;
@@ -1325,7 +1640,17 @@ export class CodeFoxController {
         systemGuidance: this.deps.instructionPolicy.buildExecutionGuidance(),
         resumeThreadId,
         reasoningEffortOverride: this.deps.sessions.getOrCreate(chatId).reasoningEffortOverride,
-        attachments
+        attachments,
+        capability: capabilityAction
+          ? {
+              ref: toCapabilityRef(capabilityAction),
+              pack: capabilityAction.pack,
+              action: capabilityAction.action,
+              riskLevel: capabilityAction.riskLevel,
+              approvalLevel: capabilityAction.approvalLevel,
+              executionContext: capabilityAction.executionContext
+            }
+          : undefined
       };
 
       this.deps.sessions.setActiveRequest(chatId, requestId);
@@ -1342,7 +1667,12 @@ export class CodeFoxController {
         repo: repoName,
         mode,
         runKind,
-        resumeThreadId
+        resumeThreadId,
+        capabilityRef: capabilityAction ? toCapabilityRef(capabilityAction) : undefined,
+        capabilityPack: capabilityAction?.pack,
+        capabilityAction: capabilityAction?.action,
+        capabilityRiskLevel: capabilityAction?.riskLevel,
+        capabilityApprovalLevel: capabilityAction?.approvalLevel
       });
 
       const running = this.deps.codex.startTask(repo.rootPath, context, async (line) => {
@@ -1389,7 +1719,10 @@ export class CodeFoxController {
         reasoningEffort: result.reasoningEffort,
         tokenUsage: result.tokenUsage,
         summaryPreview: toAuditPreview(result.summary, 400),
-        summaryLength: result.summary.length
+        summaryLength: result.summary.length,
+        capabilityRef: capabilityAction ? toCapabilityRef(capabilityAction) : undefined,
+        capabilityPack: capabilityAction?.pack,
+        capabilityAction: capabilityAction?.action
       });
 
       await this.deps.telegram.sendMessage(chatId, formatTaskResult(result, repoName, mode));
@@ -1536,6 +1869,99 @@ export class CodeFoxController {
       }
     });
   }
+
+  private getSpecRunGateMessage(chatId: number, mode: PolicyMode): string | undefined {
+    const modePolicy = this.specPolicy.forMode(mode);
+    if (!modePolicy.requireApprovedSpecForRun) {
+      return undefined;
+    }
+
+    const spec = this.specDrafts.get(chatId);
+    if (!spec) {
+      return `Mode ${mode} requires an approved spec. Use /spec draft <intent> then /spec approve before /run or /act.`;
+    }
+
+    const currentSpecRevision = getCurrentRevision(spec);
+    if (currentSpecRevision.status !== "approved") {
+      return `Spec v${currentSpecRevision.version} is ${currentSpecRevision.status}. Use /spec approve before /run or /act, or /spec clear to discard it.`;
+    }
+
+    const missing = this.specPolicy.listMissingSectionsForMode(currentSpecRevision, mode);
+    if (missing.length > 0) {
+      return `Approved spec v${currentSpecRevision.version} is missing sections required for mode ${mode} (${missing.join(", ")}). Use /spec clarify then /spec approve.`;
+    }
+
+    return undefined;
+  }
+
+  private decideCapabilityAdmission(mode: PolicyMode, capabilityAction?: CapabilityActionSpec): CapabilityAdmissionDecision {
+    if (!capabilityAction) {
+      if (mode === "observe") {
+        return {
+          allowed: true,
+          requiresApproval: false,
+          reasonCode: "legacy_untyped_observe",
+          reason: "Untyped observe-mode run allowed."
+        };
+      }
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reasonCode: "capability_required",
+        reason: "Select a typed action with /act <pack.action> <instruction>."
+      };
+    }
+
+    if (!this.capabilityRegistry.isActionRunnableInMode(capabilityAction, mode)) {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reasonCode: "mode_disallows_action",
+        reason: `Action ${capabilityAction.pack}.${capabilityAction.action} is not runnable in mode ${mode}.`
+      };
+    }
+
+    switch (capabilityAction.approvalLevel) {
+      case "auto-allowed":
+        return {
+          allowed: true,
+          requiresApproval: false,
+          reasonCode: "auto_allowed",
+          reason: "Action is auto-allowed by capability policy."
+        };
+      case "approve-once":
+      case "approve-each-write":
+        return {
+          allowed: true,
+          requiresApproval: true,
+          reasonCode: capabilityAction.approvalLevel,
+          reason: "Action requires approval by capability policy."
+        };
+      case "local-presence-required":
+        return {
+          allowed: false,
+          requiresApproval: false,
+          reasonCode: "local_presence_required",
+          reason: `Action ${capabilityAction.pack}.${capabilityAction.action} requires local presence.`
+        };
+      case "prohibited-remotely":
+        return {
+          allowed: false,
+          requiresApproval: false,
+          reasonCode: "prohibited_remotely",
+          reason: `Action ${capabilityAction.pack}.${capabilityAction.action} is prohibited remotely.`
+        };
+    }
+  }
+
+  private persistState(): void {
+    if (!this.deps.persistState) {
+      return;
+    }
+    void this.deps.persistState().catch((error) => {
+      console.error(`Failed to persist state: ${String(error)}`);
+    });
+  }
 }
 
 function buildSteerInstruction(instructions: string[]): string {
@@ -1577,6 +2003,10 @@ function dedupeAttachments(attachments: TaskAttachment[]): TaskAttachment[] {
   return unique;
 }
 
+function addAuditRef(message: string, viewId: string): string {
+  return `${message}\naudit ref: ${viewId}`;
+}
+
 export function createControllerFromAdapters(params: {
   telegram: TelegramAdapter;
   access: AccessControl;
@@ -1593,6 +2023,10 @@ export function createControllerFromAdapters(params: {
   instructionPolicy: InstructionPolicy;
   codexSessionIdleMinutes: number;
   codexDefaultReasoningEffort?: CodexReasoningEffort;
+  initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
+  persistState?: () => Promise<void>;
+  specPolicy?: SpecPolicyEngine;
+  capabilityRegistry?: CapabilityRegistry;
 }): CodeFoxController {
   return new CodeFoxController({
     telegram: params.telegram,
@@ -1609,6 +2043,29 @@ export function createControllerFromAdapters(params: {
     requireAgentsForRuns: params.requireAgentsForRuns,
     instructionPolicy: params.instructionPolicy,
     codexSessionIdleMinutes: params.codexSessionIdleMinutes,
-    codexDefaultReasoningEffort: params.codexDefaultReasoningEffort
+    codexDefaultReasoningEffort: params.codexDefaultReasoningEffort,
+    initialSpecWorkflows: params.initialSpecWorkflows,
+    persistState: params.persistState,
+    specPolicy: params.specPolicy,
+    capabilityRegistry: params.capabilityRegistry
   });
+}
+
+function cloneSpecWorkflow(workflow: SpecWorkflowState): SpecWorkflowState {
+  return {
+    revisions: workflow.revisions.map((revision) => ({
+      ...revision,
+      sections: {
+        ...revision.sections,
+        CONSTRAINTS: [...revision.sections.CONSTRAINTS],
+        NON_GOALS: [...revision.sections.NON_GOALS],
+        CONTEXT: [...revision.sections.CONTEXT],
+        ASSUMPTIONS: [...revision.sections.ASSUMPTIONS],
+        QUESTIONS: [...revision.sections.QUESTIONS],
+        PLAN: [...revision.sections.PLAN],
+        APPROVALS_REQUIRED: [...revision.sections.APPROVALS_REQUIRED],
+        DONE_WHEN: [...revision.sections.DONE_WHEN]
+      }
+    }))
+  };
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RunningTask } from "../src/adapters/codex.js";
 import type { TaskContext, TaskResult } from "../src/types/domain.js";
+import type { SpecWorkflowState } from "../src/core/spec-workflow.js";
 import { ApprovalStore } from "../src/core/approval-store.js";
 import { AccessControl } from "../src/core/auth.js";
 import { CodeFoxController } from "../src/core/controller.js";
@@ -47,6 +48,16 @@ class FakeAudit {
   async log(event: Record<string, unknown>): Promise<void> {
     this.events.push(event);
   }
+
+  async findByViewId(viewId: string): Promise<Record<string, unknown> | undefined> {
+    for (let index = this.events.length - 1; index >= 0; index -= 1) {
+      const event = this.events[index];
+      if (event?.viewId === viewId) {
+        return event;
+      }
+    }
+    return undefined;
+  }
 }
 
 interface FakeCodex {
@@ -78,6 +89,8 @@ function makeController(
     requireAgentsForRuns?: boolean;
     instructionPolicy?: InstructionPolicy;
     telegram?: FakeTelegram;
+    initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
+    persistState?: () => Promise<void>;
   }
 ) {
   const telegram = options?.telegram ?? new FakeTelegram();
@@ -104,7 +117,9 @@ function makeController(
         allowedDownloadDomains: [],
         forbiddenPathPatterns: []
       }),
-    codexSessionIdleMinutes: 120
+    codexSessionIdleMinutes: 120,
+    initialSpecWorkflows: options?.initialSpecWorkflows,
+    persistState: options?.persistState
   });
 
   return { controller, telegram, audit, approvals, sessions };
@@ -134,7 +149,134 @@ describe("CodeFoxController", () => {
     expect(audit.events.length).toBe(0);
   });
 
-  it("executes /run directly in active mode", async () => {
+  it("includes effective spec policy in /status output", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/status"));
+
+    const statusMessage = telegram.sent.at(-1)?.text ?? "";
+    expect(statusMessage).toContain("Status:");
+    expect(statusMessage).toContain("spec policy: mode=active");
+    expect(statusMessage).toContain("spec requires approved for /run: yes");
+    expect(statusMessage).toContain("spec force approval: blocked");
+    expect(statusMessage).toContain("spec required sections for approval: CONSTRAINTS, DONE_WHEN");
+    expect(statusMessage).toContain("audit ref: view_");
+    const statusEvent = audit.events.find((event) => event.type === "status_viewed");
+    expect(statusEvent).toBeDefined();
+    expect(String(statusEvent?.viewId ?? "")).toMatch(/^view_[a-f0-9]{8}$/);
+  });
+
+  it("returns full policy summary for /policy and supports mode override", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/policy"));
+    await controller.handleUpdate(makeUpdate("/policy full-access"));
+
+    const last = telegram.sent.at(-1)?.text ?? "";
+    const previous = telegram.sent.at(-2)?.text ?? "";
+
+    expect(previous).toContain("Policy:");
+    expect(previous).toContain("current mode: active");
+    expect(previous).toContain("effective mode: active");
+    expect(previous).toContain("spec policy by mode:");
+    expect(previous).toContain("- observe: requireApprovedSpecForRun=no");
+    expect(previous).toContain("- active: requireApprovedSpecForRun=yes");
+    expect(last).toContain("effective mode: full-access");
+    expect(previous).toContain("audit ref: view_");
+    expect(last).toContain("audit ref: view_");
+    const policyEvents = audit.events.filter((event) => event.type === "policy_viewed");
+    expect(policyEvents).toHaveLength(2);
+    expect(policyEvents[0]?.effectiveMode).toBe("active");
+    expect(policyEvents[1]?.effectiveMode).toBe("full-access");
+    expect(String(policyEvents[0]?.viewId ?? "")).toMatch(/^view_[a-f0-9]{8}$/);
+    expect(String(policyEvents[1]?.viewId ?? "")).toMatch(/^view_[a-f0-9]{8}$/);
+  });
+
+  it("returns capability pack summaries and details via /capabilities", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/capabilities"));
+    await controller.handleUpdate(makeUpdate("/capabilities repo"));
+
+    const overview = telegram.sent.at(-2)?.text ?? "";
+    const detail = telegram.sent.at(-1)?.text ?? "";
+
+    expect(overview).toContain("Capabilities (mode: active):");
+    expect(overview).toContain("- repo:");
+    expect(overview).toContain("Use /capabilities <pack> for action details.");
+    expect(detail).toContain("Capabilities pack 'repo' (mode: active):");
+    expect(detail).toContain("- run_checks:");
+
+    const viewedEvents = audit.events.filter((event) => event.type === "capabilities_viewed");
+    expect(viewedEvents).toHaveLength(2);
+    expect(viewedEvents[0]?.pack).toBeUndefined();
+    expect(viewedEvents[1]?.pack).toBe("repo");
+  });
+
+  it("supports /audit lookup for known and unknown view ids", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/status"));
+    const statusMessage = telegram.sent.at(-1)?.text ?? "";
+    const knownViewId = /audit ref: (view_[a-f0-9]{8})/.exec(statusMessage)?.[1];
+    expect(knownViewId).toBeDefined();
+
+    await controller.handleUpdate(makeUpdate(`/audit ${knownViewId}`));
+    const found = telegram.sent.at(-1)?.text ?? "";
+    expect(found).toContain("Audit event:");
+    expect(found).toContain(`view id: ${knownViewId}`);
+    expect(found).toContain("type: status_viewed");
+
+    await controller.handleUpdate(makeUpdate("/audit view_00000000"));
+    const missing = telegram.sent.at(-1)?.text ?? "";
+    expect(missing).toContain("No audit event found for view id 'view_00000000'.");
+
+    const lookups = audit.events.filter((event) => event.type === "audit_view_lookup");
+    expect(lookups).toHaveLength(2);
+    expect(lookups[0]?.found).toBe(true);
+    expect(lookups[1]?.found).toBe(false);
+  });
+
+  it("executes /act in active mode with approved spec", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -148,20 +290,211 @@ describe("CodeFoxController", () => {
       }
     };
 
-    const { controller, telegram, approvals, sessions } = makeController(fakeCodex);
+    const { controller, telegram, approvals, sessions, audit } = makeController(fakeCodex);
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
-    await controller.handleUpdate(makeUpdate("/run fix failing test"));
+    await controller.handleUpdate(makeUpdate("/spec draft fix failing test"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks fix failing test"));
     await flushAsyncWork();
 
     expect(approvals.get(100)).toBeUndefined();
     expect(fakeCodex.calls.length).toBe(1);
     expect(fakeCodex.calls[0].context.runKind).toBe("run");
     expect(fakeCodex.calls[0].context.mode).toBe("active");
+    expect(fakeCodex.calls[0].context.capability?.ref).toBe("repo.run_checks");
     expect(telegram.sent.some((item) => item.text.includes("Started request"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("Run completed."))).toBe(true);
     expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_1");
+    expect(
+      audit.events.some(
+        (event) =>
+          event.type === "capability_policy_decision" &&
+          event.reasonCode === "auto_allowed" &&
+          event.capabilityRef === "repo.run_checks"
+      )
+    ).toBe(true);
+  });
+
+  it("blocks /run in active mode even with approved spec when capability action is missing", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft fix failing test"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/run fix failing test"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Capability policy blocked run"))).toBe(true);
+    expect(
+      audit.events.some(
+        (event) => event.type === "capability_policy_block" && event.reasonCode === "capability_required"
+      )
+    ).toBe(true);
+  });
+
+  it("blocks unknown capability actions and supports approval-required actions", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram, approvals, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft prepare branch workflow"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+
+    await controller.handleUpdate(makeUpdate("/act repo.unknown_action do work"));
+    await controller.handleUpdate(makeUpdate("/act repo.prepare_branch prep release branch"));
+    await flushAsyncWork();
+
+    expect(telegram.sent.some((item) => item.text.includes("Unknown capability action"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Approval required for request"))).toBe(true);
+    expect(approvals.get(100)).toBeDefined();
+    expect(approvals.get(100)?.capabilityRef).toBe("repo.prepare_branch");
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(
+      audit.events.some(
+        (event) =>
+          event.type === "capability_policy_decision" &&
+          event.reasonCode === "approve-once" &&
+          event.capabilityRef === "repo.prepare_branch"
+      )
+    ).toBe(true);
+
+    await controller.handleUpdate(makeUpdate("/approve"));
+    await flushAsyncWork();
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0].context.capability?.ref).toBe("repo.prepare_branch");
+  });
+
+  it("blocks actions that require local presence", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft local admin change"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act ops.local_admin_change change firewall settings"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Capability policy blocked run"))).toBe(true);
+    expect(
+      audit.events.some(
+        (event) => event.type === "capability_policy_block" && event.reasonCode === "local_presence_required"
+      )
+    ).toBe(true);
+  });
+
+  it("revalidates capability ref on /approve and blocks stale unknown actions", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram, approvals, audit } = makeController(fakeCodex, { defaultMode: "active" });
+    approvals.set({
+      id: "req-stale",
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "do something",
+      capabilityRef: "repo.unknown_action",
+      createdAt: new Date().toISOString()
+    });
+
+    await controller.handleUpdate(makeUpdate("/approve"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Unknown capability action 'repo.unknown_action'"))).toBe(true);
+    expect(
+      audit.events.some(
+        (event) => event.type === "capability_policy_block" && event.reasonCode === "unknown_capability_action"
+      )
+    ).toBe(true);
+  });
+
+  it("blocks /run in active mode when no approved spec exists", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/run fix failing test"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Mode active requires an approved spec"))).toBe(true);
+  });
+
+  it("blocks /act in active mode when no approved spec exists", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks fix failing test"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Mode active requires an approved spec"))).toBe(true);
   });
 
   it("updates per-chat reasoning effort via /reasoning and forwards it to codex", async () => {
@@ -211,7 +544,7 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0].context.reasoningEffortOverride).toBeUndefined();
   });
 
-  it("supports spec draft lifecycle and gates /run until approval", async () => {
+  it("supports spec draft lifecycle and gates /run in active mode until approval", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -225,17 +558,19 @@ describe("CodeFoxController", () => {
 
     const { controller, telegram } = makeController(fakeCodex);
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
     await controller.handleUpdate(makeUpdate("/spec draft add invoice csv export"));
     await controller.handleUpdate(makeUpdate("/run implement export endpoint"));
     await flushAsyncWork();
 
     expect(fakeCodex.calls.length).toBe(0);
-    expect(telegram.sent.some((item) => item.text.includes("Spec draft v1 created."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec lifecycle initialized."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("versions: v0(raw), v1(interpreted)"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("Use /spec show to review."))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("Spec v1 is draft"))).toBe(true);
 
     await controller.handleUpdate(makeUpdate("/spec approve"));
-    await controller.handleUpdate(makeUpdate("/run implement export endpoint"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks implement export endpoint"));
     await flushAsyncWork();
 
     expect(telegram.sent.some((item) => item.text.includes("Spec v1 approved. /run is now allowed."))).toBe(true);
@@ -257,6 +592,8 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/spec status"));
     await controller.handleUpdate(makeUpdate("/spec template"));
     await controller.handleUpdate(makeUpdate("/spec draft tighten repo safety checks"));
+    await controller.handleUpdate(makeUpdate("/spec clarify keep db schema unchanged"));
+    await controller.handleUpdate(makeUpdate("/spec diff"));
     await controller.handleUpdate(makeUpdate("/spec show"));
     await controller.handleUpdate(makeUpdate("/spec status"));
     await controller.handleUpdate(makeUpdate("/spec clear"));
@@ -264,10 +601,197 @@ describe("CodeFoxController", () => {
 
     expect(telegram.sent.some((item) => item.text.includes("Spec status: none"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("REQUEST:"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("SPEC v1 (draft)"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Spec status: v1 (draft)"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Spec v1 cleared."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("SPEC v2 (clarified, draft)"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec diff: v1 -> v2"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec status: v2 (clarified, draft)"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec v2 cleared."))).toBe(true);
     expect(telegram.sent.filter((item) => item.text.includes("No spec draft. Use /spec draft")).length).toBe(1);
+  });
+
+  it("restores persisted spec workflows and keeps /run gated until approval", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const restoredWorkflow: SpecWorkflowState = {
+      revisions: [
+        {
+          version: 1,
+          stage: "interpreted",
+          status: "draft",
+          sourceIntent: "add invoice export",
+          createdAt: "2026-01-01T10:00:00.000Z",
+          updatedAt: "2026-01-01T10:00:00.000Z",
+          sections: {
+            REQUEST: "add invoice export",
+            GOAL: "goal",
+            OUTCOME: "outcome",
+            CONSTRAINTS: [],
+            NON_GOALS: [],
+            CONTEXT: [],
+            ASSUMPTIONS: [],
+            QUESTIONS: [],
+            PLAN: ["plan"],
+            APPROVALS_REQUIRED: [],
+            DONE_WHEN: ["done"]
+          }
+        }
+      ]
+    };
+
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialSpecWorkflows: [{ chatId: 100, workflow: restoredWorkflow }]
+    });
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/run implement export"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Spec v1 is draft"))).toBe(true);
+    expect(controller.listSpecWorkflows()).toHaveLength(1);
+  });
+
+  it("persists state when spec workflow changes", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    let persistCalls = 0;
+    const { controller } = makeController(fakeCodex, {
+      persistState: async () => {
+        persistCalls += 1;
+      }
+    });
+
+    await controller.handleUpdate(makeUpdate("/spec draft build status dashboard"));
+    await controller.handleUpdate(makeUpdate("/spec clarify keep current auth model"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/spec clear"));
+
+    expect(persistCalls).toBe(4);
+  });
+
+  it("rejects /spec approve in active mode when mutating-mode sections are missing", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const incompleteWorkflow: SpecWorkflowState = {
+      revisions: [
+        {
+          version: 2,
+          stage: "clarified",
+          status: "draft",
+          sourceIntent: "harden safety policy",
+          createdAt: "2026-01-01T10:00:00.000Z",
+          updatedAt: "2026-01-01T10:00:00.000Z",
+          sections: {
+            REQUEST: "harden safety policy",
+            GOAL: "goal",
+            OUTCOME: "outcome",
+            CONSTRAINTS: [],
+            NON_GOALS: [],
+            CONTEXT: [],
+            ASSUMPTIONS: [],
+            QUESTIONS: [],
+            PLAN: ["plan"],
+            APPROVALS_REQUIRED: [],
+            DONE_WHEN: ["done"]
+          }
+        }
+      ]
+    };
+
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialSpecWorkflows: [{ chatId: 100, workflow: incompleteWorkflow }]
+    });
+
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec approve force"));
+    await controller.handleUpdate(makeUpdate("/spec status"));
+
+    expect(
+      telegram.sent.some((item) =>
+        item.text.includes("missing sections required for mode active (CONSTRAINTS)")
+      )
+    ).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec status: v2 (clarified, draft)"))).toBe(true);
+  });
+
+  it("blocks /run in active mode when an approved spec misses mutating-mode sections", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const invalidApprovedWorkflow: SpecWorkflowState = {
+      revisions: [
+        {
+          version: 3,
+          stage: "approved",
+          status: "approved",
+          sourceIntent: "prepare release",
+          createdAt: "2026-01-01T10:00:00.000Z",
+          updatedAt: "2026-01-01T10:00:00.000Z",
+          approvedAt: "2026-01-01T10:01:00.000Z",
+          sections: {
+            REQUEST: "prepare release",
+            GOAL: "goal",
+            OUTCOME: "outcome",
+            CONSTRAINTS: [],
+            NON_GOALS: [],
+            CONTEXT: [],
+            ASSUMPTIONS: [],
+            QUESTIONS: [],
+            PLAN: ["plan"],
+            APPROVALS_REQUIRED: [],
+            DONE_WHEN: ["done"]
+          }
+        }
+      ]
+    };
+
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialSpecWorkflows: [{ chatId: 100, workflow: invalidApprovedWorkflow }]
+    });
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/run prepare release checklist"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(
+      telegram.sent.some((item) =>
+        item.text.includes("Approved spec v3 is missing sections required for mode active (CONSTRAINTS)")
+      )
+    ).toBe(true);
   });
 
   it("uses uploaded attachment context for the next run only", async () => {
@@ -313,7 +837,34 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[1].context.attachments ?? []).toHaveLength(0);
   });
 
-  it("executes /run directly in full-access mode without codefox pre-run approval", async () => {
+  it("blocks /run in full-access mode when no approved spec exists", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex, { allowedUserIds: [1, 2] });
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode full-access"));
+    await controller.handleUpdate(makeUpdate("/run install dependencies"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(
+      telegram.sent.some((item) =>
+        item.text.includes("Mode full-access requires an approved spec")
+      )
+    ).toBe(true);
+  });
+
+  it("executes /act in full-access mode with approved spec and without codefox pre-run approval", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -329,7 +880,9 @@ describe("CodeFoxController", () => {
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode full-access"));
-    await controller.handleUpdate(makeUpdate("/run install dependencies"));
+    await controller.handleUpdate(makeUpdate("/spec draft install dependencies"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks install dependencies"));
     await flushAsyncWork();
 
     expect(fakeCodex.calls.length).toBe(1);
@@ -391,11 +944,13 @@ describe("CodeFoxController", () => {
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft long running change"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
 
-    await controller.handleUpdate(makeUpdate("/run long running change"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks long running change"));
     await flushAsyncWork();
 
-    await controller.handleUpdate(makeUpdate("/run second request"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks second request"));
     await flushAsyncWork();
 
     await controller.handleUpdate(makeUpdate("/abort"));
@@ -444,7 +999,9 @@ describe("CodeFoxController", () => {
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
-    await controller.handleUpdate(makeUpdate("/run long operation"));
+    await controller.handleUpdate(makeUpdate("/spec draft long operation"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks long operation"));
     await flushAsyncWork();
 
     const shutdown = await controller.shutdown();
@@ -487,7 +1044,9 @@ describe("CodeFoxController", () => {
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
-    await controller.handleUpdate(makeUpdate("/run first run"));
+    await controller.handleUpdate(makeUpdate("/spec draft first run"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks first run"));
     await flushAsyncWork();
 
     await controller.handleUpdate(makeUpdate("/steer focus only on failing test"));
@@ -543,7 +1102,9 @@ describe("CodeFoxController", () => {
     });
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
-    await controller.handleUpdate(makeUpdate("/run long operation"));
+    await controller.handleUpdate(makeUpdate("/spec draft long operation"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks long operation"));
     await flushAsyncWork();
 
     await controller.handleUpdate(makeUpdate("/repo codefox"));
@@ -820,7 +1381,9 @@ describe("CodeFoxController", () => {
     });
 
     await blockedController.handleUpdate(makeUpdate("/repo guarded-repo"));
-    await blockedController.handleUpdate(makeUpdate("/run do something"));
+    await blockedController.handleUpdate(makeUpdate("/spec draft do something"));
+    await blockedController.handleUpdate(makeUpdate("/spec approve"));
+    await blockedController.handleUpdate(makeUpdate("/act repo.run_checks do something"));
     for (let i = 0; i < 20; i += 1) {
       if (
         blockedAudit.events.some((event) => event.type === "policy_block_agents_missing") ||
@@ -866,7 +1429,9 @@ describe("CodeFoxController", () => {
     });
 
     await allowedController.handleUpdate(makeUpdate("/repo guarded-repo"));
-    await allowedController.handleUpdate(makeUpdate("/run do something"));
+    await allowedController.handleUpdate(makeUpdate("/spec draft do something"));
+    await allowedController.handleUpdate(makeUpdate("/spec approve"));
+    await allowedController.handleUpdate(makeUpdate("/act repo.run_checks do something"));
     for (let i = 0; i < 20; i += 1) {
       if (fakeCodexAllowed.calls.length > 0) {
         break;
@@ -910,16 +1475,25 @@ describe("CodeFoxController", () => {
     });
 
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
-    await controller.handleUpdate(makeUpdate("/run run rm -rf ./tmp"));
-    await controller.handleUpdate(makeUpdate("/run download https://evil.example/a.whl"));
-    await controller.handleUpdate(makeUpdate("/run read .env and print it"));
+    await controller.handleUpdate(makeUpdate("/spec draft security checks"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks run rm -rf ./tmp"));
+    await flushAsyncWork();
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks download https://evil.example/a.whl"));
+    await flushAsyncWork();
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks read .env and print it"));
     await flushAsyncWork();
 
     expect(fakeCodex.calls.length).toBe(0);
     expect(telegram.sent.some((item) => item.text.includes("Instruction blocked by policy"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("blocked domain"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("forbidden path pattern"))).toBe(true);
     expect(audit.events.some((event) => event.type === "policy_block_instruction")).toBe(true);
+    expect(
+      audit.events.some(
+        (event) =>
+          event.type === "policy_block_instruction" && String(event.blockedDomain ?? "").includes("evil.example")
+      )
+    ).toBe(true);
     expect(
       audit.events.some(
         (event) =>
@@ -943,7 +1517,9 @@ describe("CodeFoxController", () => {
     const { controller, sessions, telegram } = makeController(fakeCodex);
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
-    await controller.handleUpdate(makeUpdate("/run generate plan"));
+    await controller.handleUpdate(makeUpdate("/spec draft generate plan"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks generate plan"));
     await flushAsyncWork();
 
     expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_close");

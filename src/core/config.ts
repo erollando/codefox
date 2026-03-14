@@ -5,7 +5,10 @@ import type {
   AppConfig,
   CodexReasoningEffort,
   PolicyMode,
-  RepoConfig
+  RepoConfig,
+  SpecPolicyConfigOverride,
+  SpecPolicyModeConfigOverride,
+  SpecSectionName
 } from "../types/domain.js";
 
 const MODES: PolicyMode[] = ["observe", "active", "full-access"];
@@ -23,6 +26,24 @@ const DEFAULT_CODEX_BLOCKED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", 
 const DEFAULT_CODEX_SESSION_IDLE_MINUTES = 120;
 const DEFAULT_AUDIT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const CODEX_REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
+const SPEC_POLICY_MODE_OPTION_KEYS = new Set([
+  "requireApprovedSpecForRun",
+  "allowForceApproval",
+  "requiredSectionsForApproval"
+]);
+const SPEC_SECTION_NAMES: SpecSectionName[] = [
+  "REQUEST",
+  "GOAL",
+  "OUTCOME",
+  "CONSTRAINTS",
+  "NON_GOALS",
+  "CONTEXT",
+  "ASSUMPTIONS",
+  "QUESTIONS",
+  "PLAN",
+  "APPROVALS_REQUIRED",
+  "DONE_WHEN"
+];
 
 function isMode(value: string): value is PolicyMode {
   return MODES.includes(value as PolicyMode);
@@ -146,6 +167,69 @@ function parseOptionalCodexReasoningEffort(value: unknown, key: string): CodexRe
     throw new ConfigError(`${key} must be one of ${CODEX_REASONING_EFFORTS.join(", ")}`);
   }
   return effort;
+}
+
+function parseOptionalSpecPolicyOverride(value: unknown, key: string): SpecPolicyConfigOverride | undefined {
+  if (typeof value === "undefined") {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ConfigError(`${key} must be an object`);
+  }
+
+  const raw = value as Record<string, unknown>;
+  for (const modeKey of Object.keys(raw)) {
+    if (!MODES.includes(modeKey as PolicyMode)) {
+      throw new ConfigError(`${key}.${modeKey} is not a supported mode`);
+    }
+  }
+
+  const result: SpecPolicyConfigOverride = {};
+  for (const mode of MODES) {
+    if (!(mode in raw)) {
+      continue;
+    }
+    const modeValue = raw[mode];
+    if (!modeValue || typeof modeValue !== "object" || Array.isArray(modeValue)) {
+      throw new ConfigError(`${key}.${mode} must be an object`);
+    }
+    const modeObj = modeValue as Record<string, unknown>;
+    const modeOverride: SpecPolicyModeConfigOverride = {};
+
+    for (const optionKey of Object.keys(modeObj)) {
+      if (!SPEC_POLICY_MODE_OPTION_KEYS.has(optionKey)) {
+        throw new ConfigError(`${key}.${mode}.${optionKey} is not a supported option`);
+      }
+    }
+
+    if (typeof modeObj.requireApprovedSpecForRun !== "undefined") {
+      if (typeof modeObj.requireApprovedSpecForRun !== "boolean") {
+        throw new ConfigError(`${key}.${mode}.requireApprovedSpecForRun must be a boolean`);
+      }
+      modeOverride.requireApprovedSpecForRun = modeObj.requireApprovedSpecForRun;
+    }
+
+    if (typeof modeObj.allowForceApproval !== "undefined") {
+      if (typeof modeObj.allowForceApproval !== "boolean") {
+        throw new ConfigError(`${key}.${mode}.allowForceApproval must be a boolean`);
+      }
+      modeOverride.allowForceApproval = modeObj.allowForceApproval;
+    }
+
+    if (typeof modeObj.requiredSectionsForApproval !== "undefined") {
+      const sections = mustStringArray(modeObj.requiredSectionsForApproval, `${key}.${mode}.requiredSectionsForApproval`);
+      for (let index = 0; index < sections.length; index += 1) {
+        if (!SPEC_SECTION_NAMES.includes(sections[index] as SpecSectionName)) {
+          throw new ConfigError(`${key}.${mode}.requiredSectionsForApproval[${index}] is not a supported section`);
+        }
+      }
+      modeOverride.requiredSectionsForApproval = sections as SpecSectionName[];
+    }
+
+    result[mode] = modeOverride;
+  }
+
+  return result;
 }
 
 export async function loadConfig(configPath?: string): Promise<AppConfig> {
@@ -310,7 +394,8 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
       preflightTimeoutMs
     },
     policy: {
-      defaultMode: mustMode(policy.defaultMode, "policy.defaultMode")
+      defaultMode: mustMode(policy.defaultMode, "policy.defaultMode"),
+      specPolicy: parseOptionalSpecPolicyOverride(policy.specPolicy, "policy.specPolicy")
     },
     safety: {
       requireAgentsForRuns: Boolean(safety.requireAgentsForRuns),

@@ -62,6 +62,7 @@ describe("config validation", () => {
     expect(validated.state.sessionTtlHours).toBeUndefined();
     expect(validated.state.approvalTtlHours).toBeUndefined();
     expect(validated.audit.maxFileBytes).toBe(5 * 1024 * 1024);
+    expect(validated.policy.specPolicy).toBeUndefined();
   });
 
   it("accepts full-access as policy.defaultMode", () => {
@@ -83,6 +84,44 @@ describe("config validation", () => {
     expect(validated.state.sessionTtlHours).toBe(72);
     expect(validated.state.approvalTtlHours).toBe(24);
     expect(validated.state.codexSessionIdleMinutes).toBe(45);
+  });
+
+  it("parses optional policy.specPolicy overrides", () => {
+    const config = makeValidConfig();
+    (config.policy as Record<string, unknown>).specPolicy = {
+      active: {
+        requiredSectionsForApproval: ["CONSTRAINTS", "DONE_WHEN"],
+        allowForceApproval: false
+      },
+      "full-access": {
+        requireApprovedSpecForRun: true
+      }
+    };
+
+    const validated = validateConfig(config);
+    expect(validated.policy.specPolicy?.active?.requiredSectionsForApproval).toEqual(["CONSTRAINTS", "DONE_WHEN"]);
+    expect(validated.policy.specPolicy?.active?.allowForceApproval).toBe(false);
+    expect(validated.policy.specPolicy?.["full-access"]?.requireApprovedSpecForRun).toBe(true);
+  });
+
+  it("rejects invalid policy.specPolicy section names", () => {
+    const config = makeValidConfig();
+    (config.policy as Record<string, unknown>).specPolicy = {
+      active: {
+        requiredSectionsForApproval: ["NOT_A_SECTION"]
+      }
+    };
+    expect(() => validateConfig(config)).toThrowError(/policy\.specPolicy\.active\.requiredSectionsForApproval\[0\]/);
+  });
+
+  it("rejects invalid policy.specPolicy options", () => {
+    const config = makeValidConfig();
+    (config.policy as Record<string, unknown>).specPolicy = {
+      active: {
+        unsupportedOption: true
+      }
+    };
+    expect(() => validateConfig(config)).toThrowError(/unsupportedOption/);
   });
 
   it("parses optional repoInit.defaultParentPath", () => {

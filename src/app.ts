@@ -4,11 +4,12 @@ import { ApprovalStore } from "./core/approval-store.js";
 import { AccessControl } from "./core/auth.js";
 import { AuditLogger } from "./core/audit-logger.js";
 import { loadConfig, persistRepos, resolveConfigPath } from "./core/config.js";
-import { createControllerFromAdapters } from "./core/controller.js";
+import { CodeFoxController, createControllerFromAdapters } from "./core/controller.js";
 import { InstructionPolicy } from "./core/instruction-policy.js";
 import { PolicyEngine } from "./core/policy.js";
 import { RepoRegistry } from "./core/repo-registry.js";
 import { SessionManager } from "./core/session-manager.js";
+import { SpecPolicyEngine } from "./core/spec-policy.js";
 import { JsonStateStore, pruneStateByTtl } from "./core/state-store.js";
 
 export interface AppRuntime {
@@ -56,23 +57,26 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
 
   let sessions!: SessionManager;
   let approvals!: ApprovalStore;
+  let controller!: CodeFoxController;
 
   const persistState = async (): Promise<void> => {
     await stateStore.save({
       sessions: sessions.list(),
-      approvals: approvals.list()
+      approvals: approvals.list(),
+      specWorkflows: controller ? controller.listSpecWorkflows() : initialState.specWorkflows
     });
   };
 
   sessions = new SessionManager(config.policy.defaultMode, initialState.sessions, persistState);
   const policy = new PolicyEngine();
+  const specPolicy = new SpecPolicyEngine(config.policy.specPolicy);
   approvals = new ApprovalStore(initialState.approvals, persistState);
   const codex = new CodexCliAdapter(config.codex);
   await codex.ensureAvailable();
   const codexRuntimeInfo = codex.getRuntimeInfo();
   const instructionPolicy = new InstructionPolicy(config.safety.instructionPolicy);
 
-  const controller = createControllerFromAdapters({
+  controller = createControllerFromAdapters({
     telegram,
     access,
     repos,
@@ -86,7 +90,10 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     requireAgentsForRuns: config.safety.requireAgentsForRuns,
     instructionPolicy,
     codexSessionIdleMinutes: config.state.codexSessionIdleMinutes,
-    codexDefaultReasoningEffort: config.codex.reasoningEffort
+    codexDefaultReasoningEffort: config.codex.reasoningEffort,
+    initialSpecWorkflows: initialState.specWorkflows,
+    persistState,
+    specPolicy
   });
 
   let started = false;

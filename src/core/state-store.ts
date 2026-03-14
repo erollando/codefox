@@ -1,10 +1,17 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ApprovalRequest, CodexReasoningEffort, PolicyMode, SessionState, TaskTokenUsage } from "../types/domain.js";
+import type { SpecRevision, SpecWorkflowState } from "./spec-workflow.js";
+
+export interface PersistedSpecWorkflow {
+  chatId: number;
+  workflow: SpecWorkflowState;
+}
 
 export interface PersistedState {
   sessions: SessionState[];
   approvals: ApprovalRequest[];
+  specWorkflows: PersistedSpecWorkflow[];
 }
 
 export interface StateTtlOptions {
@@ -14,11 +21,13 @@ export interface StateTtlOptions {
 
 const EMPTY_STATE: PersistedState = {
   sessions: [],
-  approvals: []
+  approvals: [],
+  specWorkflows: []
 };
 
 const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
 const REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
+const CAPABILITY_REF_PATTERN = /^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*$/;
 
 export class JsonStateStore {
   private writeQueue: Promise<void> = Promise.resolve();
@@ -52,10 +61,12 @@ export class JsonStateStore {
     const obj = parsed as Record<string, unknown>;
     const sessions = Array.isArray(obj.sessions) ? (obj.sessions as SessionState[]) : [];
     const approvals = Array.isArray(obj.approvals) ? (obj.approvals as ApprovalRequest[]) : [];
+    const specWorkflows = Array.isArray(obj.specWorkflows) ? (obj.specWorkflows as PersistedSpecWorkflow[]) : [];
 
     return {
       sessions: sanitizeSessions(sessions),
-      approvals: sanitizeApprovals(approvals)
+      approvals: sanitizeApprovals(approvals),
+      specWorkflows: sanitizeSpecWorkflows(specWorkflows)
     };
   }
 
@@ -66,7 +77,8 @@ export class JsonStateStore {
 
       const safeState: PersistedState = {
         sessions: sanitizeSessions(state.sessions),
-        approvals: sanitizeApprovals(state.approvals)
+        approvals: sanitizeApprovals(state.approvals),
+        specWorkflows: sanitizeSpecWorkflows(state.specWorkflows)
       };
 
       const tempPath = `${this.filePath}.tmp`;
@@ -177,8 +189,86 @@ function sanitizeApprovals(approvals: ApprovalRequest[]): ApprovalRequest[] {
       repoName: approval.repoName,
       mode: isPolicyMode(approval.mode) ? approval.mode : "observe",
       instruction: approval.instruction,
+      capabilityRef:
+        typeof approval.capabilityRef === "string" && CAPABILITY_REF_PATTERN.test(approval.capabilityRef)
+          ? approval.capabilityRef
+          : undefined,
       createdAt: isValidIsoTimestamp(approval.createdAt) ? approval.createdAt : now
     }));
+}
+
+function sanitizeSpecWorkflows(specWorkflows: PersistedSpecWorkflow[]): PersistedSpecWorkflow[] {
+  return specWorkflows
+    .filter(
+      (entry) =>
+        typeof entry?.chatId === "number" &&
+        Number.isSafeInteger(entry.chatId) &&
+        entry.workflow &&
+        typeof entry.workflow === "object" &&
+        Array.isArray(entry.workflow.revisions)
+    )
+    .map((entry) => {
+      const revisions = sanitizeSpecRevisions(entry.workflow.revisions as SpecRevision[]);
+      return {
+        chatId: entry.chatId,
+        workflow: {
+          revisions
+        }
+      };
+    })
+    .filter((entry) => entry.workflow.revisions.length > 0);
+}
+
+function sanitizeSpecRevisions(revisions: SpecRevision[]): SpecRevision[] {
+  return revisions
+    .filter(
+      (revision) =>
+        typeof revision?.version === "number" &&
+        Number.isFinite(revision.version) &&
+        typeof revision.stage === "string" &&
+        (revision.stage === "raw" ||
+          revision.stage === "interpreted" ||
+          revision.stage === "clarified" ||
+          revision.stage === "approved") &&
+        typeof revision.status === "string" &&
+        (revision.status === "draft" || revision.status === "approved") &&
+        typeof revision.sourceIntent === "string" &&
+        revision.sections &&
+        typeof revision.sections === "object"
+    )
+    .map((revision) => ({
+      version: Math.floor(revision.version),
+      stage: revision.stage,
+      status: revision.status,
+      sourceIntent: revision.sourceIntent,
+      createdAt: isValidIsoTimestamp(revision.createdAt) ? revision.createdAt : new Date().toISOString(),
+      updatedAt: isValidIsoTimestamp(revision.updatedAt) ? revision.updatedAt : new Date().toISOString(),
+      approvedAt: isValidIsoTimestamp(revision.approvedAt) ? revision.approvedAt : undefined,
+      sections: {
+        REQUEST: toStringOrEmpty(revision.sections.REQUEST),
+        GOAL: toStringOrEmpty(revision.sections.GOAL),
+        OUTCOME: toStringOrEmpty(revision.sections.OUTCOME),
+        CONSTRAINTS: toStringArray(revision.sections.CONSTRAINTS),
+        NON_GOALS: toStringArray(revision.sections.NON_GOALS),
+        CONTEXT: toStringArray(revision.sections.CONTEXT),
+        ASSUMPTIONS: toStringArray(revision.sections.ASSUMPTIONS),
+        QUESTIONS: toStringArray(revision.sections.QUESTIONS),
+        PLAN: toStringArray(revision.sections.PLAN),
+        APPROVALS_REQUIRED: toStringArray(revision.sections.APPROVALS_REQUIRED),
+        DONE_WHEN: toStringArray(revision.sections.DONE_WHEN)
+      }
+    }));
+}
+
+function toStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 function isValidIsoTimestamp(value: unknown): value is string {
@@ -219,7 +309,8 @@ export function pruneStateByTtl(
   return {
     state: {
       sessions,
-      approvals
+      approvals,
+      specWorkflows: state.specWorkflows.filter((entry) => sessions.some((session) => session.chatId === entry.chatId))
     },
     removedSessions: state.sessions.length - sessions.length,
     removedApprovals: state.approvals.length - approvals.length

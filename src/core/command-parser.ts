@@ -1,9 +1,17 @@
 import type { AgentTemplateName, CodexReasoningEffort, PolicyMode } from "../types/domain.js";
+import type { CapabilityPackName } from "../types/domain.js";
 
 export type ParsedCommand =
   | { type: "help" }
   | { type: "repos" }
-  | { type: "spec"; action: "template" | "draft" | "show" | "status" | "approve" | "clear"; intent?: string; force?: boolean }
+  | { type: "capabilities"; pack?: CapabilityPackName }
+  | {
+      type: "spec";
+      action: "template" | "draft" | "clarify" | "show" | "status" | "diff" | "approve" | "clear";
+      intent?: string;
+      clarification?: string;
+      force?: boolean;
+    }
   | { type: "repo"; repoName: string }
   | { type: "repo_add"; repoName: string; repoPath: string }
   | { type: "repo_init"; repoName: string; basePath?: string }
@@ -14,6 +22,8 @@ export type ParsedCommand =
   | { type: "repo_remove"; repoName: string }
   | { type: "repo_info"; repoName?: string }
   | { type: "mode"; mode: PolicyMode }
+  | { type: "policy"; mode?: PolicyMode }
+  | { type: "act"; capabilityRef: string; instruction: string }
   | { type: "reasoning"; reasoningEffort?: CodexReasoningEffort }
   | { type: "run"; instruction: string }
   | { type: "steer"; instruction: string }
@@ -23,11 +33,13 @@ export type ParsedCommand =
   | { type: "approve" }
   | { type: "deny" }
   | { type: "abort" }
+  | { type: "audit"; viewId: string }
   | { type: "unknown"; raw: string };
 
 const MODES: PolicyMode[] = ["observe", "active", "full-access"];
 const REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 const AGENT_TEMPLATES: AgentTemplateName[] = ["python", "java", "nodejs"];
+const CAPABILITY_PACKS: CapabilityPackName[] = ["mail", "calendar", "repo", "jira", "ops", "docs"];
 const REASONING_RESET_ARGS = new Set(["default", "reset"]);
 
 function parseWithArg(text: string): [string, string] {
@@ -65,6 +77,13 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "help" };
     case "/repos":
       return { type: "repos" };
+    case "/capabilities":
+      if (!arg) {
+        return { type: "capabilities", pack: undefined };
+      }
+      return CAPABILITY_PACKS.includes(arg as CapabilityPackName)
+        ? { type: "capabilities", pack: arg as CapabilityPackName }
+        : { type: "unknown", raw: text };
     case "/spec":
       if (!arg) {
         return { type: "unknown", raw: text };
@@ -79,6 +98,18 @@ export function parseCommand(text: string): ParsedCommand {
       return MODES.includes(arg as PolicyMode)
         ? { type: "mode", mode: arg as PolicyMode }
         : { type: "unknown", raw: text };
+    case "/policy":
+      if (!arg) {
+        return { type: "policy", mode: undefined };
+      }
+      return MODES.includes(arg as PolicyMode)
+        ? { type: "policy", mode: arg as PolicyMode }
+        : { type: "unknown", raw: text };
+    case "/act":
+      if (!arg) {
+        return { type: "unknown", raw: text };
+      }
+      return parseActCommand(arg, text);
     case "/observe":
       return { type: "mode", mode: "observe" };
     case "/active":
@@ -109,9 +140,23 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "deny" };
     case "/abort":
       return { type: "abort" };
+    case "/audit":
+      return arg ? { type: "audit", viewId: arg } : { type: "unknown", raw: text };
     default:
       return { type: "unknown", raw: text };
   }
+}
+
+function parseActCommand(arg: string, raw: string): ParsedCommand {
+  const [capabilityRef, ...rest] = arg.split(/\s+/).filter(Boolean);
+  if (!capabilityRef || rest.length === 0) {
+    return { type: "unknown", raw };
+  }
+  return {
+    type: "act",
+    capabilityRef,
+    instruction: rest.join(" ")
+  };
 }
 
 function parseSpecCommand(arg: string, raw: string): ParsedCommand {
@@ -137,8 +182,23 @@ function parseSpecCommand(arg: string, raw: string): ParsedCommand {
     return rest.length === 0 ? { type: "spec", action: "show" } : { type: "unknown", raw };
   }
 
+  if (normalized === "clarify") {
+    if (rest.length < 1) {
+      return { type: "unknown", raw };
+    }
+    return {
+      type: "spec",
+      action: "clarify",
+      clarification: rest.join(" ")
+    };
+  }
+
   if (normalized === "status") {
     return rest.length === 0 ? { type: "spec", action: "status" } : { type: "unknown", raw };
+  }
+
+  if (normalized === "diff") {
+    return rest.length === 0 ? { type: "spec", action: "diff" } : { type: "unknown", raw };
   }
 
   if (normalized === "approve") {

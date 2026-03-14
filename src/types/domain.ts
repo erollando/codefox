@@ -3,6 +3,28 @@ export type RunKind = "run" | "steer";
 export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 export type TaskAttachmentKind = "image" | "document";
 export type AgentTemplateName = "python" | "java" | "nodejs";
+export type CapabilityPackName = "mail" | "calendar" | "repo" | "jira" | "ops" | "docs";
+export type CapabilityRiskLevel = "low" | "medium" | "high";
+export type CapabilityApprovalLevel =
+  | "auto-allowed"
+  | "approve-once"
+  | "approve-each-write"
+  | "local-presence-required"
+  | "prohibited-remotely";
+export type CapabilityExecutionContext = "cloud" | "local" | "either";
+export type CapabilityInputFieldType = "string" | "integer" | "boolean" | "enum" | "uri" | "path";
+export type SpecSectionName =
+  | "REQUEST"
+  | "GOAL"
+  | "OUTCOME"
+  | "CONSTRAINTS"
+  | "NON_GOALS"
+  | "CONTEXT"
+  | "ASSUMPTIONS"
+  | "QUESTIONS"
+  | "PLAN"
+  | "APPROVALS_REQUIRED"
+  | "DONE_WHEN";
 
 export interface TaskTokenUsage {
   total?: number;
@@ -52,6 +74,27 @@ export interface CodexConfig {
 
 export interface PolicyConfig {
   defaultMode: PolicyMode;
+  specPolicy?: SpecPolicyConfigOverride;
+}
+
+export interface SpecPolicyModeConfig {
+  requireApprovedSpecForRun: boolean;
+  allowForceApproval: boolean;
+  requiredSectionsForApproval: SpecSectionName[];
+}
+
+export interface SpecPolicyConfig {
+  observe: SpecPolicyModeConfig;
+  active: SpecPolicyModeConfig;
+  "full-access": SpecPolicyModeConfig;
+}
+
+export type SpecPolicyModeConfigOverride = Partial<SpecPolicyModeConfig>;
+
+export interface SpecPolicyConfigOverride {
+  observe?: SpecPolicyModeConfigOverride;
+  active?: SpecPolicyModeConfigOverride;
+  "full-access"?: SpecPolicyModeConfigOverride;
 }
 
 export interface SafetyConfig {
@@ -111,7 +154,17 @@ export interface ApprovalRequest {
   repoName: string;
   mode: PolicyMode;
   instruction: string;
+  capabilityRef?: string;
   createdAt: string;
+}
+
+export interface TaskCapabilityContext {
+  ref: string;
+  pack: CapabilityPackName;
+  action: string;
+  riskLevel: CapabilityRiskLevel;
+  approvalLevel: CapabilityApprovalLevel;
+  executionContext: CapabilityExecutionContext;
 }
 
 export interface TaskContext {
@@ -126,6 +179,7 @@ export interface TaskContext {
   resumeThreadId?: string;
   reasoningEffortOverride?: CodexReasoningEffort;
   attachments?: TaskAttachment[];
+  capability?: TaskCapabilityContext;
 }
 
 export interface TaskResult {

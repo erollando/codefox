@@ -5,6 +5,14 @@ describe("parseCommand", () => {
   it("parses slash commands", () => {
     expect(parseCommand("/help")).toEqual({ type: "help" });
     expect(parseCommand("/help@codefox_bot")).toEqual({ type: "help" });
+    expect(parseCommand("/capabilities")).toEqual({
+      type: "capabilities",
+      pack: undefined
+    });
+    expect(parseCommand("/capabilities repo")).toEqual({
+      type: "capabilities",
+      pack: "repo"
+    });
     expect(parseCommand("/spec template")).toEqual({
       type: "spec",
       action: "template"
@@ -14,6 +22,11 @@ describe("parseCommand", () => {
       action: "draft",
       intent: "add invoice csv export"
     });
+    expect(parseCommand("/spec clarify use current permissions model")).toEqual({
+      type: "spec",
+      action: "clarify",
+      clarification: "use current permissions model"
+    });
     expect(parseCommand("/spec show")).toEqual({
       type: "spec",
       action: "show"
@@ -21,6 +34,10 @@ describe("parseCommand", () => {
     expect(parseCommand("/spec status")).toEqual({
       type: "spec",
       action: "status"
+    });
+    expect(parseCommand("/spec diff")).toEqual({
+      type: "spec",
+      action: "diff"
     });
     expect(parseCommand("/spec approve")).toEqual({
       type: "spec",
@@ -106,6 +123,19 @@ describe("parseCommand", () => {
       type: "mode",
       mode: "active"
     });
+    expect(parseCommand("/policy")).toEqual({
+      type: "policy",
+      mode: undefined
+    });
+    expect(parseCommand("/policy full-access")).toEqual({
+      type: "policy",
+      mode: "full-access"
+    });
+    expect(parseCommand("/act repo.run_checks check failing tests")).toEqual({
+      type: "act",
+      capabilityRef: "repo.run_checks",
+      instruction: "check failing tests"
+    });
     expect(parseCommand("/observe")).toEqual({
       type: "mode",
       mode: "observe"
@@ -132,6 +162,10 @@ describe("parseCommand", () => {
     });
     expect(parseCommand("/close")).toEqual({ type: "close" });
     expect(parseCommand("/pending")).toEqual({ type: "pending" });
+    expect(parseCommand("/audit view_abcd1234")).toEqual({
+      type: "audit",
+      viewId: "view_abcd1234"
+    });
   });
 
   it("maps plain text to run", () => {
@@ -143,8 +177,14 @@ describe("parseCommand", () => {
 
   it("returns unknown for malformed inputs", () => {
     expect(parseCommand("/mode invalid").type).toBe("unknown");
+    expect(parseCommand("/capabilities unknown").type).toBe("unknown");
+    expect(parseCommand("/policy invalid").type).toBe("unknown");
+    expect(parseCommand("/act").type).toBe("unknown");
+    expect(parseCommand("/act repo.run_checks").type).toBe("unknown");
     expect(parseCommand("/spec").type).toBe("unknown");
     expect(parseCommand("/spec draft").type).toBe("unknown");
+    expect(parseCommand("/spec clarify").type).toBe("unknown");
+    expect(parseCommand("/spec diff now").type).toBe("unknown");
     expect(parseCommand("/spec approve now").type).toBe("unknown");
     expect(parseCommand("/spec clear now").type).toBe("unknown");
     expect(parseCommand("/repo").type).toBe("unknown");
@@ -160,6 +200,7 @@ describe("parseCommand", () => {
     expect(parseCommand("/repo remove").type).toBe("unknown");
     expect(parseCommand("/run").type).toBe("unknown");
     expect(parseCommand("/steer").type).toBe("unknown");
+    expect(parseCommand("/audit").type).toBe("unknown");
     expect(parseCommand("/codex-changelog").type).toBe("unknown");
     expect(parseCommand("/changelog").type).toBe("unknown");
     expect(parseCommand("/reasoning insane").type).toBe("unknown");

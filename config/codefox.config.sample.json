@@ -23,7 +23,17 @@
     "preflightTimeoutMs": 5000
   },
   "policy": {
-    "defaultMode": "observe"
+    "defaultMode": "observe",
+    "specPolicy": {
+      "active": {
+        "requiredSectionsForApproval": ["CONSTRAINTS", "DONE_WHEN"],
+        "allowForceApproval": false
+      },
+      "full-access": {
+        "requiredSectionsForApproval": ["CONSTRAINTS", "DONE_WHEN"],
+        "allowForceApproval": false
+      }
+    }
   },
   "repoInit": {
     "defaultParentPath": "/home/<your-user>/git"

@@ -437,6 +437,14 @@ function buildInstruction(context: TaskContext): string {
     context.systemGuidance && context.systemGuidance.length > 0
       ? ["System safety guidance:", ...context.systemGuidance]
       : [];
+  const capabilityBlock = context.capability
+    ? [
+        `capability_ref: ${context.capability.ref}`,
+        `capability_risk: ${context.capability.riskLevel}`,
+        `capability_approval: ${context.capability.approvalLevel}`,
+        `capability_execution_context: ${context.capability.executionContext}`
+      ]
+    : [];
 
   return [
     "You are Codex running through CodeFox.",
@@ -445,6 +453,7 @@ function buildInstruction(context: TaskContext): string {
     `request_id: ${context.requestId}`,
     `run_kind: ${context.runKind}`,
     ...(context.resumeThreadId ? [`resume_thread_id: ${context.resumeThreadId}`] : []),
+    ...capabilityBlock,
     ...guidanceBlock,
     ...buildAttachmentGuidance(context),
     "User instruction:",

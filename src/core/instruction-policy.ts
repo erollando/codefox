@@ -12,6 +12,12 @@ export interface InstructionPolicyConfig {
   forbiddenPathPatterns?: string[];
 }
 
+export interface InstructionPolicySummary {
+  blockedPatternCount: number;
+  allowedDownloadDomainCount: number;
+  forbiddenPathPatternCount: number;
+}
+
 export class InstructionPolicy {
   private readonly blockedPatterns: string[];
   private readonly allowedDomains: string[];
@@ -76,6 +82,14 @@ export class InstructionPolicy {
       `Never read, print, exfiltrate, or modify files/paths matching: ${preview}${suffix}.`,
       "If the user request appears to require these paths, refuse and report the limitation."
     ];
+  }
+
+  summary(): InstructionPolicySummary {
+    return {
+      blockedPatternCount: this.blockedPatterns.length,
+      allowedDownloadDomainCount: this.allowedDomains.length,
+      forbiddenPathPatternCount: this.forbiddenPathPatterns.length
+    };
   }
 
   private findBlockedPathPattern(instruction: string): string | undefined {

@@ -1,5 +1,8 @@
-import type { ApprovalRequest, CodexReasoningEffort, PolicyMode, RunKind, SessionState, TaskResult } from "../types/domain.js";
+import type { ApprovalRequest, CapabilityPackName, CodexReasoningEffort, PolicyMode, RunKind, SessionState, TaskResult } from "../types/domain.js";
 import { redactSensitive } from "./sanitize.js";
+import type { SpecModePolicy } from "./spec-policy.js";
+import type { InstructionPolicySummary } from "./instruction-policy.js";
+import type { CapabilityActionSpec, CapabilityPackSummary } from "./capability-registry.js";
 
 const TELEGRAM_OUTPUT_LIMIT = 1200;
 
@@ -15,10 +18,13 @@ export function formatHelp(): string {
     "CodeFox commands:",
     "/help",
     "/repos",
+    "/capabilities [mail|calendar|repo|jira|ops|docs]",
     "/spec template",
     "/spec draft <intent>",
+    "/spec clarify <note>",
     "/spec show",
     "/spec status",
+    "/spec diff",
     "/spec approve [force]",
     "/spec clear",
     "/repo <name>",
@@ -32,12 +38,82 @@ export function formatHelp(): string {
     "/repo info [name]",
     "/mode <observe|active|full-access>",
     "/observe | /active | /full-access",
+    "/policy [observe|active|full-access]",
+    "/act <pack.action> <instruction>",
     "/reasoning <minimal|low|medium|high|xhigh|default>",
     "/run <instruction>",
     "/steer <instruction>",
     "/close",
     "/status",
+    "/audit <view_id>",
     "/abort"
+  ].join("\n");
+}
+
+export function formatPolicySummary(input: {
+  currentMode: PolicyMode;
+  effectiveMode: PolicyMode;
+  requireAgentsForRuns: boolean;
+  instructionPolicy: InstructionPolicySummary;
+  specPolicies: SpecModePolicy[];
+}): string {
+  const lines = [
+    "Policy:",
+    `current mode: ${input.currentMode}`,
+    `effective mode: ${input.effectiveMode}`,
+    `agents guard required for mutating runs: ${input.requireAgentsForRuns ? "yes" : "no"}`,
+    `instruction policy: blockedPatterns=${input.instructionPolicy.blockedPatternCount}, allowedDomains=${input.instructionPolicy.allowedDownloadDomainCount}, forbiddenPathPatterns=${input.instructionPolicy.forbiddenPathPatternCount}`,
+    "spec policy by mode:"
+  ];
+
+  for (const policy of input.specPolicies) {
+    lines.push(
+      `- ${policy.mode}: requireApprovedSpecForRun=${policy.requireApprovedSpecForRun ? "yes" : "no"}, allowForceApproval=${policy.allowForceApproval ? "yes" : "no"}, requiredSections=${policy.requiredSectionsForApproval.length > 0 ? policy.requiredSectionsForApproval.join(", ") : "(none)"}`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+export function formatCapabilitiesSummary(input: {
+  mode: PolicyMode;
+  pack?: CapabilityPackName;
+  packs: CapabilityPackSummary[];
+  actions: CapabilityActionSpec[];
+}): string {
+  if (!input.pack) {
+    return [
+      `Capabilities (mode: ${input.mode}):`,
+      ...input.packs.map(
+        (pack) =>
+          `- ${pack.pack}: actions=${pack.actionCount}, runnable=${pack.runnableInModeCount}`
+      ),
+      "Use /capabilities <pack> for action details."
+    ].join("\n");
+  }
+
+  return [
+    `Capabilities pack '${input.pack}' (mode: ${input.mode}):`,
+    ...(input.actions.length > 0
+      ? input.actions.flatMap((action) => {
+          const inputFields =
+            action.inputSchema.length > 0
+              ? action.inputSchema.map((field) => `${field.name}${field.required ? "*" : ""}:${field.type}`).join(", ")
+              : "(none)";
+          const auditFields =
+            action.auditPayloadFields.length > 0
+              ? action.auditPayloadFields.map((field) => field.key).join(", ")
+              : "(none)";
+          const rollback =
+            action.rollbackHints.length > 0 ? action.rollbackHints.join(" | ") : "(none)";
+          return [
+            `- ${action.action}: risk=${action.riskLevel}, approval=${action.approvalLevel}, context=${action.executionContext}, mutates=${action.mutatesState ? "yes" : "no"}`,
+            `  inputs: ${inputFields}`,
+            `  audit: ${auditFields}`,
+            `  rollback: ${rollback}`
+          ];
+        })
+      : ["- (no actions defined)"])
   ].join("\n");
 }
 
@@ -67,7 +143,8 @@ export function formatMode(mode: PolicyMode): string {
 export function formatSessionStatus(
   session: SessionState,
   codexSessionIdleMinutes: number,
-  codexDefaultReasoningEffort?: CodexReasoningEffort
+  codexDefaultReasoningEffort?: CodexReasoningEffort,
+  specModePolicy?: SpecModePolicy
 ): string {
   const codexSession =
     session.codexThreadId && session.codexLastActiveAt
@@ -94,6 +171,19 @@ export function formatSessionStatus(
     if (session.lastRunAt) {
       lines.push(`available tokens as of: ${session.lastRunAt}`);
     }
+  }
+
+  if (specModePolicy) {
+    lines.push(`spec policy: mode=${specModePolicy.mode}`);
+    lines.push(`spec requires approved for /run: ${specModePolicy.requireApprovedSpecForRun ? "yes" : "no"}`);
+    lines.push(`spec force approval: ${specModePolicy.allowForceApproval ? "allowed" : "blocked"}`);
+    lines.push(
+      `spec required sections for approval: ${
+        specModePolicy.requiredSectionsForApproval.length > 0
+          ? specModePolicy.requiredSectionsForApproval.join(", ")
+          : "(none)"
+      }`
+    );
   }
 
   return lines.join("\n");
@@ -168,9 +258,10 @@ export function formatApprovalPending(
   details: {
     requesterUserId: number;
     createdAt: string;
+    capabilityRef?: string;
   }
 ): string {
-  return [
+  const lines = [
     `Approval required for request ${requestId}.`,
     `repo: ${repo}`,
     `mode: ${mode}`,
@@ -178,11 +269,15 @@ export function formatApprovalPending(
     `created at: ${details.createdAt}`,
     `instruction: ${truncateForTelegram(redactSensitive(instructionPreview), 200)}`,
     "Use /approve or /deny."
-  ].join("\n");
+  ];
+  if (details.capabilityRef) {
+    lines.splice(5, 0, `capability: ${details.capabilityRef}`);
+  }
+  return lines.join("\n");
 }
 
 export function formatPendingApproval(approval: ApprovalRequest): string {
-  return [
+  const lines = [
     `Pending approval: ${approval.id}`,
     `repo: ${approval.repoName}`,
     `mode: ${approval.mode}`,
@@ -190,13 +285,49 @@ export function formatPendingApproval(approval: ApprovalRequest): string {
     `created at: ${approval.createdAt}`,
     `instruction: ${truncateForTelegram(redactSensitive(approval.instruction), 200)}`,
     "Use /approve or /deny."
-  ].join("\n");
+  ];
+  if (approval.capabilityRef) {
+    lines.splice(5, 0, `capability: ${approval.capabilityRef}`);
+  }
+  return lines.join("\n");
 }
 
 export function formatError(message: string): string {
   return `Error: ${message}`;
 }
 
+export function formatAuditLookup(viewId: string, event?: Record<string, unknown>): string {
+  if (!event) {
+    return `No audit event found for view id '${viewId}'.`;
+  }
+
+  const type = typeof event.type === "string" ? event.type : "(unknown)";
+  const timestamp = typeof event.timestamp === "string" ? event.timestamp : "(unknown)";
+  const detail = Object.entries(event)
+    .filter(([key]) => key !== "type" && key !== "timestamp")
+    .slice(0, 8)
+    .map(([key, value]) => `${key}=${safeAuditValue(value)}`)
+    .join(", ");
+
+  return [
+    "Audit event:",
+    `view id: ${viewId}`,
+    `type: ${type}`,
+    `timestamp: ${timestamp}`,
+    `details: ${detail || "(none)"}`
+  ].join("\n");
+}
+
 function formatTokenCount(value: number): string {
   return value.toLocaleString("en-US");
+}
+
+function safeAuditValue(value: unknown): string {
+  if (value === null || typeof value === "undefined") {
+    return String(value);
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return truncateForTelegram(JSON.stringify(value), 160);
 }
