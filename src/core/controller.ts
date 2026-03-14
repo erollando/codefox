@@ -677,7 +677,10 @@ export class CodeFoxController {
       case "pending": {
         const pending = this.deps.approvals.get(chatId);
         if (!pending) {
-          await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+          await this.deps.telegram.sendMessage(
+            chatId,
+            "No pending approval.\nNext: run /status, or start work with plain text or /run <instruction>."
+          );
           return;
         }
         await this.deps.telegram.sendMessage(chatId, formatPendingApproval(pending));
@@ -712,8 +715,8 @@ export class CodeFoxController {
         return;
       }
       case "act": {
-        if (!session.selectedRepo) {
-          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+        const selectedRepo = await this.ensureRepoSelectedForExecution(chatId, userId);
+        if (!selectedRepo) {
           return;
         }
         const capabilityAction = this.capabilityRegistry.resolveAction(command.capabilityRef);
@@ -741,7 +744,7 @@ export class CodeFoxController {
             runKind: "run",
             admissionSource: "act",
             instruction: command.instruction,
-            repoName: session.selectedRepo,
+            repoName: selectedRepo,
             mode: session.mode,
             chatId,
             userId,
@@ -759,8 +762,13 @@ export class CodeFoxController {
           await this.handleSteer(chatId, userId, command.instruction, attachments);
           return;
         }
-        if (!session.selectedRepo) {
-          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+        if (!isExplicitRunCommand && this.executionAdmissionLock.has(chatId)) {
+          const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
+          await this.queueSteerWhileAdmission(chatId, userId, command.instruction, attachments);
+          return;
+        }
+        const selectedRepo = await this.ensureRepoSelectedForExecution(chatId, userId);
+        if (!selectedRepo) {
           return;
         }
         const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
@@ -770,7 +778,7 @@ export class CodeFoxController {
             runKind: "run",
             admissionSource: "run",
             instruction: command.instruction,
-            repoName: session.selectedRepo,
+            repoName: selectedRepo,
             mode: session.mode,
             chatId,
             userId,
@@ -787,7 +795,10 @@ export class CodeFoxController {
         return;
       }
       default: {
-        await this.deps.telegram.sendMessage(chatId, "Unknown command. Use /help.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "Unknown command.\nNext: use /help to see available commands."
+        );
       }
     }
   }
@@ -1024,7 +1035,10 @@ export class CodeFoxController {
     }
 
     if (!session.codexThreadId) {
-      await this.deps.telegram.sendMessage(chatId, "No active Codex session to close.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No active Codex session to close.\nNext: use /status to inspect session state."
+      );
       return;
     }
 
@@ -1043,7 +1057,10 @@ export class CodeFoxController {
   private async handleApprove(chatId: number, userId: number): Promise<void> {
     const pending = this.deps.approvals.get(chatId);
     if (!pending) {
-      await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No pending approval.\nNext: use /pending to inspect approval status, or /status for session context."
+      );
       return;
     }
     if (pending.userId !== userId) {
@@ -1070,7 +1087,10 @@ export class CodeFoxController {
     if (pending.externalApproval) {
       const decisionSink = this.deps.externalApprovalDecision;
       if (!decisionSink) {
-        await this.deps.telegram.sendMessage(chatId, "External approval bridge is not configured.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval bridge is not configured.\nNext: complete this request from Telegram-only flow or fix relay configuration."
+        );
         return;
       }
       const decided = await decisionSink({
@@ -1081,7 +1101,10 @@ export class CodeFoxController {
         userId
       });
       if (!decided) {
-        await this.deps.telegram.sendMessage(chatId, "External approval request is stale or unknown.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval request is stale or unknown.\nNext: ask the external client to re-send the approval request."
+        );
         return;
       }
       this.deps.approvals.delete(chatId);
@@ -1112,11 +1135,12 @@ export class CodeFoxController {
       });
       await this.deps.telegram.sendMessage(
         chatId,
-        `Capability policy blocked run: ${
+        [
           pending.capabilityRef
-            ? `Unknown capability action '${pending.capabilityRef}'.`
-            : "Select a typed action with /act <pack.action> <instruction>."
-        }`
+            ? `Capability policy blocked run: Unknown capability action '${pending.capabilityRef}'.`
+            : "Capability policy blocked run: pending approval requires a capability action but none was attached.",
+          "Next: retry the original request, or run /act <pack.action> <instruction>."
+        ].join("\n")
       );
       return;
     }
@@ -1150,7 +1174,10 @@ export class CodeFoxController {
   private async handleDeny(chatId: number, userId: number): Promise<void> {
     const pending = this.deps.approvals.get(chatId);
     if (!pending) {
-      await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No pending approval.\nNext: use /pending to inspect approval status, or /status for session context."
+      );
       return;
     }
     if (pending.userId !== userId) {
@@ -1168,7 +1195,10 @@ export class CodeFoxController {
     if (pending.externalApproval) {
       const decisionSink = this.deps.externalApprovalDecision;
       if (!decisionSink) {
-        await this.deps.telegram.sendMessage(chatId, "External approval bridge is not configured.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval bridge is not configured.\nNext: complete this request from Telegram-only flow or fix relay configuration."
+        );
         return;
       }
       const decided = await decisionSink({
@@ -1179,7 +1209,10 @@ export class CodeFoxController {
         userId
       });
       if (!decided) {
-        await this.deps.telegram.sendMessage(chatId, "External approval request is stale or unknown.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval request is stale or unknown.\nNext: ask the external client to re-send the approval request."
+        );
         return;
       }
       this.deps.approvals.delete(chatId);
@@ -1338,14 +1371,31 @@ export class CodeFoxController {
     }
 
     const nextWork = command.workId
-      ? outstanding.find((work) => work.id === command.workId)
+      ? resolveOutstandingHandoffWork(outstanding, command.workId)
       : outstanding[0];
     if (!nextWork) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Work item '${command.workId}' is not available.\nNext: use /handoff show to list valid work ids.`
+        [
+          `Work item '${command.workId}' is not available.`,
+          "Next: use /continue <number> or /continue <work-id>.",
+          `Choices:\n${renderOutstandingHandoffChoices(outstanding)}`
+        ].join("\n"),
+        { commandButtons: buildHandoffSelectionCommandButtons(state) }
       );
       return;
+    }
+
+    if (!command.workId && outstanding.length > 1) {
+      const selectedIndex = outstanding.findIndex((work) => work.id === nextWork.id) + 1;
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          `Multiple handoff items are pending. Defaulting to ${selectedIndex}: ${nextWork.id} - ${nextWork.summary}`,
+          "Next: use /continue <number> or /continue <work-id> to choose a different item."
+        ].join("\n"),
+        { commandButtons: buildHandoffSelectionCommandButtons(state) }
+      );
     }
 
     const capabilityAction = nextWork.requestedCapabilityRef
@@ -1405,12 +1455,18 @@ export class CodeFoxController {
   private async handleAbort(chatId: number, userId: number): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     if (!session.activeRequestId) {
-      await this.deps.telegram.sendMessage(chatId, "No active request.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No active request.\nNext: start work with plain text or /run <instruction>."
+      );
       return;
     }
     const abort = this.activeAborts.get(session.activeRequestId);
     if (!abort) {
-      await this.deps.telegram.sendMessage(chatId, "Active request cannot be aborted right now.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Active request cannot be aborted right now.\nNext: use /status and retry /abort in a moment."
+      );
       return;
     }
 
@@ -1433,11 +1489,18 @@ export class CodeFoxController {
   ): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     if (!session.selectedRepo) {
-      await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No repo selected for steer.\nNext: use /repo <name> first."
+      );
       return;
     }
 
     if (!session.activeRequestId) {
+      if (this.executionAdmissionLock.has(chatId)) {
+        await this.queueSteerWhileAdmission(chatId, userId, instruction, attachments);
+        return;
+      }
       await this.deps.telegram.sendMessage(
         chatId,
         "No active run to steer.\nNext: start a run with plain text or /run <instruction>."
@@ -1477,6 +1540,84 @@ export class CodeFoxController {
       chatId,
       `Additional steer captured (${existing.length} pending). Instructions will be merged into the next resume.`
     );
+  }
+
+  private async queueSteerWhileAdmission(
+    chatId: number,
+    userId: number,
+    instruction: string,
+    attachments: TaskAttachment[]
+  ): Promise<void> {
+    const existing = this.pendingSteers.get(chatId) ?? [];
+    existing.push({ userId, instruction, createdAt: new Date().toISOString(), attachments });
+    this.pendingSteers.set(chatId, existing);
+
+    const source = this.executionAdmissionSource.get(chatId);
+    const sourceLabel = source ? formatAdmissionSource(source).toLowerCase() : "request";
+    await this.deps.audit.log({
+      type: "steer_queued_waiting_admission",
+      chatId,
+      userId,
+      steerCount: existing.length,
+      source,
+      instructionPreview: toAuditPreview(instruction)
+    });
+    await this.deps.telegram.sendMessage(
+      chatId,
+      `Queued follow-up (${existing.length}) while ${sourceLabel} is being prepared.\nNext: wait for run start; CodeFox will apply it automatically.`
+    );
+  }
+
+  private async ensureRepoSelectedForExecution(chatId: number, userId: number): Promise<string | undefined> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (session.selectedRepo) {
+      return session.selectedRepo;
+    }
+
+    const repos = this.deps.repos.list();
+    if (repos.length === 0) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No repo is configured.\nNext: add one with /repo add <name> <absolute-path>, then retry."
+      );
+      return undefined;
+    }
+
+    const preferredRepo = selectPreferredRepoForChat(session.chatId, repos.map((entry) => entry.name), this.deps.sessions.list());
+    if (!preferredRepo) {
+      await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+      return undefined;
+    }
+
+    this.deps.sessions.setRepo(chatId, preferredRepo);
+    await this.deps.audit.log({
+      type: "repo_auto_selected_for_run",
+      chatId,
+      userId,
+      repo: preferredRepo
+    });
+
+    if (repos.length === 1) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Auto-selected repo '${preferredRepo}' (only configured repo).`
+      );
+      return preferredRepo;
+    }
+
+    const options = repos
+      .slice(0, 5)
+      .map((repo, index) => `${index + 1}. /repo ${repo.name}`)
+      .join("\n");
+    await this.deps.telegram.sendMessage(
+      chatId,
+      [
+        `No repo was selected. Defaulted to '${preferredRepo}' from recent context.`,
+        "Use /repo <name> to switch.",
+        `Options:\n${options}`
+      ].join("\n")
+    );
+    return preferredRepo;
   }
 
   private async handleRepoAdd(chatId: number, userId: number, repoName: string, repoPath: string): Promise<void> {
@@ -2284,6 +2425,7 @@ export class CodeFoxController {
       });
 
       this.activeAborts.set(requestId, running.abort);
+      await this.dispatchQueuedSteersOnRunStart(chatId, requestId);
 
       const result = await running.result;
       runResultResumeRejected = Boolean(result.resumeRejected);
@@ -2358,6 +2500,30 @@ export class CodeFoxController {
         this.pendingSteers.delete(chatId);
       }
     }
+  }
+
+  private async dispatchQueuedSteersOnRunStart(chatId: number, requestId: string): Promise<void> {
+    const queued = this.pendingSteers.get(chatId);
+    if (!queued || queued.length === 0) {
+      return;
+    }
+
+    await this.deps.audit.log({
+      type: "steer_dispatch_requested_on_start",
+      chatId,
+      requestId,
+      steerCount: queued.length
+    });
+    await this.deps.telegram.sendMessage(
+      chatId,
+      `Applying ${queued.length} queued follow-up update(s) on ${requestId}.`
+    );
+
+    const abort = this.activeAborts.get(requestId);
+    if (!abort) {
+      return;
+    }
+    abort();
   }
 
   private async resolveResumeThreadId(chatId: number, userId: number): Promise<string | undefined> {
@@ -2472,20 +2638,38 @@ export class CodeFoxController {
   private async sendAdmissionBusyMessage(chatId: number): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     const source = this.executionAdmissionSource.get(chatId);
+
+    if (session.activeRequestId) {
+      if (source === "handoff_continue") {
+        await this.deps.telegram.sendMessage(
+          chatId,
+          `Handoff continuation run ${session.activeRequestId} is active.\nNext: send plain text to steer, use /status for context, or /abort to stop.`,
+          { commandButtons: ["/status", "/abort"] }
+        );
+        return;
+      }
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Run ${session.activeRequestId} is active.\nNext: send plain text to steer, use /status for context, or /abort to stop.`,
+        { commandButtons: ["/status", "/abort"] }
+      );
+      return;
+    }
+
     if (source === "handoff_continue") {
       await this.deps.telegram.sendMessage(
         chatId,
-        "Handoff continuation is being scheduled. Next: wait for the continuation update, or check /handoff status.",
+        "Handoff continuation is being prepared.\nNext: wait for the continuation update, or check /handoff status.",
         { commandButtons: ["/handoff status", "/status"] }
       );
       return;
     }
 
-    if (session.activeRequestId) {
+    if (source) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Run ${session.activeRequestId} is active.\nNext: send plain text to steer, use /status for context, or /abort to stop.`,
-        { commandButtons: ["/status", "/abort"] }
+        `${formatAdmissionSource(source)} is being prepared for this chat.\nNext: wait for the update, or use /status.`,
+        { commandButtons: ["/status"] }
       );
       return;
     }
@@ -2643,6 +2827,48 @@ function trimTerminalPunctuation(input: string): string {
   return input.trim().replace(/[.!\s]+$/g, "");
 }
 
+function formatAdmissionSource(source: AdmissionSource): string {
+  switch (source) {
+    case "run":
+      return "Run request";
+    case "act":
+      return "Typed action request";
+    case "handoff_continue":
+      return "Handoff continuation";
+    case "steer":
+      return "Steer update";
+    default:
+      return "Request";
+  }
+}
+
+function selectPreferredRepoForChat(
+  chatId: number,
+  availableRepoNames: string[],
+  sessions: Array<{ chatId: number; selectedRepo?: string; updatedAt: string }>
+): string | undefined {
+  if (availableRepoNames.length === 1) {
+    return availableRepoNames[0];
+  }
+
+  const available = new Set(availableRepoNames);
+  const currentChatRecent = [...sessions]
+    .filter((session) => session.chatId === chatId && session.selectedRepo && available.has(session.selectedRepo))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (currentChatRecent?.selectedRepo) {
+    return currentChatRecent.selectedRepo;
+  }
+
+  const globalRecent = [...sessions]
+    .filter((session) => session.selectedRepo && available.has(session.selectedRepo))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (globalRecent?.selectedRepo) {
+    return globalRecent.selectedRepo;
+  }
+
+  return availableRepoNames[0];
+}
+
 function formatExternalHandoffStatus(state: ExternalHandoffState): string {
   const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
   const nextWork = outstanding[0];
@@ -2669,10 +2895,10 @@ function formatExternalHandoffDetail(state: ExternalHandoffState): string {
     "remaining work:"
   ];
 
-  for (const work of state.bundle.remainingWork) {
+  for (const [index, work] of state.bundle.remainingWork.entries()) {
     const status = state.continuedWorkIds.includes(work.id) ? "continued" : "pending";
     lines.push(
-      `- ${work.id} [${status}] ${work.summary}${
+      `${index + 1}. ${work.id} [${status}] ${work.summary}${
         work.requestedCapabilityRef ? ` (capability=${work.requestedCapabilityRef})` : ""
       }`
     );
@@ -2701,6 +2927,50 @@ function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
     commands.push("/handoff status");
   }
   return commands;
+}
+
+function buildHandoffSelectionCommandButtons(state: ExternalHandoffState): string[] {
+  const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
+  const commands = ["/handoff show", "/continue"];
+  if (outstanding[1]) {
+    commands.push(`/continue ${outstanding[1].id}`);
+  } else if (outstanding[0]) {
+    commands.push(`/continue ${outstanding[0].id}`);
+  }
+  return commands;
+}
+
+function resolveOutstandingHandoffWork(
+  outstanding: Array<{ id: string; summary: string; requestedCapabilityRef?: string }>,
+  selector: string
+): { id: string; summary: string; requestedCapabilityRef?: string } | undefined {
+  const trimmed = selector.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const byId = outstanding.find((work) => work.id === trimmed);
+  if (byId) {
+    return byId;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    const index = Number(trimmed);
+    if (Number.isSafeInteger(index) && index > 0 && index <= outstanding.length) {
+      return outstanding[index - 1];
+    }
+  }
+
+  return undefined;
+}
+
+function renderOutstandingHandoffChoices(
+  outstanding: Array<{ id: string; summary: string; requestedCapabilityRef?: string }>
+): string {
+  return outstanding
+    .slice(0, 8)
+    .map((work, index) => `${index + 1}. /continue ${index + 1} -> ${work.id} - ${work.summary}`)
+    .join("\n");
 }
 
 function parseRepoFromExternalSessionId(sessionId: string | undefined): string | undefined {

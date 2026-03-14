@@ -1,9 +1,62 @@
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseLocalCliArgs, runLocalCli } from "../src/core/local-cli.js";
+
+function isLoopbackPermissionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = Reflect.get(error, "code");
+  return code === "EPERM" || code === "EACCES";
+}
+
+async function listenOnLoopbackOrSkip(server: Server): Promise<number | undefined> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(0, "127.0.0.1");
+    });
+  } catch (error) {
+    if (isLoopbackPermissionError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const relayAddress = server.address();
+  if (!relayAddress || typeof relayAddress === "string") {
+    throw new Error("Expected relay server to provide numeric host/port address.");
+  }
+  return relayAddress.port;
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (!error) {
+        resolve();
+        return;
+      }
+      if (error.message.includes("Server is not running")) {
+        resolve();
+        return;
+      }
+      reject(error);
+    });
+  });
+}
 
 describe("local CLI", () => {
   it("parses supported commands and config override", () => {
@@ -630,11 +683,10 @@ describe("local CLI", () => {
       });
     });
 
-    await new Promise<void>((resolve) => {
-      relayServer.listen(0, "127.0.0.1", () => resolve());
-    });
-    const relayAddress = relayServer.address();
-    const relayPort = typeof relayAddress === "object" && relayAddress ? relayAddress.port : 0;
+    const relayPort = await listenOnLoopbackOrSkip(relayServer);
+    if (typeof relayPort === "undefined") {
+      return;
+    }
 
     await writeFile(
       configPath,
@@ -776,9 +828,7 @@ describe("local CLI", () => {
         output
       );
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        relayServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(relayServer);
       if (typeof previousToken === "undefined") {
         delete process.env.TELEGRAM_BOT_TOKEN;
       } else {
@@ -891,9 +941,10 @@ describe("local CLI", () => {
       });
     });
 
-    await new Promise<void>((resolve) => relayServer.listen(0, "127.0.0.1", () => resolve()));
-    const relayAddress = relayServer.address();
-    const relayPort = typeof relayAddress === "object" && relayAddress ? relayAddress.port : 0;
+    const relayPort = await listenOnLoopbackOrSkip(relayServer);
+    if (typeof relayPort === "undefined") {
+      return;
+    }
 
     await writeFile(
       configPath,
@@ -995,7 +1046,7 @@ describe("local CLI", () => {
     try {
       code = await runLocalCli(["--config", configPath, "handoff"], output);
     } finally {
-      await new Promise<void>((resolve, reject) => relayServer.close((error) => (error ? reject(error) : resolve())));
+      await closeServer(relayServer);
       if (typeof previousToken === "undefined") {
         delete process.env.TELEGRAM_BOT_TOKEN;
       } else {
@@ -1093,9 +1144,10 @@ describe("local CLI", () => {
       });
     });
 
-    await new Promise<void>((resolve) => relayServer.listen(0, "127.0.0.1", () => resolve()));
-    const relayAddress = relayServer.address();
-    const relayPort = typeof relayAddress === "object" && relayAddress ? relayAddress.port : 0;
+    const relayPort = await listenOnLoopbackOrSkip(relayServer);
+    if (typeof relayPort === "undefined") {
+      return;
+    }
 
     await writeFile(
       configPath,
@@ -1189,7 +1241,7 @@ describe("local CLI", () => {
     try {
       code = await runLocalCli(["--config", configPath, "handoff", "100"], output);
     } finally {
-      await new Promise<void>((resolve, reject) => relayServer.close((error) => (error ? reject(error) : resolve())));
+      await closeServer(relayServer);
       if (typeof previousToken === "undefined") {
         delete process.env.TELEGRAM_BOT_TOKEN;
       } else {

@@ -178,6 +178,12 @@ describe("parseCommand", () => {
       action: "continue",
       workId: "rw-1"
     });
+    expect(parseCommand("/resume")).toEqual({ type: "handoff", action: "continue" });
+    expect(parseCommand("/resume 2")).toEqual({
+      type: "handoff",
+      action: "continue",
+      workId: "2"
+    });
     expect(parseCommand("/handoff clear")).toEqual({ type: "handoff", action: "clear" });
     expect(parseCommand("/audit view_abcd1234")).toEqual({
       type: "audit",
@@ -219,6 +225,7 @@ describe("parseCommand", () => {
     expect(parseCommand("/steer").type).toBe("unknown");
     expect(parseCommand("/handoff continue rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/continue rw-1 extra").type).toBe("unknown");
+    expect(parseCommand("/resume rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/handoff invalid").type).toBe("unknown");
     expect(parseCommand("/audit").type).toBe("unknown");
     expect(parseCommand("/codex-changelog").type).toBe("unknown");

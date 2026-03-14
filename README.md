@@ -89,7 +89,8 @@ Main commands:
 - `/steer <instruction>`
 - `/status`
 - `/details`
-- `/continue [work-id]`
+- `/continue [work-id|index]`
+- `/resume [work-id|index]`
 - `/abort`
 - `/close`
 
@@ -123,14 +124,17 @@ Repo management:
 
 Handoff and audit:
 
-- `/continue [work-id]` (shortcut for `/handoff continue [work-id]`)
+- `/continue [work-id|index]` (shortcut for `/handoff continue [work-id|index]`)
+- `/resume [work-id|index]` (alias of `/continue`)
 - `/handoff [status|show|continue [work-id]|clear]`
 - `/audit <view_id>`
 
 Notes:
 
 - Plain text (non-slash) input is treated as `/run <text>`.
+- If no repo is selected, CodeFox auto-selects a default repo (single configured repo, otherwise most recent context) and reports the choice.
 - While a run is active, plain text is treated as steer guidance (same behavior as `/steer <text>`).
+- While a run is being prepared, plain text follow-ups are queued and auto-applied when the run starts.
 - Untyped `/run` is allowed in every mode; `/act` remains available when you want explicit typed capability routing.
 - Run start/progress replies are concise by default; use `/details` for technical context.
 
@@ -194,7 +198,7 @@ Stage 2: continuation handoff
 - After external execution, client submits a typed handoff bundle.
 - CodeFox validates spec revision linkage before storing continuation state.
 - User continues via `/handoff show` and `/handoff continue [work-id]`.
-- User can use `/continue [work-id]` as a shorter continuation command.
+- User can use `/continue [work-id|index]` (or `/resume ...`) as shorter continuation commands.
 - Telegram handoff messages include one-tap command buttons for show/continue.
 
 External relay HTTP adapter (optional):
@@ -211,14 +215,18 @@ External relay HTTP adapter (optional):
 Only one active lease is allowed per external session id; clients must revoke before re-binding.
 `GET /health` is intentionally unauthenticated for simple local liveness checks.
 
-## Local CLI (Read/Operate Sessions)
+## Local CLI (Primary: Chat Shell)
 
 ```bash
+npm run cli -- --config ./config/codefox.config.json
+# optional: start directly on a specific chat
+npm run cli -- --config ./config/codefox.config.json 100
+
+# one-shot operational utilities (advanced)
 npm run local:cli -- sessions
 npm run local:cli -- approvals
 npm run local:cli -- specs
 npm run local:cli -- session 100
-npm run chat:cli -- --config ./config/codefox.config.json
 npm run local:cli -- send 100 "/status"
 npm run local:cli -- approve 100
 npm run local:cli -- deny 100
@@ -229,9 +237,11 @@ npm run local:cli -- continue 100 rw-1
 npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoint implemented"
 ```
 
+`npm run cli` starts the persistent local REPL (compat alias: `npm run chat:cli`) so you can work in a chat-like loop without repeating `chatId`.
+Inside the REPL, `:help` shows local shortcuts (`:status`, `:details`, `:approve`, `:deny`, `:handoff`, `:continue [workId]`, `:chat [chatId]`, `:exit`).
+Any non-shortcut line is queued as-is (plain text or Telegram slash command).
 `send` writes a command envelope into `<state-dir>/local-command-queue/inbox`.
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
-`chat:cli` starts a persistent chat-like shell so you can send commands/questions without repeating `chatId` every time.
 `approve`, `deny`, `status`, `handoff-status`, `handoff-show`, and `continue` are shortcut local CLI commands that enqueue `/approve`, `/deny`, `/status`, `/handoff status`, `/handoff show`, and `/continue [work-id]` into the same controller path; when `chatId` is omitted, CodeFox auto-selects the default/single/most-recent chat.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
 When multiple active routes exist, `handoff:cli` shows them clearly and lets you choose; Enter keeps the most recently used route.

@@ -148,6 +148,11 @@ export function parseCommand(text: string): ParsedCommand {
         return { type: "handoff", action: "continue" };
       }
       return parseContinueAlias(arg, text);
+    case "/resume":
+      if (!arg) {
+        return { type: "handoff", action: "continue" };
+      }
+      return parseContinueAlias(arg, text);
     case "/approve":
       return { type: "approve" };
     case "/deny":

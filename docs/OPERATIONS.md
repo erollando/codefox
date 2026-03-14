@@ -67,12 +67,15 @@ npm run verify
 
 - `/status` to inspect selected repo, mode, active request, and codex session id
 - `/details` for expanded technical context (session + handoff + approval pointers)
-- `/continue [work-id]` as shorthand for `/handoff continue [work-id]`
+- `/continue [work-id|index]` as shorthand for `/handoff continue [work-id|index]`
+- `/resume [work-id|index]` as alias of `/continue`
 - `/handoff [status|show|continue [work-id]|clear]` to inspect and continue external handoff bundles
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
+- If no repo is selected, CodeFox auto-selects a default repo (single configured repo or most-recent context) and reports it.
 - Plain text while a run is active is treated as steer guidance automatically.
+- Plain text while a run is being prepared is queued as follow-up and auto-applied when the run starts.
 - Run updates are concise by default; ask `/details` when you need full technical context.
 - `/close` to close stored Codex session thread explicitly
 - `/abort` to stop active Codex execution
@@ -105,7 +108,19 @@ npm run verify
 ## External Relay (Optional)
 
 - Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
-- For a persistent chat-like local terminal workflow, use `npm run chat:cli -- --config <path> [chatId]`.
+- Primary local interface is the chat REPL: `npm run cli -- --config <path> [chatId]`.
+- Compatibility alias: `npm run chat:cli -- --config <path> [chatId]`.
+- REPL local shortcuts:
+  - `:help`
+  - `:chat [chatId]`
+  - `:status`
+  - `:details`
+  - `:approve`
+  - `:deny`
+  - `:handoff`
+  - `:continue [workId]`
+  - `:exit`
+  - Any non-shortcut line is forwarded unchanged (plain text or slash command).
 - For shortcut local control actions, use:
   - `npm run local:cli -- [--config <path>] approve [chatId]`
   - `npm run local:cli -- [--config <path>] deny [chatId]`
