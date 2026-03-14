@@ -759,6 +759,11 @@ export class CodeFoxController {
           await this.handleSteer(chatId, userId, command.instruction, attachments);
           return;
         }
+        if (!isExplicitRunCommand && this.executionAdmissionLock.has(chatId)) {
+          const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
+          await this.queueSteerWhileAdmission(chatId, userId, command.instruction, attachments);
+          return;
+        }
         if (!session.selectedRepo) {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
@@ -1439,6 +1444,10 @@ export class CodeFoxController {
     }
 
     if (!session.activeRequestId) {
+      if (this.executionAdmissionLock.has(chatId)) {
+        await this.queueSteerWhileAdmission(chatId, userId, instruction, attachments);
+        return;
+      }
       await this.deps.telegram.sendMessage(
         chatId,
         "No active run to steer.\nNext: start a run with plain text or /run <instruction>."
@@ -1477,6 +1486,32 @@ export class CodeFoxController {
     await this.deps.telegram.sendMessage(
       chatId,
       `Additional steer captured (${existing.length} pending). Instructions will be merged into the next resume.`
+    );
+  }
+
+  private async queueSteerWhileAdmission(
+    chatId: number,
+    userId: number,
+    instruction: string,
+    attachments: TaskAttachment[]
+  ): Promise<void> {
+    const existing = this.pendingSteers.get(chatId) ?? [];
+    existing.push({ userId, instruction, createdAt: new Date().toISOString(), attachments });
+    this.pendingSteers.set(chatId, existing);
+
+    const source = this.executionAdmissionSource.get(chatId);
+    const sourceLabel = source ? formatAdmissionSource(source).toLowerCase() : "request";
+    await this.deps.audit.log({
+      type: "steer_queued_waiting_admission",
+      chatId,
+      userId,
+      steerCount: existing.length,
+      source,
+      instructionPreview: toAuditPreview(instruction)
+    });
+    await this.deps.telegram.sendMessage(
+      chatId,
+      `Queued follow-up (${existing.length}) while ${sourceLabel} is being prepared.\nNext: wait for run start; CodeFox will apply it automatically.`
     );
   }
 
@@ -2285,6 +2320,7 @@ export class CodeFoxController {
       });
 
       this.activeAborts.set(requestId, running.abort);
+      await this.dispatchQueuedSteersOnRunStart(chatId, requestId);
 
       const result = await running.result;
       runResultResumeRejected = Boolean(result.resumeRejected);
@@ -2359,6 +2395,30 @@ export class CodeFoxController {
         this.pendingSteers.delete(chatId);
       }
     }
+  }
+
+  private async dispatchQueuedSteersOnRunStart(chatId: number, requestId: string): Promise<void> {
+    const queued = this.pendingSteers.get(chatId);
+    if (!queued || queued.length === 0) {
+      return;
+    }
+
+    await this.deps.audit.log({
+      type: "steer_dispatch_requested_on_start",
+      chatId,
+      requestId,
+      steerCount: queued.length
+    });
+    await this.deps.telegram.sendMessage(
+      chatId,
+      `Applying ${queued.length} queued follow-up update(s) on ${requestId}.`
+    );
+
+    const abort = this.activeAborts.get(requestId);
+    if (!abort) {
+      return;
+    }
+    abort();
   }
 
   private async resolveResumeThreadId(chatId: number, userId: number): Promise<string | undefined> {

@@ -1533,6 +1533,37 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[1].context.instruction).toContain("what was the last question?");
   });
 
+  it("queues plain-text follow-up while admission lock is active", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+
+    const internals = controller as unknown as {
+      executionAdmissionLock: Set<number>;
+      executionAdmissionSource: Map<number, string>;
+    };
+    internals.executionAdmissionLock.add(100);
+    internals.executionAdmissionSource.set(100, "run");
+
+    await controller.handleUpdate(makeUpdate("what was the last question?"));
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Queued follow-up (1) while run request is being prepared"))).toBe(
+      true
+    );
+    expect(audit.events.some((event) => event.type === "steer_queued_waiting_admission")).toBe(true);
+  });
+
   it("blocks repo switching while a request is running", async () => {
     let resolveTask: ((result: TaskResult) => void) | undefined;
     const fakeCodex: FakeCodex = {
