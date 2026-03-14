@@ -89,7 +89,8 @@ Main commands:
 - `/steer <instruction>`
 - `/status`
 - `/details`
-- `/continue [work-id]`
+- `/continue [work-id|index]`
+- `/resume [work-id|index]`
 - `/abort`
 - `/close`
 
@@ -123,7 +124,8 @@ Repo management:
 
 Handoff and audit:
 
-- `/continue [work-id]` (shortcut for `/handoff continue [work-id]`)
+- `/continue [work-id|index]` (shortcut for `/handoff continue [work-id|index]`)
+- `/resume [work-id|index]` (alias of `/continue`)
 - `/handoff [status|show|continue [work-id]|clear]`
 - `/audit <view_id>`
 
@@ -196,7 +198,7 @@ Stage 2: continuation handoff
 - After external execution, client submits a typed handoff bundle.
 - CodeFox validates spec revision linkage before storing continuation state.
 - User continues via `/handoff show` and `/handoff continue [work-id]`.
-- User can use `/continue [work-id]` as a shorter continuation command.
+- User can use `/continue [work-id|index]` (or `/resume ...`) as shorter continuation commands.
 - Telegram handoff messages include one-tap command buttons for show/continue.
 
 External relay HTTP adapter (optional):

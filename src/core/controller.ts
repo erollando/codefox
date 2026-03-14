@@ -677,7 +677,10 @@ export class CodeFoxController {
       case "pending": {
         const pending = this.deps.approvals.get(chatId);
         if (!pending) {
-          await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+          await this.deps.telegram.sendMessage(
+            chatId,
+            "No pending approval.\nNext: run /status, or start work with plain text or /run <instruction>."
+          );
           return;
         }
         await this.deps.telegram.sendMessage(chatId, formatPendingApproval(pending));
@@ -792,7 +795,10 @@ export class CodeFoxController {
         return;
       }
       default: {
-        await this.deps.telegram.sendMessage(chatId, "Unknown command. Use /help.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "Unknown command.\nNext: use /help to see available commands."
+        );
       }
     }
   }
@@ -1029,7 +1035,10 @@ export class CodeFoxController {
     }
 
     if (!session.codexThreadId) {
-      await this.deps.telegram.sendMessage(chatId, "No active Codex session to close.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No active Codex session to close.\nNext: use /status to inspect session state."
+      );
       return;
     }
 
@@ -1048,7 +1057,10 @@ export class CodeFoxController {
   private async handleApprove(chatId: number, userId: number): Promise<void> {
     const pending = this.deps.approvals.get(chatId);
     if (!pending) {
-      await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No pending approval.\nNext: use /pending to inspect approval status, or /status for session context."
+      );
       return;
     }
     if (pending.userId !== userId) {
@@ -1075,7 +1087,10 @@ export class CodeFoxController {
     if (pending.externalApproval) {
       const decisionSink = this.deps.externalApprovalDecision;
       if (!decisionSink) {
-        await this.deps.telegram.sendMessage(chatId, "External approval bridge is not configured.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval bridge is not configured.\nNext: complete this request from Telegram-only flow or fix relay configuration."
+        );
         return;
       }
       const decided = await decisionSink({
@@ -1086,7 +1101,10 @@ export class CodeFoxController {
         userId
       });
       if (!decided) {
-        await this.deps.telegram.sendMessage(chatId, "External approval request is stale or unknown.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval request is stale or unknown.\nNext: ask the external client to re-send the approval request."
+        );
         return;
       }
       this.deps.approvals.delete(chatId);
@@ -1156,7 +1174,10 @@ export class CodeFoxController {
   private async handleDeny(chatId: number, userId: number): Promise<void> {
     const pending = this.deps.approvals.get(chatId);
     if (!pending) {
-      await this.deps.telegram.sendMessage(chatId, "No pending approval.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No pending approval.\nNext: use /pending to inspect approval status, or /status for session context."
+      );
       return;
     }
     if (pending.userId !== userId) {
@@ -1174,7 +1195,10 @@ export class CodeFoxController {
     if (pending.externalApproval) {
       const decisionSink = this.deps.externalApprovalDecision;
       if (!decisionSink) {
-        await this.deps.telegram.sendMessage(chatId, "External approval bridge is not configured.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval bridge is not configured.\nNext: complete this request from Telegram-only flow or fix relay configuration."
+        );
         return;
       }
       const decided = await decisionSink({
@@ -1185,7 +1209,10 @@ export class CodeFoxController {
         userId
       });
       if (!decided) {
-        await this.deps.telegram.sendMessage(chatId, "External approval request is stale or unknown.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "External approval request is stale or unknown.\nNext: ask the external client to re-send the approval request."
+        );
         return;
       }
       this.deps.approvals.delete(chatId);
@@ -1344,14 +1371,31 @@ export class CodeFoxController {
     }
 
     const nextWork = command.workId
-      ? outstanding.find((work) => work.id === command.workId)
+      ? resolveOutstandingHandoffWork(outstanding, command.workId)
       : outstanding[0];
     if (!nextWork) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Work item '${command.workId}' is not available.\nNext: use /handoff show to list valid work ids.`
+        [
+          `Work item '${command.workId}' is not available.`,
+          "Next: use /continue <number> or /continue <work-id>.",
+          `Choices:\n${renderOutstandingHandoffChoices(outstanding)}`
+        ].join("\n"),
+        { commandButtons: buildHandoffSelectionCommandButtons(state) }
       );
       return;
+    }
+
+    if (!command.workId && outstanding.length > 1) {
+      const selectedIndex = outstanding.findIndex((work) => work.id === nextWork.id) + 1;
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          `Multiple handoff items are pending. Defaulting to ${selectedIndex}: ${nextWork.id} - ${nextWork.summary}`,
+          "Next: use /continue <number> or /continue <work-id> to choose a different item."
+        ].join("\n"),
+        { commandButtons: buildHandoffSelectionCommandButtons(state) }
+      );
     }
 
     const capabilityAction = nextWork.requestedCapabilityRef
@@ -1411,12 +1455,18 @@ export class CodeFoxController {
   private async handleAbort(chatId: number, userId: number): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     if (!session.activeRequestId) {
-      await this.deps.telegram.sendMessage(chatId, "No active request.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No active request.\nNext: start work with plain text or /run <instruction>."
+      );
       return;
     }
     const abort = this.activeAborts.get(session.activeRequestId);
     if (!abort) {
-      await this.deps.telegram.sendMessage(chatId, "Active request cannot be aborted right now.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Active request cannot be aborted right now.\nNext: use /status and retry /abort in a moment."
+      );
       return;
     }
 
@@ -1439,7 +1489,10 @@ export class CodeFoxController {
   ): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     if (!session.selectedRepo) {
-      await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No repo selected for steer.\nNext: use /repo <name> first."
+      );
       return;
     }
 
@@ -2842,10 +2895,10 @@ function formatExternalHandoffDetail(state: ExternalHandoffState): string {
     "remaining work:"
   ];
 
-  for (const work of state.bundle.remainingWork) {
+  for (const [index, work] of state.bundle.remainingWork.entries()) {
     const status = state.continuedWorkIds.includes(work.id) ? "continued" : "pending";
     lines.push(
-      `- ${work.id} [${status}] ${work.summary}${
+      `${index + 1}. ${work.id} [${status}] ${work.summary}${
         work.requestedCapabilityRef ? ` (capability=${work.requestedCapabilityRef})` : ""
       }`
     );
@@ -2874,6 +2927,50 @@ function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
     commands.push("/handoff status");
   }
   return commands;
+}
+
+function buildHandoffSelectionCommandButtons(state: ExternalHandoffState): string[] {
+  const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
+  const commands = ["/handoff show", "/continue"];
+  if (outstanding[1]) {
+    commands.push(`/continue ${outstanding[1].id}`);
+  } else if (outstanding[0]) {
+    commands.push(`/continue ${outstanding[0].id}`);
+  }
+  return commands;
+}
+
+function resolveOutstandingHandoffWork(
+  outstanding: Array<{ id: string; summary: string; requestedCapabilityRef?: string }>,
+  selector: string
+): { id: string; summary: string; requestedCapabilityRef?: string } | undefined {
+  const trimmed = selector.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const byId = outstanding.find((work) => work.id === trimmed);
+  if (byId) {
+    return byId;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    const index = Number(trimmed);
+    if (Number.isSafeInteger(index) && index > 0 && index <= outstanding.length) {
+      return outstanding[index - 1];
+    }
+  }
+
+  return undefined;
+}
+
+function renderOutstandingHandoffChoices(
+  outstanding: Array<{ id: string; summary: string; requestedCapabilityRef?: string }>
+): string {
+  return outstanding
+    .slice(0, 8)
+    .map((work, index) => `${index + 1}. /continue ${index + 1} -> ${work.id} - ${work.summary}`)
+    .join("\n");
 }
 
 function parseRepoFromExternalSessionId(sessionId: string | undefined): string | undefined {

@@ -67,7 +67,8 @@ npm run verify
 
 - `/status` to inspect selected repo, mode, active request, and codex session id
 - `/details` for expanded technical context (session + handoff + approval pointers)
-- `/continue [work-id]` as shorthand for `/handoff continue [work-id]`
+- `/continue [work-id|index]` as shorthand for `/handoff continue [work-id|index]`
+- `/resume [work-id|index]` as alias of `/continue`
 - `/handoff [status|show|continue [work-id]|clear]` to inspect and continue external handoff bundles
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
