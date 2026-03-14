@@ -205,10 +205,12 @@ npm run local:cli -- approvals
 npm run local:cli -- specs
 npm run local:cli -- session 100
 npm run local:cli -- send 100 "/status"
+npm run handoff:cli -- --config ./config/codefox.config.json 100 --task TASK-42 --remaining "Run full regression checks" --capability repo.run_checks --completed "Endpoint implemented"
 ```
 
 `send` writes a command envelope into `<state-dir>/local-command-queue/inbox`.
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
+`handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls.
 
 ## Configuration
 

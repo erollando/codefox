@@ -27,6 +27,7 @@ In VS Code, your external client action is simple:
 - attach to CodeFox session,
 - work as usual while reporting progress,
 - trigger handoff when you leave the desk.
+- if integration is not automated yet, run one bridge command (`npm run handoff:cli -- ...`) instead of manual relay API calls.
 
 Command + reply transcript:
 

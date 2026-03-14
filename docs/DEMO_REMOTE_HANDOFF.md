@@ -115,7 +115,8 @@ At the desk, your external client (plugin/skill) should expose this flow:
 - Run `/handoff continue <work-id>`.
 
 If your current VS Code integration does not automate this yet:
-- Use the same endpoints directly (`routes`, `bind`, `event`, `handoff`) from a script or terminal.
+- Use the bridge command instead of raw relay calls:
+  - `npm run handoff:cli -- --config ./config/codefox.config.json <chatId> --task <taskId> --remaining "<summary>" [--capability <ref>]`
 
 ## Real execution (runnable now)
 
