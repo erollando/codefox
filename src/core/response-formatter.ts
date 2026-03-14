@@ -238,6 +238,16 @@ export function formatTaskResult(
   }
 
   lines.push("Next: use /details for full context.");
+  if (safeInstructionPreview) {
+    const completionLabel = result.ok
+      ? "completed"
+      : result.aborted
+        ? "aborted"
+        : result.timedOut
+          ? "timed out"
+          : "failed";
+    lines.push(`request ${completionLabel}: ${truncateForTelegram(safeInstructionPreview, 240)}`);
+  }
   return lines.join("\n");
 }
 

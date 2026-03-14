@@ -25,6 +25,8 @@ describe("response formatter", () => {
     expect(message).toContain("Completed: done");
     expect(message).toContain("request: prepare release commit and push branch");
     expect(message).toContain("Next: use /details for full context.");
+    expect(message).toContain("request completed: prepare release commit and push branch");
+    expect(message.trim().endsWith("request completed: prepare release commit and push branch")).toBe(true);
     expect(message).not.toContain("output:");
     expect(message).not.toContain("very noisy transcript");
   });
@@ -62,11 +64,13 @@ describe("response formatter", () => {
         timedOut: true
       },
       "payments-api",
-      "active"
+      "active",
+      { instructionPreview: "run all integration tests" }
     );
 
     expect(aborted).toContain("Aborted:");
     expect(timedOut).toContain("Timed out:");
+    expect(timedOut).toContain("request timed out: run all integration tests");
   });
 
   it("redacts sensitive tokens in summary and output", () => {
