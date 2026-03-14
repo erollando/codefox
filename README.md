@@ -75,6 +75,7 @@ Runtime behavior:
 
 - if CodeFox is not running, UI auto-starts it in background
 - default bind is local-only (`127.0.0.1`)
+- local loopback access is trusted (no pairing required)
 
 Phone access (trusted LAN):
 
@@ -83,6 +84,13 @@ npm run ui -- --host 0.0.0.0 --port 8789
 ```
 
 Open from phone: `http://<laptop-lan-ip>:8789`
+
+Device pairing flow:
+
+- when UI starts in LAN mode, terminal prints one-time pair link(s) and a QR code
+- scan the QR from phone once
+- phone browser is registered as a paired device and can open UI afterward
+- non-paired remote devices are denied
 
 Mobile mode:
 

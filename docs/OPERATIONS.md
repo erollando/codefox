@@ -48,6 +48,7 @@ npm run verify
 
 - Audit logs are JSON lines at `audit.logFilePath` in config.
 - Local UI transcript mirror is stored at `<state-dir>/local-chat-log.jsonl` (derived from `state.filePath`).
+- Paired UI devices are stored at `<state-dir>/ui-devices.json` (derived from `state.filePath`).
 - Codex progress events include stream tags (`[stdout]`/`[stderr]`) in `codex_progress` line previews.
 - Audit log size is bounded by `audit.maxFileBytes` (default 5 MiB); file is truncated when the limit is exceeded.
 - Startup logs include detected Codex CLI version; if version is outside tested range, `codex_version_compatibility_warning` is emitted.
@@ -117,6 +118,8 @@ npm run verify
   - shows mirrored transcript (incoming commands + CodeFox replies)
   - provides quick command buttons and free-text input
   - auto-starts CodeFox runtime in background if missing
+  - loopback requests are trusted; non-loopback requests require paired-device cookie auth
+  - in LAN mode (`--host 0.0.0.0`), startup prints one-time pair QR/link (`/pair?code=...`) for phone registration
 - Local dashboard watch remains available: `npm run dashboard`.
 - Primary local interface is the chat REPL: `npm run cli -- --config <path> [chatId]`.
   - auto-starts CodeFox runtime in background if missing

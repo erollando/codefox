@@ -1,4 +1,7 @@
 import http from "node:http";
+import os from "node:os";
+import { randomBytes } from "node:crypto";
+import QRCode from "qrcode";
 import { loadEnvFile } from "./core/env.js";
 import { loadConfig, resolveConfigPath } from "./core/config.js";
 import { JsonStateStore, pruneStateByTtl } from "./core/state-store.js";
@@ -6,12 +9,14 @@ import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./core/loca
 import { LocalChatLog, defaultLocalChatLogPath } from "./core/local-chat-log.js";
 import { getCurrentRevision } from "./core/spec-workflow.js";
 import { ensureCodeFoxRunning } from "./core/dev-runtime.js";
+import { UiDeviceAuthStore, defaultUiDeviceStorePath } from "./core/ui-device-auth.js";
 
 interface UiArgs {
   configPath?: string;
   host: string;
   port: number;
   userId?: number;
+  pairTtlSeconds: number;
 }
 
 interface UiStateResponse {
@@ -67,7 +72,9 @@ if (!args.ok) {
   const store = new JsonStateStore(config.state.filePath);
   const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
   const chatLog = new LocalChatLog(defaultLocalChatLogPath(config.state.filePath));
+  const deviceAuth = new UiDeviceAuthStore(defaultUiDeviceStorePath(config.state.filePath));
   const defaultUserId = args.value.userId ?? config.telegram.allowedUserIds[0];
+  const pairCodes = new Map<string, number>();
 
   if (!defaultUserId) {
     console.error("No allowed user id configured. Set telegram.allowedUserIds or pass --user <id>.");
@@ -87,10 +94,39 @@ if (!args.ok) {
       process.exit();
     }
 
+    const firstPair = issuePairCode(pairCodes, args.value.pairTtlSeconds);
+    const firstPairUrls = buildPairUrls(args.value.host, args.value.port, firstPair.code);
+
     const server = http.createServer(async (request, response) => {
       try {
         const method = request.method ?? "GET";
         const url = new URL(request.url ?? "/", `http://${args.value.host}:${args.value.port}`);
+        const remoteAddress = request.socket.remoteAddress ?? "";
+        const loopback = isLoopbackAddress(remoteAddress);
+
+        if (method === "GET" && url.pathname === "/pair") {
+          const code = url.searchParams.get("code")?.trim() || "";
+          if (!consumePairCode(pairCodes, code)) {
+            writePairInvalidHtml(response);
+            return;
+          }
+          const device = await deviceAuth.registerDevice({
+            userAgent: request.headers["user-agent"]
+          });
+          setUiDeviceCookie(response, device.token);
+          writePairSuccessHtml(response, device.label);
+          return;
+        }
+
+        const authorized = await isAuthorizedRequest({
+          request,
+          loopback,
+          deviceAuth
+        });
+        if (!authorized) {
+          writeUnauthorizedHtml(response);
+          return;
+        }
 
         if (method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
           writeHtml(response);
@@ -145,9 +181,33 @@ if (!args.ok) {
       }
     });
 
-    server.listen(args.value.port, args.value.host, () => {
+    server.listen(args.value.port, args.value.host, async () => {
       console.log(`CodeFox UI ready at http://${args.value.host}:${args.value.port}`);
       console.log("For live logs, optionally run `npm run dev` in another terminal.");
+      const existingDevices = await deviceAuth.count();
+      console.log(`Paired UI devices: ${existingDevices}.`);
+      if (args.value.host === "127.0.0.1" || args.value.host.toLowerCase() === "localhost") {
+        console.log("UI is bound to loopback. For phone pairing, restart with: npm run ui -- --host 0.0.0.0 --port 8789");
+        return;
+      }
+      if (firstPairUrls.length > 0) {
+        console.log(`Phone pair code TTL: ${args.value.pairTtlSeconds}s.`);
+        console.log("Pair link(s):");
+        for (const link of firstPairUrls) {
+          console.log(`  ${link}`);
+        }
+        const qrTarget = firstPairUrls[0];
+        try {
+          const terminalQr = await QRCode.toString(qrTarget, {
+            type: "terminal",
+            small: true
+          });
+          console.log("Scan this QR from phone to pair:");
+          console.log(terminalQr);
+        } catch (error) {
+          console.error(`Could not render QR in terminal: ${String(error)}`);
+        }
+      }
     });
   }
 }
@@ -157,6 +217,7 @@ function parseArgs(argv: string[]): { ok: true; value: UiArgs } | { ok: false; e
   let host = "127.0.0.1";
   let port = 8789;
   let userId: number | undefined;
+  let pairTtlSeconds = 600;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -208,6 +269,18 @@ function parseArgs(argv: string[]): { ok: true; value: UiArgs } | { ok: false; e
       userId = parsed;
       continue;
     }
+    if (token === "--pair-ttl-seconds") {
+      const value = readRequired(token);
+      if (!value) {
+        return { ok: false, error: "Missing value for --pair-ttl-seconds." };
+      }
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 30) {
+        return { ok: false, error: "pair ttl seconds must be an integer > 30." };
+      }
+      pairTtlSeconds = parsed;
+      continue;
+    }
     return { ok: false, error: `Unknown argument '${token}'.` };
   }
 
@@ -217,7 +290,8 @@ function parseArgs(argv: string[]): { ok: true; value: UiArgs } | { ok: false; e
       configPath,
       host,
       port,
-      userId
+      userId,
+      pairTtlSeconds
     }
   };
 }
@@ -379,6 +453,177 @@ function writeHtml(response: http.ServerResponse): void {
   response.statusCode = 200;
   response.setHeader("content-type", "text/html; charset=utf-8");
   response.end(UI_HTML);
+}
+
+function issuePairCode(store: Map<string, number>, ttlSeconds: number): { code: string; expiresAtMs: number } {
+  const code = randomBytes(18).toString("hex");
+  const expiresAtMs = Date.now() + ttlSeconds * 1000;
+  store.set(code, expiresAtMs);
+  return {
+    code,
+    expiresAtMs
+  };
+}
+
+function consumePairCode(store: Map<string, number>, code: string): boolean {
+  if (!code) {
+    return false;
+  }
+  const expiresAt = store.get(code);
+  if (!expiresAt) {
+    return false;
+  }
+  store.delete(code);
+  if (Date.now() > expiresAt) {
+    return false;
+  }
+  return true;
+}
+
+function buildPairUrls(host: string, port: number, code: string): string[] {
+  const normalizedHost = host.trim().toLowerCase();
+  if (!code) {
+    return [];
+  }
+  if (normalizedHost === "127.0.0.1" || normalizedHost === "localhost") {
+    return [`http://127.0.0.1:${port}/pair?code=${code}`];
+  }
+  if (normalizedHost === "0.0.0.0") {
+    const candidates = getLanIpv4Addresses();
+    return candidates.map((ip) => `http://${ip}:${port}/pair?code=${code}`);
+  }
+  return [`http://${host}:${port}/pair?code=${code}`];
+}
+
+function getLanIpv4Addresses(): string[] {
+  const interfaces = os.networkInterfaces();
+  const addresses = new Set<string>();
+  for (const list of Object.values(interfaces)) {
+    if (!Array.isArray(list)) {
+      continue;
+    }
+    for (const item of list) {
+      if (item.family !== "IPv4" || item.internal) {
+        continue;
+      }
+      addresses.add(item.address);
+    }
+  }
+  return [...addresses];
+}
+
+function isLoopbackAddress(address: string): boolean {
+  if (!address) {
+    return false;
+  }
+  const normalized = address.trim().toLowerCase();
+  return normalized === "::1" || normalized === "127.0.0.1" || normalized === "::ffff:127.0.0.1";
+}
+
+async function isAuthorizedRequest(input: {
+  request: http.IncomingMessage;
+  loopback: boolean;
+  deviceAuth: UiDeviceAuthStore;
+}): Promise<boolean> {
+  if (input.loopback) {
+    return true;
+  }
+  const cookies = parseCookies(input.request.headers.cookie);
+  const token = cookies.codefox_ui_device;
+  if (!token) {
+    return false;
+  }
+  const device = await input.deviceAuth.findByToken(token);
+  if (!device) {
+    return false;
+  }
+  void input.deviceAuth.touch(device.id);
+  return true;
+}
+
+function parseCookies(headerValue: string | undefined): Record<string, string> {
+  if (!headerValue || headerValue.trim().length === 0) {
+    return {};
+  }
+  const parts = headerValue.split(";");
+  const result: Record<string, string> = {};
+  for (const part of parts) {
+    const raw = part.trim();
+    if (!raw) {
+      continue;
+    }
+    const eq = raw.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    const key = raw.slice(0, eq).trim();
+    const value = raw.slice(eq + 1).trim();
+    if (!key) {
+      continue;
+    }
+    result[key] = decodeURIComponent(value);
+  }
+  return result;
+}
+
+function setUiDeviceCookie(response: http.ServerResponse, token: string): void {
+  const cookie = [
+    `codefox_ui_device=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=15552000"
+  ].join("; ");
+  response.setHeader("set-cookie", cookie);
+}
+
+function writePairSuccessHtml(response: http.ServerResponse, label: string): void {
+  response.statusCode = 200;
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.end(`<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CodeFox Pairing</title></head>
+<body style="font-family:Segoe UI,system-ui,sans-serif;padding:18px;">
+  <h2>Device Paired</h2>
+  <p>This browser is now authorized as <strong>${escapeHtml(label)}</strong>.</p>
+  <p>Opening CodeFox UI...</p>
+  <script>setTimeout(() => { window.location.href = "/"; }, 400);</script>
+</body></html>`);
+}
+
+function writePairInvalidHtml(response: http.ServerResponse): void {
+  response.statusCode = 400;
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.end(`<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CodeFox Pairing</title></head>
+<body style="font-family:Segoe UI,system-ui,sans-serif;padding:18px;">
+  <h2>Pairing Link Invalid</h2>
+  <p>This QR/link is expired or already used.</p>
+  <p>Generate a new pair code from the laptop terminal by restarting <code>npm run ui</code>.</p>
+</body></html>`);
+}
+
+function writeUnauthorizedHtml(response: http.ServerResponse): void {
+  response.statusCode = 401;
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.end(`<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CodeFox UI Auth</title></head>
+<body style="font-family:Segoe UI,system-ui,sans-serif;padding:18px;">
+  <h2>Device Not Paired</h2>
+  <p>This device is not authorized for remote UI access.</p>
+  <p>On the laptop terminal where <code>npm run ui</code> is running, scan the printed QR code from this phone.</p>
+</body></html>`);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 const UI_HTML = `<!doctype html>

@@ -36,5 +36,7 @@ Use this page as the index for detailed operational docs.
 - UI auto-starts CodeFox runtime if it is not already running.
 - Default bind is local-only (`127.0.0.1`) for safety.
 - For phone/LAN access on trusted networks: `npm run ui -- --host 0.0.0.0 --port 8789`.
+- In LAN mode, terminal prints a one-time pair QR/link; scan once from phone to authorize that browser.
+- Non-paired remote devices are blocked.
 - Mobile mode is automatic on small screens; force with `?mobile=1`.
 - Quick actions at the top are the primary interaction controls; transcript area is the main scroll region.
