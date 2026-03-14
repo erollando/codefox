@@ -24,10 +24,16 @@ This executes a real in-memory scenario through `CodeFoxController` + `ExternalC
 - external bind/events/handoff
 - approval request resolved through `/approve`
 - handoff continued through `/handoff continue`
+- explicit command/reply transcript (`USER> ...` + `CODEFOX> ...`)
 - audit event counts
 
 Captured run output:
 - [remote-handoff-transcript.txt](/home/enrico/git/codefox/docs/demo-outputs/remote-handoff-transcript.txt)
+
+Transcript legend:
+- `USER>` command sent from Telegram/mobile
+- `CODEFOX>` reply from CodeFox
+- `EXTERNAL_CODEX>` attached external client event
 
 ## Interaction timeline
 
@@ -56,6 +62,22 @@ Captured run output:
 - user checks `/handoff show`
 - user runs `/handoff continue rw-1`
 - CodeFox executes typed remaining work (`repo.run_checks`)
+
+## Command + reply sample
+
+```text
+USER> /pending
+CODEFOX> Pending approval: extapr_prepare-branch ...
+
+USER> /approve
+CODEFOX> Approved external request extapr_prepare-branch.
+
+USER> /handoff show
+CODEFOX> External handoff detail: ... remaining work: rw-1 ...
+
+USER> /handoff continue rw-1
+CODEFOX> Run completed. ... Executed repo.run_checks ...
+```
 
 ## What this lets you do
 

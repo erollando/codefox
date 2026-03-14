@@ -4,26 +4,39 @@
 
 === CodeFox Demo: VS Code -> Phone Continuation ===
 session id: chat:100/repo:payments-api/mode:active
-lease id: lease_055491b1ac8e20fd
+lease id: lease_5db7897f4a12fa4e
 approval status: approved
 codex runs executed by CodeFox after handoff: 1
 
-=== Telegram/CodeFox Interaction Transcript ===
-01. Repo set to payments-api.
-02. Mode set to active (workspace-write sandbox).
-03. Spec lifecycle initialized. | versions: v0(raw), v1(interpreted) | current: v1 (interpreted, draft) | missing sections for mode active: (none) | Use /spec clarify <note> to refine. | Use /spec show to review. | Use /spec approve to allow /run.
-04. Spec clarified to v2. | current: (clarified, draft) | missing sections for mode active: (none) | Use /spec diff to inspect changes.
-05. Spec v2 approved. /run is now allowed.
-06. External Codex (chat:100/repo:payments-api/mode:active) progress [55%]: Implemented export endpoint and started integration checks
-07. External Codex (chat:100/repo:payments-api/mode:active) approval requested (prepare-branch, repo.prepare_branch): Need approval before preparing release branch
-08. Pending approval: extapr_prepare-branch | repo: payments-api | mode: active | source: external-codex | requested by user: 1 | created at: 2026-03-14T14:50:28.004Z | capability: repo.prepare_branch | instruction: Need approval before preparing release branch | Use /approve or /deny. | external approval key: prepare-branch
-09. Approved external request extapr_prepare-branch.
-10. External Codex (chat:100/repo:payments-api/mode:active) completion (success): Execution phase complete in VS Code client
-11. External Codex (chat:100/repo:payments-api/mode:active) handoff bundle received: | task: TASK-DEMO-42 | spec ref: v2 | completed work: 2 | remaining work: 1
-12. External handoff handoff-demo-1 is ready for continuation. | task: TASK-DEMO-42 | remaining work: 1 | Use /handoff show, then /handoff continue [work-id].
-13. External handoff detail: | handoff id: handoff-demo-1 | task id: TASK-DEMO-42 | spec ref: v2 | completed work count: 2 | remaining work: | - rw-1 [pending] Run full regression checks before release (capability=repo.run_checks) | unresolved risks: Need final green regression suite before branch push
-14. Started request e5a5d58f | repo: payments-api | mode: active | type: run | session: new
-15. Run completed. | repo: payments-api | mode: active | summary: Executed repo.run_checks for 'Run full regression checks before release' | codex session: thread_demo_1
+=== Command/Reply Transcript ===
+01. USER> /repo payments-api
+02. CODEFOX> Repo set to payments-api.
+03. USER> /mode active
+04. CODEFOX> Mode set to active (workspace-write sandbox).
+05. USER> /spec draft Ship invoice CSV export safely
+06. CODEFOX> Spec lifecycle initialized. | versions: v0(raw), v1(interpreted) | current: v1 (interpreted, draft) | missing sections for mode active: (none) | Use /spec clarify <note> to refine. | Use /spec show to review. | Use /spec approve to allow /run.
+07. USER> /spec clarify Keep schema unchanged and add tests
+08. CODEFOX> Spec clarified to v2. | current: (clarified, draft) | missing sections for mode active: (none) | Use /spec diff to inspect changes.
+09. USER> /spec approve
+10. CODEFOX> Spec v2 approved. /run is now allowed.
+11. EXTERNAL_CODEX> event progress (55%): Implemented export endpoint and started integration checks
+12. CODEFOX> External Codex (chat:100/repo:payments-api/mode:active) progress [55%]: Implemented export endpoint and started integration checks
+13. EXTERNAL_CODEX> event approval_request: Need approval before preparing release branch
+14. CODEFOX> External Codex (chat:100/repo:payments-api/mode:active) approval requested (prepare-branch, repo.prepare_branch): Need approval before preparing release branch
+15. USER> /pending
+16. CODEFOX> Pending approval: extapr_prepare-branch | repo: payments-api | mode: active | source: external-codex | requested by user: 1 | created at: 2026-03-14T15:14:43.924Z | capability: repo.prepare_branch | instruction: Need approval before preparing release branch | Use /approve or /deny. | external approval key: prepare-branch
+17. USER> /approve
+18. CODEFOX> Approved external request extapr_prepare-branch.
+19. EXTERNAL_CODEX> event completion: Execution phase complete in VS Code client
+20. CODEFOX> External Codex (chat:100/repo:payments-api/mode:active) completion (success): Execution phase complete in VS Code client
+21. EXTERNAL_CODEX> handoff bundle: TASK-DEMO-42 with remaining work rw-1
+22. CODEFOX> External Codex (chat:100/repo:payments-api/mode:active) handoff bundle received: | task: TASK-DEMO-42 | spec ref: v2 | completed work: 2 | remaining work: 1
+23. CODEFOX> External handoff handoff-demo-1 is ready for continuation. | task: TASK-DEMO-42 | remaining work: 1 | Use /handoff show, then /handoff continue [work-id].
+24. USER> /handoff show
+25. CODEFOX> External handoff detail: | handoff id: handoff-demo-1 | task id: TASK-DEMO-42 | spec ref: v2 | completed work count: 2 | remaining work: | - rw-1 [pending] Run full regression checks before release (capability=repo.run_checks) | unresolved risks: Need final green regression suite before branch push
+26. USER> /handoff continue rw-1
+27. CODEFOX> Started request b975664b | repo: payments-api | mode: active | type: run | session: new
+28. CODEFOX> Run completed. | repo: payments-api | mode: active | summary: Executed repo.run_checks for 'Run full regression checks before release' | codex session: thread_demo_1
 
 === Audit Event Counts (selected) ===
 external_event_relayed: 3

@@ -21,6 +21,11 @@ interface SentMessage {
   text: string;
 }
 
+interface TranscriptEntry {
+  actor: "USER" | "CODEFOX" | "EXTERNAL_CODEX";
+  text: string;
+}
+
 class DemoTelegram {
   readonly sent: SentMessage[] = [];
 
@@ -66,6 +71,42 @@ function makeUpdate(text: string, userId = 1, chatId = 100): TelegramUpdate {
   };
 }
 
+function collectNewReplies(
+  telegram: DemoTelegram,
+  transcript: TranscriptEntry[],
+  startIndex: number
+): void {
+  for (let index = startIndex; index < telegram.sent.length; index += 1) {
+    transcript.push({ actor: "CODEFOX", text: telegram.sent[index].text });
+  }
+}
+
+async function runUserCommand(
+  controller: CodeFoxController,
+  telegram: DemoTelegram,
+  transcript: TranscriptEntry[],
+  text: string,
+  userId: number,
+  chatId: number
+): Promise<void> {
+  transcript.push({ actor: "USER", text });
+  const replyStart = telegram.sent.length;
+  await controller.handleUpdate(makeUpdate(text, userId, chatId));
+  collectNewReplies(telegram, transcript, replyStart);
+}
+
+async function runExternalStep(
+  telegram: DemoTelegram,
+  transcript: TranscriptEntry[],
+  text: string,
+  action: () => Promise<void>
+): Promise<void> {
+  transcript.push({ actor: "EXTERNAL_CODEX", text });
+  const replyStart = telegram.sent.length;
+  await action();
+  collectNewReplies(telegram, transcript, replyStart);
+}
+
 async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -79,6 +120,7 @@ async function runDemo(): Promise<void> {
   const sessionId = buildExternalSessionId(chatId, repoName, "active");
 
   const telegram = new DemoTelegram();
+  const transcript: TranscriptEntry[] = [];
   const audit = new DemoAudit();
   const approvals = new ApprovalStore();
   const sessions = new SessionManager("observe");
@@ -142,11 +184,25 @@ async function runDemo(): Promise<void> {
     }
   });
 
-  await controller.handleUpdate(makeUpdate(`/repo ${repoName}`));
-  await controller.handleUpdate(makeUpdate("/mode active"));
-  await controller.handleUpdate(makeUpdate("/spec draft Ship invoice CSV export safely"));
-  await controller.handleUpdate(makeUpdate("/spec clarify Keep schema unchanged and add tests"));
-  await controller.handleUpdate(makeUpdate("/spec approve"));
+  await runUserCommand(controller, telegram, transcript, `/repo ${repoName}`, userId, chatId);
+  await runUserCommand(controller, telegram, transcript, "/mode active", userId, chatId);
+  await runUserCommand(
+    controller,
+    telegram,
+    transcript,
+    "/spec draft Ship invoice CSV export safely",
+    userId,
+    chatId
+  );
+  await runUserCommand(
+    controller,
+    telegram,
+    transcript,
+    "/spec clarify Keep schema unchanged and add tests",
+    userId,
+    chatId
+  );
+  await runUserCommand(controller, telegram, transcript, "/spec approve", userId, chatId);
 
   relay.registerRoute({ sessionId, chatId });
   const bind = relay.bind({
@@ -159,45 +215,66 @@ async function runDemo(): Promise<void> {
     throw new Error(`Bind failed: ${bind.reasonCode} ${bind.reason}`);
   }
 
-  await relay.relayEvent({
-    schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
-    leaseId: bind.lease.leaseId,
-    eventId: "evt-1",
-    clientId: "vscode-codex-demo",
-    timestamp: "2026-03-14T15:00:00.000Z",
-    sequence: 1,
-    type: "progress",
-    summary: "Implemented export endpoint and started integration checks",
-    progressPercent: 55
-  });
+  await runExternalStep(
+    telegram,
+    transcript,
+    "event progress (55%): Implemented export endpoint and started integration checks",
+    async () => {
+      await relay.relayEvent({
+        schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
+        leaseId: bind.lease.leaseId,
+        eventId: "evt-1",
+        clientId: "vscode-codex-demo",
+        timestamp: "2026-03-14T15:00:00.000Z",
+        sequence: 1,
+        type: "progress",
+        summary: "Implemented export endpoint and started integration checks",
+        progressPercent: 55
+      });
+    }
+  );
 
-  await relay.relayEvent({
-    schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
-    leaseId: bind.lease.leaseId,
-    eventId: "evt-2",
-    clientId: "vscode-codex-demo",
-    timestamp: "2026-03-14T15:00:08.000Z",
-    sequence: 2,
-    type: "approval_request",
-    summary: "Need approval before preparing release branch",
-    approvalKey: "prepare-branch",
-    requestedCapabilityRef: "repo.prepare_branch"
-  });
+  await runExternalStep(
+    telegram,
+    transcript,
+    "event approval_request: Need approval before preparing release branch",
+    async () => {
+      await relay.relayEvent({
+        schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
+        leaseId: bind.lease.leaseId,
+        eventId: "evt-2",
+        clientId: "vscode-codex-demo",
+        timestamp: "2026-03-14T15:00:08.000Z",
+        sequence: 2,
+        type: "approval_request",
+        summary: "Need approval before preparing release branch",
+        approvalKey: "prepare-branch",
+        requestedCapabilityRef: "repo.prepare_branch"
+      });
+    }
+  );
 
-  await controller.handleUpdate(makeUpdate("/pending"));
-  await controller.handleUpdate(makeUpdate("/approve"));
+  await runUserCommand(controller, telegram, transcript, "/pending", userId, chatId);
+  await runUserCommand(controller, telegram, transcript, "/approve", userId, chatId);
 
-  await relay.relayEvent({
-    schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
-    leaseId: bind.lease.leaseId,
-    eventId: "evt-3",
-    clientId: "vscode-codex-demo",
-    timestamp: "2026-03-14T15:00:15.000Z",
-    sequence: 3,
-    type: "completion",
-    status: "success",
-    summary: "Execution phase complete in VS Code client"
-  });
+  await runExternalStep(
+    telegram,
+    transcript,
+    "event completion: Execution phase complete in VS Code client",
+    async () => {
+      await relay.relayEvent({
+        schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
+        leaseId: bind.lease.leaseId,
+        eventId: "evt-3",
+        clientId: "vscode-codex-demo",
+        timestamp: "2026-03-14T15:00:15.000Z",
+        sequence: 3,
+        type: "completion",
+        status: "success",
+        summary: "Execution phase complete in VS Code client"
+      });
+    }
+  );
 
   const handoff: ExternalCodexHandoffBundle = {
     schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
@@ -217,11 +294,29 @@ async function runDemo(): Promise<void> {
     ],
     unresolvedRisks: ["Need final green regression suite before branch push"]
   };
-  await relay.relayHandoff(handoff);
+  await runExternalStep(
+    telegram,
+    transcript,
+    "handoff bundle: TASK-DEMO-42 with remaining work rw-1",
+    async () => {
+      await relay.relayHandoff(handoff);
+    }
+  );
 
-  await controller.handleUpdate(makeUpdate("/handoff show"));
-  await controller.handleUpdate(makeUpdate("/handoff continue rw-1"));
+  await runUserCommand(controller, telegram, transcript, "/handoff show", userId, chatId);
+  await runUserCommand(
+    controller,
+    telegram,
+    transcript,
+    "/handoff continue rw-1",
+    userId,
+    chatId
+  );
   await flushAsyncWork();
+  const repliesCaptured = transcript.reduce((count, entry) => {
+    return entry.actor === "CODEFOX" ? count + 1 : count;
+  }, 0);
+  collectNewReplies(telegram, transcript, repliesCaptured);
 
   const approvalRecord = relay.getApprovalDecision(bind.lease.leaseId, "prepare-branch");
   const auditCounts = new Map<string, number>();
@@ -236,10 +331,10 @@ async function runDemo(): Promise<void> {
   console.log(`approval status: ${approvalRecord?.status ?? "missing"}`);
   console.log(`codex runs executed by CodeFox after handoff: ${codex.calls.length}`);
   console.log("");
-  console.log("=== Telegram/CodeFox Interaction Transcript ===");
-  telegram.sent.forEach((entry, index) => {
+  console.log("=== Command/Reply Transcript ===");
+  transcript.forEach((entry, index) => {
     const line = entry.text.replace(/\n/g, " | ");
-    console.log(`${String(index + 1).padStart(2, "0")}. ${line}`);
+    console.log(`${String(index + 1).padStart(2, "0")}. ${entry.actor}> ${line}`);
   });
   console.log("");
   console.log("=== Audit Event Counts (selected) ===");

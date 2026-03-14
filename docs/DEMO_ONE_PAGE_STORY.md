@@ -20,6 +20,22 @@ What happens:
 5. CodeFox shows what is done and what is left (`/handoff show`).
 6. You continue the remaining step remotely (`/handoff continue rw-1`).
 
+Command + reply transcript:
+
+```text
+USER> /pending
+CODEFOX> Pending approval: extapr_prepare-branch ...
+
+USER> /approve
+CODEFOX> Approved external request extapr_prepare-branch.
+
+USER> /handoff show
+CODEFOX> External handoff detail: ... remaining work: rw-1 ...
+
+USER> /handoff continue rw-1
+CODEFOX> Run completed. ... Executed repo.run_checks ...
+```
+
 What you get:
 
 - Continuity: no restart, no copy/paste handoff, no lost context.
