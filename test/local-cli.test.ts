@@ -67,6 +67,30 @@ describe("local CLI", () => {
     expect(deny.args.command).toBe("deny");
     expect(deny.args.chatId).toBeUndefined();
 
+    const status = parseLocalCliArgs(["status", "100"]);
+    expect(status.ok).toBe(true);
+    if (!status.ok || !status.args) {
+      return;
+    }
+    expect(status.args.command).toBe("status");
+    expect(status.args.chatId).toBe(100);
+
+    const handoffStatus = parseLocalCliArgs(["handoff-status"]);
+    expect(handoffStatus.ok).toBe(true);
+    if (!handoffStatus.ok || !handoffStatus.args) {
+      return;
+    }
+    expect(handoffStatus.args.command).toBe("handoff-status");
+    expect(handoffStatus.args.chatId).toBeUndefined();
+
+    const handoffShow = parseLocalCliArgs(["handoff-show", "100"]);
+    expect(handoffShow.ok).toBe(true);
+    if (!handoffShow.ok || !handoffShow.args) {
+      return;
+    }
+    expect(handoffShow.args.command).toBe("handoff-show");
+    expect(handoffShow.args.chatId).toBe(100);
+
     const contWithChat = parseLocalCliArgs(["continue", "100", "rw-2"]);
     expect(contWithChat.ok).toBe(true);
     if (!contWithChat.ok || !contWithChat.args) {
@@ -492,8 +516,14 @@ describe("local CLI", () => {
 
     try {
       const approveCode = await runLocalCli(["--config", configPath, "approve"], output);
+      const statusCode = await runLocalCli(["--config", configPath, "status"], output);
+      const handoffStatusCode = await runLocalCli(["--config", configPath, "handoff-status"], output);
+      const handoffShowCode = await runLocalCli(["--config", configPath, "handoff-show"], output);
       const continueCode = await runLocalCli(["--config", configPath, "continue", "rw-1"], output);
       expect(approveCode).toBe(0);
+      expect(statusCode).toBe(0);
+      expect(handoffStatusCode).toBe(0);
+      expect(handoffShowCode).toBe(0);
       expect(continueCode).toBe(0);
     } finally {
       if (typeof previousToken === "undefined") {
@@ -507,6 +537,9 @@ describe("local CLI", () => {
     const rendered = logs.join("\n");
     expect(rendered).toContain("Auto-selected chat 100.");
     expect(rendered).toContain(": /approve");
+    expect(rendered).toContain(": /status");
+    expect(rendered).toContain(": /handoff status");
+    expect(rendered).toContain(": /handoff show");
     expect(rendered).toContain(": /continue rw-1");
   });
 

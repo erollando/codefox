@@ -222,6 +222,9 @@ npm run chat:cli -- --config ./config/codefox.config.json
 npm run local:cli -- send 100 "/status"
 npm run local:cli -- approve 100
 npm run local:cli -- deny 100
+npm run local:cli -- status 100
+npm run local:cli -- handoff-status 100
+npm run local:cli -- handoff-show 100
 npm run local:cli -- continue 100 rw-1
 npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoint implemented"
 ```
@@ -229,7 +232,7 @@ npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoi
 `send` writes a command envelope into `<state-dir>/local-command-queue/inbox`.
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
 `chat:cli` starts a persistent chat-like shell so you can send commands/questions without repeating `chatId` every time.
-`approve`, `deny`, and `continue` are shortcut local CLI commands that enqueue `/approve`, `/deny`, and `/continue [work-id]` into the same controller path; when `chatId` is omitted, CodeFox auto-selects the default/single/most-recent chat.
+`approve`, `deny`, `status`, `handoff-status`, `handoff-show`, and `continue` are shortcut local CLI commands that enqueue `/approve`, `/deny`, `/status`, `/handoff status`, `/handoff show`, and `/continue [work-id]` into the same controller path; when `chatId` is omitted, CodeFox auto-selects the default/single/most-recent chat.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
 When multiple active routes exist, `handoff:cli` shows them clearly and lets you choose; Enter keeps the most recently used route.
 When `chatId` is provided but local session state is missing/stale, `handoff:cli` can still resolve via active relay routes.

@@ -109,8 +109,11 @@ npm run verify
 - For shortcut local control actions, use:
   - `npm run local:cli -- [--config <path>] approve [chatId]`
   - `npm run local:cli -- [--config <path>] deny [chatId]`
+  - `npm run local:cli -- [--config <path>] status [chatId]`
+  - `npm run local:cli -- [--config <path>] handoff-status [chatId]`
+  - `npm run local:cli -- [--config <path>] handoff-show [chatId]`
   - `npm run local:cli -- [--config <path>] continue [chatId] [workId]`
-  - These enqueue `/approve`, `/deny`, and `/continue [workId]` via the same local command queue/controller path.
+  - These enqueue `/approve`, `/deny`, `/status`, `/handoff status`, `/handoff show`, and `/continue [workId]` via the same local command queue/controller path.
   - If `chatId` is omitted, CodeFox auto-selects single/default/most-recent chat context.
 - For an operator-facing handoff bridge without manual API calls, use:
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`

@@ -15,7 +15,21 @@ export interface LocalCliOutput {
 }
 
 export interface LocalCliParsedArgs {
-  command: "help" | "sessions" | "approvals" | "specs" | "session" | "send" | "handoff" | "chat" | "approve" | "deny" | "continue";
+  command:
+    | "help"
+    | "sessions"
+    | "approvals"
+    | "specs"
+    | "session"
+    | "send"
+    | "handoff"
+    | "chat"
+    | "approve"
+    | "deny"
+    | "continue"
+    | "status"
+    | "handoff-status"
+    | "handoff-show";
   chatId?: number;
   userId?: number;
   text?: string;
@@ -224,7 +238,13 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
     };
   }
 
-  if (command === "approve" || command === "deny") {
+  if (
+    command === "approve" ||
+    command === "deny" ||
+    command === "status" ||
+    command === "handoff-status" ||
+    command === "handoff-show"
+  ) {
     const chatIdRaw = positional[1];
     if (!chatIdRaw) {
       return {
@@ -639,7 +659,14 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
     approvalTtlHours: config.state.approvalTtlHours
   }).state;
 
-  if (args.command === "approve" || args.command === "deny" || args.command === "continue") {
+  if (
+    args.command === "approve" ||
+    args.command === "deny" ||
+    args.command === "continue" ||
+    args.command === "status" ||
+    args.command === "handoff-status" ||
+    args.command === "handoff-show"
+  ) {
     const effectiveUserId = args.userId ?? config.telegram.allowedUserIds[0];
     if (!effectiveUserId) {
       output.error("No allowed user id configured. Use --user <id> or set telegram.allowedUserIds.");
@@ -660,9 +687,15 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
         ? "/approve"
         : args.command === "deny"
           ? "/deny"
-          : args.workId
-            ? `/continue ${args.workId}`
-            : "/continue";
+          : args.command === "status"
+            ? "/status"
+            : args.command === "handoff-status"
+              ? "/handoff status"
+              : args.command === "handoff-show"
+                ? "/handoff show"
+                : args.workId
+                  ? `/continue ${args.workId}`
+                  : "/continue";
 
     const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
     const queued = await queue.enqueue({
@@ -1554,6 +1587,9 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] [--user <id>] send <chatId> <command-text>",
     "  npm run local:cli -- [--config <path>] [--user <id>] approve [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] deny [chatId]",
+    "  npm run local:cli -- [--config <path>] [--user <id>] status [chatId]",
+    "  npm run local:cli -- [--config <path>] [--user <id>] handoff-status [chatId]",
+    "  npm run local:cli -- [--config <path>] [--user <id>] handoff-show [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] continue [chatId] [workId]",
     "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
     "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
