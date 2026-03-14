@@ -30,6 +30,7 @@ export type ParsedCommand =
   | { type: "close" }
   | { type: "status" }
   | { type: "pending" }
+  | { type: "handoff"; action: "status" | "show" | "continue" | "clear"; workId?: string }
   | { type: "approve" }
   | { type: "deny" }
   | { type: "abort" }
@@ -134,6 +135,11 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "status" };
     case "/pending":
       return { type: "pending" };
+    case "/handoff":
+      if (!arg) {
+        return { type: "handoff", action: "status" };
+      }
+      return parseHandoffCommand(arg, text);
     case "/approve":
       return { type: "approve" };
     case "/deny":
@@ -145,6 +151,32 @@ export function parseCommand(text: string): ParsedCommand {
     default:
       return { type: "unknown", raw: text };
   }
+}
+
+function parseHandoffCommand(arg: string, raw: string): ParsedCommand {
+  const parts = arg.split(/\s+/).filter(Boolean);
+  const subCommand = parts[0]?.toLowerCase();
+
+  if (subCommand === "status") {
+    return parts.length === 1 ? { type: "handoff", action: "status" } : { type: "unknown", raw };
+  }
+  if (subCommand === "show") {
+    return parts.length === 1 ? { type: "handoff", action: "show" } : { type: "unknown", raw };
+  }
+  if (subCommand === "continue") {
+    if (parts.length === 1) {
+      return { type: "handoff", action: "continue" };
+    }
+    if (parts.length === 2) {
+      return { type: "handoff", action: "continue", workId: parts[1] };
+    }
+    return { type: "unknown", raw };
+  }
+  if (subCommand === "clear") {
+    return parts.length === 1 ? { type: "handoff", action: "clear" } : { type: "unknown", raw };
+  }
+
+  return { type: "unknown", raw };
 }
 
 function parseActCommand(arg: string, raw: string): ParsedCommand {

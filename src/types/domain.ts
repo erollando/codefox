@@ -163,6 +163,11 @@ export interface ApprovalRequest {
   mode: PolicyMode;
   instruction: string;
   capabilityRef?: string;
+  source?: "codefox" | "external-codex";
+  externalApproval?: {
+    leaseId: string;
+    approvalKey: string;
+  };
   createdAt: string;
 }
 

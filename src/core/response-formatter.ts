@@ -45,6 +45,7 @@ export function formatHelp(): string {
     "/steer <instruction>",
     "/close",
     "/status",
+    "/handoff [status|show|continue [work-id]|clear]",
     "/audit <view_id>",
     "/abort"
   ].join("\n");
@@ -281,13 +282,17 @@ export function formatPendingApproval(approval: ApprovalRequest): string {
     `Pending approval: ${approval.id}`,
     `repo: ${approval.repoName}`,
     `mode: ${approval.mode}`,
+    `source: ${approval.source ?? "codefox"}`,
     `requested by user: ${approval.userId}`,
     `created at: ${approval.createdAt}`,
     `instruction: ${truncateForTelegram(redactSensitive(approval.instruction), 200)}`,
     "Use /approve or /deny."
   ];
   if (approval.capabilityRef) {
-    lines.splice(5, 0, `capability: ${approval.capabilityRef}`);
+    lines.splice(6, 0, `capability: ${approval.capabilityRef}`);
+  }
+  if (approval.externalApproval) {
+    lines.push(`external approval key: ${approval.externalApproval.approvalKey}`);
   }
   return lines.join("\n");
 }

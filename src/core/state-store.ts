@@ -182,19 +182,36 @@ function sanitizeApprovals(approvals: ApprovalRequest[]): ApprovalRequest[] {
         typeof approval.userId === "number" &&
         Number.isSafeInteger(approval.userId)
     )
-    .map((approval) => ({
-      id: approval.id,
-      chatId: approval.chatId,
-      userId: approval.userId,
-      repoName: approval.repoName,
-      mode: isPolicyMode(approval.mode) ? approval.mode : "observe",
-      instruction: approval.instruction,
-      capabilityRef:
-        typeof approval.capabilityRef === "string" && CAPABILITY_REF_PATTERN.test(approval.capabilityRef)
-          ? approval.capabilityRef
-          : undefined,
-      createdAt: isValidIsoTimestamp(approval.createdAt) ? approval.createdAt : now
-    }));
+    .map((approval) => {
+      const source = approval.source === "external-codex" ? "external-codex" : "codefox";
+      const externalApproval =
+        approval.externalApproval &&
+        typeof approval.externalApproval.leaseId === "string" &&
+        approval.externalApproval.leaseId.trim().length > 0 &&
+        typeof approval.externalApproval.approvalKey === "string" &&
+        approval.externalApproval.approvalKey.trim().length > 0
+          ? {
+              leaseId: approval.externalApproval.leaseId.trim(),
+              approvalKey: approval.externalApproval.approvalKey.trim()
+            }
+          : undefined;
+
+      return {
+        id: approval.id,
+        chatId: approval.chatId,
+        userId: approval.userId,
+        repoName: approval.repoName,
+        mode: isPolicyMode(approval.mode) ? approval.mode : "observe",
+        instruction: approval.instruction,
+        capabilityRef:
+          typeof approval.capabilityRef === "string" && CAPABILITY_REF_PATTERN.test(approval.capabilityRef)
+            ? approval.capabilityRef
+            : undefined,
+        source,
+        externalApproval,
+        createdAt: isValidIsoTimestamp(approval.createdAt) ? approval.createdAt : now
+      };
+    });
 }
 
 function sanitizeSpecWorkflows(specWorkflows: PersistedSpecWorkflow[]): PersistedSpecWorkflow[] {

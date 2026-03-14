@@ -86,14 +86,15 @@ export class ExternalRelayHttpServer {
     this.options.relay.setRoutes(this.options.getRoutes());
 
     const method = req.method ?? "GET";
-    const url = req.url ?? "/";
+    const requestUrl = new URL(req.url ?? "/", "http://localhost");
+    const pathname = requestUrl.pathname;
 
-    if (method === "GET" && url === "/health") {
+    if (method === "GET" && pathname === "/health") {
       sendJson(res, 200, { ok: true });
       return;
     }
 
-    if (method === "GET" && url === "/v1/external-codex/routes") {
+    if (method === "GET" && pathname === "/v1/external-codex/routes") {
       sendJson(res, 200, {
         ok: true,
         routes: this.options.relay.listRoutes()
@@ -101,7 +102,7 @@ export class ExternalRelayHttpServer {
       return;
     }
 
-    if (method === "POST" && url === "/v1/external-codex/bind") {
+    if (method === "POST" && pathname === "/v1/external-codex/bind") {
       const body = await readJson<ExternalBindRequest>(req).catch((error) => {
         sendJson(res, 400, { ok: false, error: String(error) });
         return undefined;
@@ -115,7 +116,43 @@ export class ExternalRelayHttpServer {
       return;
     }
 
-    if (method === "POST" && url === "/v1/external-codex/event") {
+    if (method === "POST" && pathname === "/v1/external-codex/heartbeat") {
+      const body = await readJson<{ leaseId?: string }>(req).catch((error) => {
+        sendJson(res, 400, { ok: false, error: String(error) });
+        return undefined;
+      });
+      const leaseId = body?.leaseId?.trim();
+      if (!leaseId) {
+        sendJson(res, 400, { ok: false, error: "leaseId is required." });
+        return;
+      }
+      const ok = this.options.relay.heartbeatLease(leaseId);
+      sendJson(res, ok ? 202 : 404, {
+        ok,
+        leaseId
+      });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/v1/external-codex/revoke") {
+      const body = await readJson<{ leaseId?: string; reason?: string }>(req).catch((error) => {
+        sendJson(res, 400, { ok: false, error: String(error) });
+        return undefined;
+      });
+      const leaseId = body?.leaseId?.trim();
+      if (!leaseId) {
+        sendJson(res, 400, { ok: false, error: "leaseId is required." });
+        return;
+      }
+      const ok = this.options.relay.revokeLease(leaseId, body?.reason);
+      sendJson(res, ok ? 202 : 404, {
+        ok,
+        leaseId
+      });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/v1/external-codex/event") {
       const body = await readJson<ExternalCodexEvent>(req).catch((error) => {
         sendJson(res, 400, { ok: false, error: String(error) });
         return undefined;
@@ -129,7 +166,29 @@ export class ExternalRelayHttpServer {
       return;
     }
 
-    if (method === "POST" && url === "/v1/external-codex/handoff") {
+    if (method === "GET" && pathname === "/v1/external-codex/approval") {
+      const leaseId = requestUrl.searchParams.get("leaseId")?.trim();
+      const approvalKey = requestUrl.searchParams.get("approvalKey")?.trim();
+      if (!leaseId || !approvalKey) {
+        sendJson(res, 400, { ok: false, error: "leaseId and approvalKey are required query parameters." });
+        return;
+      }
+      const approval = this.options.relay.getApprovalDecision(leaseId, approvalKey);
+      if (!approval) {
+        sendJson(res, 404, {
+          ok: false,
+          error: "Approval record was not found."
+        });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        approval
+      });
+      return;
+    }
+
+    if (method === "POST" && pathname === "/v1/external-codex/handoff") {
       const body = await readJson<ExternalCodexHandoffBundle>(req).catch((error) => {
         sendJson(res, 400, { ok: false, error: String(error) });
         return undefined;

@@ -25,11 +25,31 @@ export interface ExternalCodexRelayOptions {
     summary: string;
     requestedCapabilityRef?: string;
   }) => Promise<void>;
+  onHandoffReceived?: (event: {
+    leaseId: string;
+    chatId: number;
+    handoff: ExternalCodexHandoffBundle;
+  }) => Promise<void>;
 }
 
 export interface ExternalRouteEntry {
   sessionId: string;
   chatId: number;
+}
+
+export type ExternalApprovalStatus = "pending" | "approved" | "denied";
+
+export interface ExternalApprovalRecord {
+  leaseId: string;
+  approvalKey: string;
+  chatId: number;
+  clientId: string;
+  summary: string;
+  requestedCapabilityRef?: string;
+  status: ExternalApprovalStatus;
+  createdAt: string;
+  decidedAt?: string;
+  decidedByUserId?: number;
 }
 
 export interface ExternalRelayEventResult {
@@ -45,6 +65,7 @@ export interface ExternalRelayHandoffResult {
 export class ExternalCodexRelay {
   readonly integration: ExternalCodexIntegration;
   private readonly routes = new Map<string, ExternalRouteEntry>();
+  private readonly approvals = new Map<string, ExternalApprovalRecord>();
 
   constructor(private readonly options: ExternalCodexRelayOptions) {
     this.integration = options.integration ?? new ExternalCodexIntegration();
@@ -80,6 +101,23 @@ export class ExternalCodexRelay {
       };
     }
     return this.integration.bind(request);
+  }
+
+  heartbeatLease(leaseId: string): boolean {
+    return this.integration.heartbeat(leaseId);
+  }
+
+  revokeLease(leaseId: string, reason?: string): boolean {
+    const revoked = this.integration.revokeLease(leaseId, reason);
+    if (!revoked) {
+      return false;
+    }
+    for (const [key, record] of this.approvals.entries()) {
+      if (record.leaseId === leaseId) {
+        this.approvals.delete(key);
+      }
+    }
+    return true;
   }
 
   async relayEvent(event: ExternalCodexEvent): Promise<ExternalRelayEventResult> {
@@ -124,14 +162,26 @@ export class ExternalCodexRelay {
     const message = formatEventRelayMessage(decision.lease.session.sessionId, event);
     await this.options.notify(route.chatId, message);
 
-    if (event.type === "approval_request" && this.options.onApprovalRequested) {
-      await this.options.onApprovalRequested({
+    if (event.type === "approval_request") {
+      this.approvals.set(approvalRecordKey(event.leaseId, event.approvalKey), {
         leaseId: event.leaseId,
-        chatId: route.chatId,
         approvalKey: event.approvalKey,
+        chatId: route.chatId,
+        clientId: event.clientId,
         summary: event.summary,
-        requestedCapabilityRef: event.requestedCapabilityRef
+        requestedCapabilityRef: event.requestedCapabilityRef,
+        status: "pending",
+        createdAt: event.timestamp
       });
+      if (this.options.onApprovalRequested) {
+        await this.options.onApprovalRequested({
+          leaseId: event.leaseId,
+          chatId: route.chatId,
+          approvalKey: event.approvalKey,
+          summary: event.summary,
+          requestedCapabilityRef: event.requestedCapabilityRef
+        });
+      }
     }
     return { decision, relayed: true };
   }
@@ -174,11 +224,56 @@ export class ExternalCodexRelay {
     });
 
     await this.options.notify(route.chatId, formatHandoffRelayMessage(decision.lease.session.sessionId, handoff));
+    if (this.options.onHandoffReceived) {
+      await this.options.onHandoffReceived({
+        leaseId: handoff.leaseId,
+        chatId: route.chatId,
+        handoff
+      });
+    }
     return { decision, relayed: true };
   }
 
   resolveLease(leaseId: string): ExternalBindingLease | undefined {
     return this.integration.listLeases().find((lease) => lease.leaseId === leaseId);
+  }
+
+  getApprovalDecision(leaseId: string, approvalKey: string): ExternalApprovalRecord | undefined {
+    const record = this.approvals.get(approvalRecordKey(leaseId, approvalKey));
+    return record ? { ...record } : undefined;
+  }
+
+  async decideApproval(
+    leaseId: string,
+    approvalKey: string,
+    approved: boolean,
+    decidedByUserId: number
+  ): Promise<ExternalApprovalRecord | undefined> {
+    const key = approvalRecordKey(leaseId, approvalKey);
+    const record = this.approvals.get(key);
+    if (!record || record.status !== "pending") {
+      return undefined;
+    }
+
+    const decisionStatus: ExternalApprovalStatus = approved ? "approved" : "denied";
+    const decidedAt = new Date().toISOString();
+    const decided: ExternalApprovalRecord = {
+      ...record,
+      status: decisionStatus,
+      decidedAt,
+      decidedByUserId
+    };
+    this.approvals.set(key, decided);
+    await this.options.audit.log({
+      type: "external_approval_decided",
+      leaseId,
+      approvalKey,
+      chatId: record.chatId,
+      status: decisionStatus,
+      decidedByUserId,
+      decidedAt
+    });
+    return { ...decided };
   }
 }
 
@@ -206,4 +301,8 @@ function formatHandoffRelayMessage(sessionId: string, handoff: ExternalCodexHand
     `completed work: ${handoff.completedWork.length}`,
     `remaining work: ${handoff.remainingWork.length}`
   ].join("\n");
+}
+
+function approvalRecordKey(leaseId: string, approvalKey: string): string {
+  return `${leaseId}:${approvalKey}`;
 }

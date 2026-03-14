@@ -162,6 +162,16 @@ describe("parseCommand", () => {
     });
     expect(parseCommand("/close")).toEqual({ type: "close" });
     expect(parseCommand("/pending")).toEqual({ type: "pending" });
+    expect(parseCommand("/handoff")).toEqual({ type: "handoff", action: "status" });
+    expect(parseCommand("/handoff status")).toEqual({ type: "handoff", action: "status" });
+    expect(parseCommand("/handoff show")).toEqual({ type: "handoff", action: "show" });
+    expect(parseCommand("/handoff continue")).toEqual({ type: "handoff", action: "continue" });
+    expect(parseCommand("/handoff continue rw-1")).toEqual({
+      type: "handoff",
+      action: "continue",
+      workId: "rw-1"
+    });
+    expect(parseCommand("/handoff clear")).toEqual({ type: "handoff", action: "clear" });
     expect(parseCommand("/audit view_abcd1234")).toEqual({
       type: "audit",
       viewId: "view_abcd1234"
@@ -200,6 +210,8 @@ describe("parseCommand", () => {
     expect(parseCommand("/repo remove").type).toBe("unknown");
     expect(parseCommand("/run").type).toBe("unknown");
     expect(parseCommand("/steer").type).toBe("unknown");
+    expect(parseCommand("/handoff continue rw-1 extra").type).toBe("unknown");
+    expect(parseCommand("/handoff invalid").type).toBe("unknown");
     expect(parseCommand("/audit").type).toBe("unknown");
     expect(parseCommand("/codex-changelog").type).toBe("unknown");
     expect(parseCommand("/changelog").type).toBe("unknown");

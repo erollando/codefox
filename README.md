@@ -77,6 +77,7 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 - `/steer <instruction>`
 - `/close`
 - `/status`
+- `/handoff [status|show|continue [work-id]|clear]`
 - `/audit <view_id>`
 - `/abort`
 
@@ -100,6 +101,12 @@ Spec workflow:
 - `/spec approve force` is only a bypass path for `observe` mode.
 - In `observe` mode, `/run` remains allowed without a spec.
 - `/spec show` renders the current spec text for review and auditability.
+
+External handoff continuation:
+
+- External clients can submit typed handoff bundles (`/v1/external-codex/handoff`) after execution phase completion.
+- CodeFox validates the handoff spec revision reference before storing continuation context.
+- Use `/handoff show` to inspect remaining work and `/handoff continue [work-id]` to continue from phone/Telegram.
 
 Image/document prompts:
 
@@ -268,11 +275,15 @@ External relay HTTP transport (optional):
 
 - `GET /health`
 - `GET /v1/external-codex/routes`
+- `GET /v1/external-codex/approval?leaseId=<id>&approvalKey=<key>`
 - `POST /v1/external-codex/bind`
+- `POST /v1/external-codex/heartbeat`
+- `POST /v1/external-codex/revoke`
 - `POST /v1/external-codex/event`
 - `POST /v1/external-codex/handoff`
 
 When enabled, routes are derived from active CodeFox sessions (`chat:<id>/repo:<name>/mode:<mode>`). The relay remains transport-agnostic; this HTTP server is a thin adapter boundary suitable for future VS Code plugin/skill clients.
+`approval_request` events are converted into CodeFox pending approvals and must be resolved by `/approve` or `/deny` inside CodeFox channels.
 
 ## Validate
 

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { RunningTask } from "../src/adapters/codex.js";
 import type { TaskContext, TaskResult } from "../src/types/domain.js";
 import type { SpecWorkflowState } from "../src/core/spec-workflow.js";
+import type { ExternalCodexHandoffBundle } from "../src/core/external-codex-integration.js";
 import { ApprovalStore } from "../src/core/approval-store.js";
 import { AccessControl } from "../src/core/auth.js";
 import { CodeFoxController } from "../src/core/controller.js";
@@ -91,6 +92,13 @@ function makeController(
     telegram?: FakeTelegram;
     initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
     persistState?: () => Promise<void>;
+    externalApprovalDecision?: (input: {
+      leaseId: string;
+      approvalKey: string;
+      approved: boolean;
+      chatId: number;
+      userId: number;
+    }) => Promise<boolean>;
   }
 ) {
   const telegram = options?.telegram ?? new FakeTelegram();
@@ -119,7 +127,8 @@ function makeController(
       }),
     codexSessionIdleMinutes: 120,
     initialSpecWorkflows: options?.initialSpecWorkflows,
-    persistState: options?.persistState
+    persistState: options?.persistState,
+    externalApprovalDecision: options?.externalApprovalDecision
   });
 
   return { controller, telegram, audit, approvals, sessions };
@@ -417,6 +426,54 @@ describe("CodeFoxController", () => {
     ).toBe(true);
   });
 
+  it("resolves external approvals through configured decision sink", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const decisions: Array<Record<string, unknown>> = [];
+    const { controller, approvals, telegram, audit } = makeController(fakeCodex, {
+      externalApprovalDecision: async (input) => {
+        decisions.push(input);
+        return true;
+      }
+    });
+
+    approvals.set({
+      id: "extapr_1",
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "approve external push",
+      capabilityRef: "repo.prepare_branch",
+      source: "external-codex",
+      externalApproval: {
+        leaseId: "lease_abc",
+        approvalKey: "push-branch"
+      },
+      createdAt: new Date().toISOString()
+    });
+
+    await controller.handleUpdate(makeUpdate("/approve"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.approved).toBe(true);
+    expect(decisions[0]?.leaseId).toBe("lease_abc");
+    expect(approvals.get(100)).toBeUndefined();
+    expect(telegram.sent.some((item) => item.text.includes("Approved external request extapr_1"))).toBe(true);
+    expect(audit.events.some((event) => event.type === "external_approval_granted")).toBe(true);
+  });
+
   it("revalidates capability ref on /approve and blocks stale unknown actions", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
@@ -451,6 +508,57 @@ describe("CodeFoxController", () => {
         (event) => event.type === "capability_policy_block" && event.reasonCode === "unknown_capability_action"
       )
     ).toBe(true);
+  });
+
+  it("ingests external handoff and continues remaining work with /handoff continue", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+
+    const handoff: ExternalCodexHandoffBundle = {
+      schemaVersion: "v1",
+      leaseId: "lease_1",
+      handoffId: "handoff_1",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:00:00.000Z",
+      taskId: "TASK-100",
+      specRevisionRef: "v1",
+      completedWork: ["Implemented API route"],
+      remainingWork: [
+        {
+          id: "rw-1",
+          summary: "Run regression checks",
+          requestedCapabilityRef: "repo.run_checks"
+        }
+      ]
+    };
+
+    const ingest = await controller.ingestExternalHandoff(100, "lease_1", handoff);
+    expect(ingest.accepted).toBe(true);
+
+    await controller.handleUpdate(makeUpdate("/handoff status"));
+    await controller.handleUpdate(makeUpdate("/handoff continue"));
+    await flushAsyncWork();
+    await controller.handleUpdate(makeUpdate("/handoff show"));
+
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
+    expect(fakeCodex.calls[0]?.context.capability?.ref).toBe("repo.run_checks");
+    expect(telegram.sent.some((item) => item.text.includes("External handoff status:"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("rw-1 [continued]"))).toBe(true);
   });
 
   it("blocks /run in active mode when no approved spec exists", async () => {
