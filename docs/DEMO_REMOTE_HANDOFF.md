@@ -65,14 +65,4 @@ Captured run output:
 - Receive a clean handoff with what is done, what is left, and what needs a decision.
 - Continue the remaining work in one command (`/handoff continue ...`) instead of restarting from scratch.
 - Keep a trace of who approved what and when.
-
-If you want a shorter storytelling version for presentations, see:
-- [One-Page Story](./DEMO_ONE_PAGE_STORY.md)
-
-## Optional next demo variant
-
-Use the same flow but intentionally send:
-- duplicate `bind` for same session id (should return `session_already_bound`)
-- handoff item requiring non-runnable capability in current mode (should be rejected at ingest)
-
-This shows real guardrails, not only happy-path automation.
+- Read the short version here: [One-Page Story](./DEMO_ONE_PAGE_STORY.md)
