@@ -582,6 +582,18 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
     authToken
   });
   if (!routesResponse.ok || !routesResponse.body?.ok) {
+    if (routesResponse.status === 0) {
+      output.error(
+        [
+          `Cannot reach CodeFox external relay at ${relayBaseUrl}.`,
+          "Start CodeFox with externalRelay.enabled=true, then retry.",
+          config.externalRelay.authTokenEnvVar
+            ? `Ensure ${config.externalRelay.authTokenEnvVar} is set and matches the running CodeFox process.`
+            : "If relay auth is enabled, provide the matching bearer token env var."
+        ].join(" ")
+      );
+      return 1;
+    }
     output.error(renderRelayError("Failed to fetch external relay routes.", routesResponse));
     return 1;
   }
