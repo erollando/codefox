@@ -11,6 +11,11 @@ Then you leave your desk.
 
 With CodeFox, you do not lose the session.
 
+When to start:
+
+- Best: start CodeFox at the beginning of work.
+- Also valid: start CodeFox before leaving, then bind external client and hand off.
+
 What happens:
 
 1. Your external client reports structured progress into CodeFox.
@@ -19,6 +24,12 @@ What happens:
 4. External execution finishes and sends a handoff bundle.
 5. CodeFox shows what is done and what is left (`/handoff show`).
 6. You continue the remaining step remotely (`/handoff continue rw-1`).
+
+The handoff itself:
+
+1. In VS Code, external Codex sends a typed handoff bundle to CodeFox.
+2. CodeFox confirms handoff is ready.
+3. You switch to phone and continue from `/handoff show`.
 
 Command + reply transcript:
 

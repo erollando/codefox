@@ -11,6 +11,16 @@ Story:
 Goal:
 - Show CodeFox as authority for approvals, policy, and audit while enabling seamless continuation.
 
+## When to start CodeFox
+
+Short answer:
+- Recommended: start CodeFox from the beginning of the task.
+- Minimum required: before handoff, there must be an active CodeFox session and an external lease bind.
+
+Why:
+- The external client can hand off only to an existing CodeFox session route (`chat/repo/mode`).
+- If you start late, you can still continue, but you lose earlier progress history inside CodeFox.
+
 ## Real execution (runnable now)
 
 Run:
@@ -62,6 +72,16 @@ Transcript legend:
 - user checks `/handoff show`
 - user runs `/handoff continue rw-1`
 - CodeFox executes typed remaining work (`repo.run_checks`)
+
+## The handoff moment (desk -> phone)
+
+This is the explicit transition:
+
+1. In VS Code, external Codex finishes its desk phase and sends a typed handoff bundle to CodeFox.
+2. CodeFox acknowledges handoff readiness in the user channel.
+3. User leaves desk and opens phone.
+4. User runs `/handoff show` to inspect remaining work.
+5. User runs `/handoff continue <work-id>` to resume under CodeFox policy.
 
 ## Command + reply sample
 
