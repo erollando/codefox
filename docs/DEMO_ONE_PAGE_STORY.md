@@ -13,8 +13,8 @@ With CodeFox, you do not lose the session.
 
 When to start:
 
-- Best: start CodeFox at the beginning of work.
-- Also valid: start CodeFox before leaving, then bind external client and hand off.
+- Start CodeFox at the beginning of work.
+- Start CodeFox before leaving, then bind external client and hand off.
 
 What happens:
 

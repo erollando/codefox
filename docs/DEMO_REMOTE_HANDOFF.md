@@ -13,9 +13,9 @@ Goal:
 
 ## When to start CodeFox
 
-Short answer:
-- Recommended: start CodeFox from the beginning of the task.
-- Minimum required: before handoff, there must be an active CodeFox session and an external lease bind.
+Options:
+- Start CodeFox from the beginning of the task.
+- Start CodeFox later, but before handoff. In this case you still need an active CodeFox session and an external lease bind.
 
 Why:
 - The external client can hand off only to an existing CodeFox session route (`chat/repo/mode`).
