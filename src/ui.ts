@@ -665,12 +665,22 @@ const UI_HTML = `<!doctype html>
       document.body.classList.add("mobile-mode");
     }
     let selectedChatId;
+    let lastMessageFingerprint = "";
+    let forceScrollToBottom = true;
+    let userNearBottom = true;
+    const SCROLL_BOTTOM_THRESHOLD_PX = 48;
     const sessionsEl = document.getElementById("sessions");
     const contextEl = document.getElementById("context");
     const quickEl = document.getElementById("quick");
     const feedEl = document.getElementById("feed");
     const composerEl = document.getElementById("composer");
     const inputEl = document.getElementById("input");
+
+    if (feedEl) {
+      feedEl.addEventListener("scroll", () => {
+        userNearBottom = isFeedNearBottom();
+      });
+    }
 
     async function fetchState() {
       const query = selectedChatId ? "?chatId=" + selectedChatId : "";
@@ -684,6 +694,10 @@ const UI_HTML = `<!doctype html>
     }
 
     function render(data) {
+      const nextFingerprint = buildMessageFingerprint(data.messages || []);
+      const hasNewMessages = nextFingerprint !== lastMessageFingerprint;
+      lastMessageFingerprint = nextFingerprint;
+
       sessionsEl.innerHTML = "";
       for (const session of data.sessions) {
         const button = document.createElement("button");
@@ -693,6 +707,7 @@ const UI_HTML = `<!doctype html>
           "<span class='tiny'>repo=" + (session.repo || "(none)") + " mode=" + session.mode + "</span>";
         button.onclick = () => {
           selectedChatId = session.chatId;
+          forceScrollToBottom = true;
           fetchState();
         };
         sessionsEl.appendChild(button);
@@ -703,6 +718,7 @@ const UI_HTML = `<!doctype html>
         contextEl.innerHTML = "<span class='tiny'>No active session yet. Start from Telegram, REPL, or handoff.</span>";
         quickEl.innerHTML = "";
         feedEl.innerHTML = "<div class='tiny'>No messages yet.</div>";
+        forceScrollToBottom = false;
         return;
       }
 
@@ -744,7 +760,11 @@ const UI_HTML = `<!doctype html>
           feedEl.appendChild(card);
         }
       }
-      feedEl.scrollTop = feedEl.scrollHeight;
+      if (shouldAutoScroll(hasNewMessages)) {
+        feedEl.scrollTop = feedEl.scrollHeight;
+        userNearBottom = true;
+      }
+      forceScrollToBottom = false;
     }
 
     async function sendText(text) {
@@ -760,8 +780,10 @@ const UI_HTML = `<!doctype html>
       const data = await response.json();
       if (!data.ok) {
         alert(data.error || "Failed to send command.");
+        return;
       }
       inputEl.value = "";
+      forceScrollToBottom = true;
       await fetchState();
     }
 
@@ -770,6 +792,29 @@ const UI_HTML = `<!doctype html>
         return "";
       }
       return command.startsWith("/") ? command.slice(1) : command;
+    }
+
+    function buildMessageFingerprint(messages) {
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return "empty";
+      }
+      const last = messages[messages.length - 1];
+      return String(messages.length) + ":" + String(last.id || "") + ":" + String(last.timestamp || "");
+    }
+
+    function isFeedNearBottom() {
+      if (!feedEl) {
+        return true;
+      }
+      const distance = feedEl.scrollHeight - (feedEl.scrollTop + feedEl.clientHeight);
+      return distance <= SCROLL_BOTTOM_THRESHOLD_PX;
+    }
+
+    function shouldAutoScroll(hasNewMessages) {
+      if (forceScrollToBottom) {
+        return true;
+      }
+      return hasNewMessages && userNearBottom;
     }
 
     composerEl.addEventListener("submit", async (event) => {
