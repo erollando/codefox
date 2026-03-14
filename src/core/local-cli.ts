@@ -673,7 +673,8 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
 
   const session = pruned.sessions.find((entry) => entry.chatId === chatId);
   const taskId = resolveTaskId(args, session);
-  const remainingSummary = resolveRemainingSummary(args, session);
+  const capabilityRef = resolveCapabilityRef(args, session?.mode);
+  const remainingSummary = resolveRemainingSummary(args, session, capabilityRef);
   const workId = args.workId || "rw-1";
   const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
   const handoffResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
@@ -694,7 +695,7 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
         {
           id: workId,
           summary: remainingSummary,
-          ...(args.capabilityRef ? { requestedCapabilityRef: args.capabilityRef } : {})
+          ...(capabilityRef ? { requestedCapabilityRef: capabilityRef } : {})
         }
       ],
       ...(args.unresolvedQuestions && args.unresolvedQuestions.length > 0
@@ -719,6 +720,9 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
   output.log(`handoff id: ${handoffId}`);
   output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
   output.log(`spec ref: ${specRevisionRef.value}`);
+  if (capabilityRef) {
+    output.log(`capability: ${capabilityRef}${args.capabilityRef ? "" : " (auto-selected)"}`);
+  }
   output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
   output.log("Next steps in Telegram:");
   output.log("  /handoff show");
@@ -750,13 +754,14 @@ function resolveRemainingSummary(
   session?: {
     activeRequestId?: string;
     codexThreadId?: string;
-  }
+  },
+  capabilityRef?: string
 ): string {
   if (args.remainingSummary && args.remainingSummary.trim().length > 0) {
     return args.remainingSummary.trim();
   }
-  if (args.capabilityRef && args.capabilityRef.trim().length > 0) {
-    return `Continue remaining work requiring ${args.capabilityRef.trim()}`;
+  if (capabilityRef && capabilityRef.trim().length > 0) {
+    return `Continue remaining work requiring ${capabilityRef.trim()}`;
   }
   if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
     return `Continue remaining work from request ${session.activeRequestId.trim()}`;
@@ -765,6 +770,16 @@ function resolveRemainingSummary(
     return `Continue remaining work from Codex session ${session.codexThreadId.trim()}`;
   }
   return "Continue remaining handoff work";
+}
+
+function resolveCapabilityRef(args: LocalCliParsedArgs, mode?: string): string | undefined {
+  if (args.capabilityRef && args.capabilityRef.trim().length > 0) {
+    return args.capabilityRef.trim();
+  }
+  if (mode === "active" || mode === "full-access") {
+    return "repo.run_checks";
+  }
+  return undefined;
 }
 
 function resolveHandoffContext(

@@ -561,8 +561,6 @@ describe("local CLI", () => {
           "--config",
           configPath,
           "handoff",
-          "--capability",
-          "repo.run_checks",
           "--completed",
           "Endpoint implemented",
           "--risk",
@@ -591,6 +589,7 @@ describe("local CLI", () => {
     expect(logs.join("\n")).toContain("Handoff submitted successfully");
     expect(logs.join("\n")).toContain("Auto-selected session chat:100/repo:payments-api/mode:active");
     expect(logs.join("\n")).toContain("task id: TASK-");
+    expect(logs.join("\n")).toContain("capability: repo.run_checks (auto-selected)");
     expect(logs.join("\n")).toContain("/handoff continue rw-1");
 
     expect(relayRequests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([

@@ -104,6 +104,7 @@ npm run verify
   - `npm run handoff:cli -- --config <path> [--capability <ref>] [--completed "<item>"]`
   - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`.
   - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-selects routed session, auto-generates task id, and auto-derives remaining summary when omitted).
+  - If capability is omitted in `active`/`full-access`, it defaults to `repo.run_checks` so continuation remains typed and runnable under capability policy.
 - Endpoints:
   - `GET /health`
   - `GET /v1/external-codex/routes`
