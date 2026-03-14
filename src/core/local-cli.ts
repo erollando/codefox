@@ -3,8 +3,8 @@ import { loadConfig, resolveConfigPath } from "./config.js";
 import { buildExternalSessionId } from "./external-session-route.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
 import { JsonStateStore, pruneStateByTtl } from "./state-store.js";
-import { getCurrentRevision } from "./spec-workflow.js";
-import type { PersistedSpecWorkflow } from "./state-store.js";
+import { approveCurrentRevision, createInitialWorkflow, getCurrentRevision } from "./spec-workflow.js";
+import type { PersistedSpecWorkflow, PersistedState } from "./state-store.js";
 
 export interface LocalCliOutput {
   log(line: string): void;
@@ -20,7 +20,6 @@ export interface LocalCliParsedArgs {
   taskId?: string;
   remainingSummary?: string;
   workId?: string;
-  capabilityRef?: string;
   completedWork?: string[];
   unresolvedRisks?: string[];
   unresolvedQuestions?: string[];
@@ -219,7 +218,6 @@ interface HandoffParsedArgs {
   taskId?: string;
   remainingSummary?: string;
   workId?: string;
-  capabilityRef?: string;
   completedWork: string[];
   unresolvedRisks: string[];
   unresolvedQuestions: string[];
@@ -254,7 +252,6 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
   let taskId: string | undefined;
   let remainingSummary: string | undefined;
   let workId: string | undefined;
-  let capabilityRef: string | undefined;
   let clientId: string | undefined;
   let specRevisionRef: string | undefined;
   let completionSummary: string | undefined;
@@ -305,17 +302,6 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
         };
       }
       workId = value;
-      continue;
-    }
-    if (token === "--capability") {
-      const value = readRequired(token);
-      if (!value) {
-        return {
-          ok: false,
-          error: "Missing value for --capability."
-        };
-      }
-      capabilityRef = value;
       continue;
     }
     if (token === "--completed") {
@@ -456,7 +442,6 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
       taskId: taskId?.trim(),
       remainingSummary: remainingSummary?.trim(),
       workId: workId?.trim(),
-      capabilityRef: capabilityRef?.trim(),
       completedWork,
       unresolvedRisks,
       unresolvedQuestions,
@@ -609,12 +594,6 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
     output.log(`Auto-selected session ${sessionId} for chat ${chatId}.`);
   }
 
-  const specRevisionRef = resolveSpecRevisionRef(args, chatId, pruned.specWorkflows);
-  if (!specRevisionRef.ok || !specRevisionRef.value) {
-    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
-    return 1;
-  }
-
   const matchedRoute = routes.find((route) => route.sessionId === sessionId);
   if (!matchedRoute) {
     output.error(
@@ -673,8 +652,23 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
 
   const session = pruned.sessions.find((entry) => entry.chatId === chatId);
   const taskId = resolveTaskId(args, session);
-  const capabilityRef = resolveCapabilityRef(args, session?.mode);
-  const remainingSummary = resolveRemainingSummary(args, session, capabilityRef);
+  const capabilityRef = resolveCapabilityRef(session?.mode);
+  const remainingSummary = resolveRemainingSummary(args, session);
+  const specRevisionRef = await resolveOrBootstrapSpecRevisionRef({
+    args,
+    chatId,
+    state: pruned,
+    store,
+    taskId,
+    remainingSummary
+  });
+  if (!specRevisionRef.ok || !specRevisionRef.value) {
+    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
+    return 1;
+  }
+  if (specRevisionRef.created) {
+    output.log(`Auto-created and approved spec ${specRevisionRef.value} for chat ${chatId}.`);
+  }
   const workId = args.workId || "rw-1";
   const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
   const handoffResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
@@ -720,9 +714,6 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
   output.log(`handoff id: ${handoffId}`);
   output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
   output.log(`spec ref: ${specRevisionRef.value}`);
-  if (capabilityRef) {
-    output.log(`capability: ${capabilityRef}${args.capabilityRef ? "" : " (auto-selected)"}`);
-  }
   output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
   output.log("Next steps in Telegram:");
   output.log("  /handoff show");
@@ -754,14 +745,10 @@ function resolveRemainingSummary(
   session?: {
     activeRequestId?: string;
     codexThreadId?: string;
-  },
-  capabilityRef?: string
+  }
 ): string {
   if (args.remainingSummary && args.remainingSummary.trim().length > 0) {
     return args.remainingSummary.trim();
-  }
-  if (capabilityRef && capabilityRef.trim().length > 0) {
-    return `Continue remaining work requiring ${capabilityRef.trim()}`;
   }
   if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
     return `Continue remaining work from request ${session.activeRequestId.trim()}`;
@@ -772,10 +759,7 @@ function resolveRemainingSummary(
   return "Continue remaining handoff work";
 }
 
-function resolveCapabilityRef(args: LocalCliParsedArgs, mode?: string): string | undefined {
-  if (args.capabilityRef && args.capabilityRef.trim().length > 0) {
-    return args.capabilityRef.trim();
-  }
+function resolveCapabilityRef(mode?: string): string | undefined {
   if (mode === "active" || mode === "full-access") {
     return "repo.run_checks";
   }
@@ -915,6 +899,47 @@ function resolveSpecRevisionRef(
   };
 }
 
+async function resolveOrBootstrapSpecRevisionRef(params: {
+  args: LocalCliParsedArgs;
+  chatId: number;
+  state: PersistedState;
+  store: JsonStateStore;
+  taskId: string;
+  remainingSummary: string;
+}): Promise<{ ok: boolean; value?: string; error?: string; created?: boolean }> {
+  const resolved = resolveSpecRevisionRef(params.args, params.chatId, params.state.specWorkflows);
+  if (resolved.ok && resolved.value) {
+    return resolved;
+  }
+  if (params.args.specRevisionRef && params.args.specRevisionRef.trim().length > 0) {
+    return resolved;
+  }
+
+  const autoIntent = `Continue ${params.taskId}: ${params.remainingSummary}`;
+  const approvedWorkflow = approveCurrentRevision(createInitialWorkflow(autoIntent));
+  const nextSpecWorkflows = [
+    ...params.state.specWorkflows.filter((entry) => entry.chatId !== params.chatId),
+    {
+      chatId: params.chatId,
+      workflow: approvedWorkflow
+    }
+  ];
+  const nextState: PersistedState = {
+    sessions: params.state.sessions,
+    approvals: params.state.approvals,
+    specWorkflows: nextSpecWorkflows,
+    externalHandoffs: params.state.externalHandoffs
+  };
+  await params.store.save(nextState);
+  params.state.specWorkflows = nextSpecWorkflows;
+  const current = getCurrentRevision(approvedWorkflow);
+  return {
+    ok: true,
+    value: `v${current.version}`,
+    created: true
+  };
+}
+
 async function bestEffortRevokeLease(baseUrl: string, authToken: string | undefined, leaseId: string): Promise<void> {
   await requestRelayJson<{ ok?: boolean }>({
     baseUrl,
@@ -1006,7 +1031,7 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] session <chatId>",
     "  npm run local:cli -- [--config <path>] [--user <id>] send <chatId> <command-text>",
     "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
-    "    options: [--work-id <id>] [--capability <ref>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
+    "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
     "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>]",
     "  npm run local:cli -- help"

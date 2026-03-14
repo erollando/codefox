@@ -116,7 +116,7 @@ At the desk, your external client (plugin/skill) should expose this flow:
 
 If your current VS Code integration does not automate this yet:
 - Use the bridge command instead of raw relay calls:
-  - `npm run handoff:cli -- --config ./config/codefox.config.json [--capability <ref>]`
+  - `npm run handoff:cli -- --config ./config/codefox.config.json`
   - Optional overrides: `<chatId>`, `--task <taskId>`, and `--remaining "<summary>"`.
 
 ## Real execution (runnable now)
