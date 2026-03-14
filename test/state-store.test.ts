@@ -13,6 +13,7 @@ describe("JsonStateStore", () => {
     expect(loaded.sessions).toEqual([]);
     expect(loaded.approvals).toEqual([]);
     expect(loaded.specWorkflows).toEqual([]);
+    expect(loaded.externalHandoffs).toEqual([]);
   });
 
   it("saves and reloads sessions/approvals/specWorkflows", async () => {
@@ -73,7 +74,8 @@ describe("JsonStateStore", () => {
             ]
           }
         }
-      ]
+      ],
+      externalHandoffs: []
     });
 
     const loaded = await store.load();
@@ -81,6 +83,7 @@ describe("JsonStateStore", () => {
     expect(loaded.approvals.length).toBe(1);
     expect(loaded.approvals[0]?.capabilityRef).toBe("repo.prepare_branch");
     expect(loaded.specWorkflows.length).toBe(1);
+    expect(loaded.externalHandoffs).toEqual([]);
     expect(loaded.sessions[0].selectedRepo).toBe("payments-api");
     expect(loaded.sessions[0].codexThreadId).toBe("thread_1");
     expect(loaded.specWorkflows[0]?.workflow.revisions[0]?.sections.REQUEST).toBe("fix tests");
@@ -111,7 +114,8 @@ describe("JsonStateStore", () => {
             createdAt: "2026-01-01T00:00:00.000Z"
           }
         ],
-        specWorkflows: [{ chatId: "bad", workflow: {} }]
+        specWorkflows: [{ chatId: "bad", workflow: {} }],
+        externalHandoffs: [{ chatId: "bad" }]
       }),
       "utf8"
     );
@@ -146,6 +150,7 @@ describe("JsonStateStore", () => {
       }
     ]);
     expect(loaded.specWorkflows).toEqual([]);
+    expect(loaded.externalHandoffs).toEqual([]);
   });
 
   it("prunes stale sessions and approvals when TTL is set", () => {
@@ -241,6 +246,42 @@ describe("JsonStateStore", () => {
               ]
             }
           }
+        ],
+        externalHandoffs: [
+          {
+            chatId: 100,
+            leaseId: "lease_keep",
+            handoff: {
+              schemaVersion: "v1",
+              leaseId: "lease_keep",
+              handoffId: "handoff_keep",
+              clientId: "vscode-codex",
+              createdAt: "2026-01-02T11:30:00.000Z",
+              taskId: "TASK-100",
+              specRevisionRef: "v1",
+              completedWork: ["done"],
+              remainingWork: [{ id: "rw-1", summary: "verify" }]
+            },
+            receivedAt: "2026-01-02T11:30:00.000Z",
+            continuedWorkIds: []
+          },
+          {
+            chatId: 200,
+            leaseId: "lease_drop",
+            handoff: {
+              schemaVersion: "v1",
+              leaseId: "lease_drop",
+              handoffId: "handoff_drop",
+              clientId: "vscode-codex",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              taskId: "TASK-200",
+              specRevisionRef: "v1",
+              completedWork: [],
+              remainingWork: [{ id: "rw-x", summary: "stale" }]
+            },
+            receivedAt: "2026-01-01T00:00:00.000Z",
+            continuedWorkIds: []
+          }
         ]
       },
       {
@@ -253,6 +294,7 @@ describe("JsonStateStore", () => {
     expect(result.state.sessions.map((session) => session.chatId)).toEqual([100]);
     expect(result.state.approvals.map((approval) => approval.id)).toEqual(["fresh"]);
     expect(result.state.specWorkflows.map((entry) => entry.chatId)).toEqual([100]);
+    expect(result.state.externalHandoffs.map((entry) => entry.chatId)).toEqual([100]);
     expect(result.removedSessions).toBe(1);
     expect(result.removedApprovals).toBe(1);
   });

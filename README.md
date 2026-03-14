@@ -200,7 +200,7 @@ Copy the sample config to `config/codefox.config.json`:
 }
 ```
 
-`state.filePath` persists chat sessions, pending approvals, and spec workflow revisions across service restarts.
+`state.filePath` persists chat sessions, pending approvals, spec workflow revisions, and external handoff continuation state across service restarts.
 Any stale `activeRequestId` values from a previous process are cleared on startup.
 If set, `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
 `state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.

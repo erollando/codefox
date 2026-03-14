@@ -66,6 +66,7 @@ npm run verify
 ## Operational Commands (Telegram)
 
 - `/status` to inspect selected repo, mode, active request, and codex session id
+- `/handoff [status|show|continue [work-id]|clear]` to inspect and continue external handoff bundles
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
@@ -80,6 +81,10 @@ npm run verify
 - `/repo remove <name>` to remove a registered repo
 - `/repo info [name]` to inspect mapped repo path
 - `/mode <observe|active|full-access>` to set execution policy mode
+- `/policy [observe|active|full-access]` to inspect effective policy and spec gates
+- `/capabilities [pack]` to inspect typed action contracts
+- `/act <pack.action> <instruction>` to execute typed capability actions
+- `/audit <view_id>` to inspect policy/status view audit records
 - Optional AGENTS guard: when enabled, `/run` in non-observe mode requires `AGENTS.md` in repo root.
 - Optional instruction policy can block:
   - blocked text patterns
@@ -90,7 +95,23 @@ npm run verify
 - Codex runtime tuning can be set in config via `codex.model`, `codex.reasoningEffort`, and `codex.configOverrides`.
 - Image/document prompts are supported: upload attachment(s) and then send `/run ...`, or include a caption on upload.
 - Attachment context is consumed by the next `/run` or `/steer` and then cleared.
+- Attachment context is consumed by the next `/run`, `/act`, or `/steer` and then cleared.
 - `/repo bootstrap` and `/repo template` apply downstream `AGENTS.md` templates intended for normal git tracking.
+
+## External Relay (Optional)
+
+- Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
+- Endpoints:
+  - `GET /health`
+  - `GET /v1/external-codex/routes`
+  - `GET /v1/external-codex/approval?leaseId=<id>&approvalKey=<key>`
+  - `POST /v1/external-codex/bind`
+  - `POST /v1/external-codex/heartbeat`
+  - `POST /v1/external-codex/revoke`
+  - `POST /v1/external-codex/event`
+  - `POST /v1/external-codex/handoff`
+- If `externalRelay.authTokenEnvVar` is set, requests must include `Authorization: Bearer <token>`.
+- `approval_request` events are relayed into CodeFox approval flow; external clients must poll approval status and must not bypass `/approve`/`/deny`.
 
 ## Troubleshooting
 

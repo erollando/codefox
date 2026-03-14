@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RunningTask } from "../src/adapters/codex.js";
-import type { TaskContext, TaskResult } from "../src/types/domain.js";
+import type { ExternalHandoffStateSnapshot, TaskContext, TaskResult } from "../src/types/domain.js";
 import type { SpecWorkflowState } from "../src/core/spec-workflow.js";
 import type { ExternalCodexHandoffBundle } from "../src/core/external-codex-integration.js";
 import { ApprovalStore } from "../src/core/approval-store.js";
@@ -91,6 +91,7 @@ function makeController(
     instructionPolicy?: InstructionPolicy;
     telegram?: FakeTelegram;
     initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
+    initialExternalHandoffs?: ExternalHandoffStateSnapshot[];
     persistState?: () => Promise<void>;
     externalApprovalDecision?: (input: {
       leaseId: string;
@@ -127,6 +128,7 @@ function makeController(
       }),
     codexSessionIdleMinutes: 120,
     initialSpecWorkflows: options?.initialSpecWorkflows,
+    initialExternalHandoffs: options?.initialExternalHandoffs,
     persistState: options?.persistState,
     externalApprovalDecision: options?.externalApprovalDecision
   });
@@ -559,6 +561,53 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0]?.context.capability?.ref).toBe("repo.run_checks");
     expect(telegram.sent.some((item) => item.text.includes("External handoff status:"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("rw-1 [continued]"))).toBe(true);
+  });
+
+  it("restores persisted external handoff state and renders /handoff status", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_1",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_1",
+            handoffId: "handoff_1",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-100",
+            specRevisionRef: "v1",
+            completedWork: ["Implemented API route"],
+            remainingWork: [
+              {
+                id: "rw-1",
+                summary: "Run regression checks",
+                requestedCapabilityRef: "repo.run_checks"
+              }
+            ]
+          },
+          receivedAt: "2026-03-14T12:01:00.000Z",
+          continuedWorkIds: []
+        }
+      ]
+    });
+
+    await controller.handleUpdate(makeUpdate("/handoff status"));
+    const statusMessage = telegram.sent.at(-1)?.text ?? "";
+    expect(statusMessage).toContain("External handoff status:");
+    expect(statusMessage).toContain("handoff id: handoff_1");
+    expect(statusMessage).toContain("remaining: 1/1");
   });
 
   it("blocks /run in active mode when no approved spec exists", async () => {

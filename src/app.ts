@@ -68,7 +68,8 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     await stateStore.save({
       sessions: sessions.list(),
       approvals: approvals.list(),
-      specWorkflows: controller ? controller.listSpecWorkflows() : initialState.specWorkflows
+      specWorkflows: controller ? controller.listSpecWorkflows() : initialState.specWorkflows,
+      externalHandoffs: controller ? controller.listExternalHandoffs() : initialState.externalHandoffs
     });
   };
 
@@ -160,6 +161,7 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     codexSessionIdleMinutes: config.state.codexSessionIdleMinutes,
     codexDefaultReasoningEffort: config.codex.reasoningEffort,
     initialSpecWorkflows: initialState.specWorkflows,
+    initialExternalHandoffs: initialState.externalHandoffs,
     persistState,
     specPolicy,
     externalApprovalDecision: async ({ leaseId, approvalKey, approved, userId }) => {

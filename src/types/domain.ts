@@ -171,6 +171,36 @@ export interface ApprovalRequest {
   createdAt: string;
 }
 
+export interface ExternalHandoffRemainingWork {
+  id: string;
+  summary: string;
+  requestedCapabilityRef?: string;
+  blockedByApproval?: boolean;
+}
+
+export interface ExternalHandoffBundleState {
+  schemaVersion: string;
+  leaseId: string;
+  handoffId: string;
+  clientId: string;
+  createdAt: string;
+  taskId: string;
+  specRevisionRef: string;
+  completedWork: string[];
+  remainingWork: ExternalHandoffRemainingWork[];
+  evidenceRefs?: string[];
+  unresolvedQuestions?: string[];
+  unresolvedRisks?: string[];
+}
+
+export interface ExternalHandoffStateSnapshot {
+  chatId: number;
+  leaseId: string;
+  handoff: ExternalHandoffBundleState;
+  receivedAt: string;
+  continuedWorkIds: string[];
+}
+
 export interface TaskCapabilityContext {
   ref: string;
   pack: CapabilityPackName;
