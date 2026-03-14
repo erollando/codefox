@@ -21,6 +21,12 @@ cp .env.example .env
 npm run dev -- ./config/codefox.config.json
 ```
 
+Stop background dev instance (no `ps` needed):
+
+```bash
+npm run dev:stop -- --config ./config/codefox.config.json
+```
+
 Then in Telegram:
 
 ```text

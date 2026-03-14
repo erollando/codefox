@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -161,6 +162,13 @@ describe("local CLI", () => {
     expect(contWithoutChat.args.command).toBe("continue");
     expect(contWithoutChat.args.chatId).toBeUndefined();
     expect(contWithoutChat.args.workId).toBe("rw-3");
+
+    const stop = parseLocalCliArgs(["stop"]);
+    expect(stop.ok).toBe(true);
+    if (!stop.ok || !stop.args) {
+      return;
+    }
+    expect(stop.args.command).toBe("stop");
   });
 
   it("parses handoff command with required and optional flags", () => {
@@ -1259,5 +1267,471 @@ describe("local CLI", () => {
     expect(logs.join("\n")).toContain("Auto-selected session chat:100/repo:payments-api/mode:active");
     const bindBody = relayRequests.find((request) => request.path === "/v1/external-codex/bind")?.body;
     expect(bindBody?.session).toEqual({ sessionId: "chat:100/repo:payments-api/mode:active" });
+  });
+
+  it("treats repeated handoff submission as idempotent and skips relay bind/handoff calls", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-cli-handoff-idempotent-"));
+    const repoPath = path.join(tmpDir, "repo");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+    const statePath = path.join(tmpDir, "state.json");
+    const relayToken = "relay-test-token";
+    const relayRequests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+
+    const relayServer = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      req.on("end", () => {
+        const auth = req.headers.authorization ?? "";
+        if (auth !== `Bearer ${relayToken}`) {
+          res.statusCode = 401;
+          res.end(`${JSON.stringify({ ok: false, error: "Unauthorized" })}\n`);
+          return;
+        }
+        const method = req.method ?? "GET";
+        const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+        const pathName = requestUrl.pathname;
+        const rawBody = Buffer.concat(chunks).toString("utf8").trim();
+        const body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : undefined;
+        relayRequests.push({ method, path: pathName, body });
+
+        if (method === "GET" && pathName === "/v1/external-codex/routes") {
+          res.statusCode = 200;
+          res.end(
+            `${JSON.stringify({
+              ok: true,
+              routes: [{ sessionId: "chat:100/repo:payments-api/mode:active", chatId: 100 }]
+            })}\n`
+          );
+          return;
+        }
+
+        res.statusCode = 404;
+        res.end(`${JSON.stringify({ ok: false, error: "Not found" })}\n`);
+      });
+    });
+
+    const relayPort = await listenOnLoopbackOrSkip(relayServer);
+    if (typeof relayPort === "undefined") {
+      return;
+    }
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          telegram: {
+            token: "dummy",
+            allowedUserIds: [7],
+            allowedChatIds: [100],
+            pollingTimeoutSeconds: 30,
+            pollIntervalMs: 1000,
+            discardBacklogOnStart: true
+          },
+          repos: [{ name: "payments-api", rootPath: repoPath }],
+          codex: {
+            command: "codex",
+            baseArgs: ["exec"],
+            runArgTemplate: ["{instruction}"],
+            repoArgTemplate: [],
+            timeoutMs: 60000,
+            blockedEnvVars: [],
+            preflightEnabled: false,
+            preflightArgs: ["--version"],
+            preflightTimeoutMs: 1000
+          },
+          policy: {
+            defaultMode: "observe"
+          },
+          safety: {
+            requireAgentsForRuns: false,
+            instructionPolicy: {
+              blockedPatterns: [],
+              allowedDownloadDomains: [],
+              forbiddenPathPatterns: []
+            }
+          },
+          repoInit: {
+            defaultParentPath: tmpDir
+          },
+          state: {
+            filePath: statePath,
+            codexSessionIdleMinutes: 120
+          },
+          audit: {
+            logFilePath: path.join(tmpDir, "audit.log")
+          },
+          externalRelay: {
+            enabled: true,
+            host: "127.0.0.1",
+            port: relayPort,
+            authTokenEnvVar: "CODEFOX_EXTERNAL_RELAY_TOKEN"
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          sessions: [
+            {
+              chatId: 100,
+              selectedRepo: "payments-api",
+              mode: "active",
+              updatedAt: "2026-03-14T12:00:00.000Z"
+            }
+          ],
+          approvals: [],
+          specWorkflows: [
+            {
+              chatId: 100,
+              workflow: {
+                revisions: [
+                  {
+                    version: 1,
+                    stage: "approved",
+                    status: "approved",
+                    sourceIntent: "continue work",
+                    createdAt: "2026-03-14T12:00:00.000Z",
+                    updatedAt: "2026-03-14T12:00:00.000Z",
+                    approvedAt: "2026-03-14T12:00:00.000Z",
+                    sections: {
+                      REQUEST: "continue work",
+                      GOAL: "goal",
+                      OUTCOME: "outcome",
+                      CONSTRAINTS: ["constraint"],
+                      NON_GOALS: [],
+                      CONTEXT: [],
+                      ASSUMPTIONS: [],
+                      QUESTIONS: [],
+                      PLAN: ["plan"],
+                      APPROVALS_REQUIRED: [],
+                      DONE_WHEN: ["done"]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          externalHandoffs: [
+            {
+              chatId: 100,
+              leaseId: "lease_existing",
+              sourceSessionId: "chat:100/repo:payments-api/mode:active",
+              sourceRepoName: "payments-api",
+              sourceMode: "active",
+              receivedAt: "2026-03-14T12:01:00.000Z",
+              continuedWorkIds: [],
+              handoff: {
+                schemaVersion: "v1",
+                leaseId: "lease_existing",
+                handoffId: "handoff_existing",
+                clientId: "codex-handoff-cli",
+                createdAt: "2026-03-14T12:01:00.000Z",
+                taskId: "TASK-EXISTING",
+                specRevisionRef: "v1",
+                completedWork: [],
+                remainingWork: [
+                  {
+                    id: "rw-1",
+                    summary: "Continue remaining handoff work"
+                  }
+                ],
+                sourceRepo: {
+                  name: "payments-api"
+                }
+              }
+            }
+          ]
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    const previousRelayToken = process.env.CODEFOX_EXTERNAL_RELAY_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+    process.env.CODEFOX_EXTERNAL_RELAY_TOKEN = relayToken;
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const output = {
+      log(line: string) {
+        logs.push(line);
+      },
+      error(line: string) {
+        errors.push(line);
+      }
+    };
+
+    let code = 1;
+    try {
+      code = await runLocalCli(["--config", configPath, "handoff"], output);
+    } finally {
+      await closeServer(relayServer);
+      if (typeof previousToken === "undefined") {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      }
+      if (typeof previousRelayToken === "undefined") {
+        delete process.env.CODEFOX_EXTERNAL_RELAY_TOKEN;
+      } else {
+        process.env.CODEFOX_EXTERNAL_RELAY_TOKEN = previousRelayToken;
+      }
+    }
+
+    expect(code).toBe(0);
+    expect(errors).toEqual([]);
+    expect(logs.join("\n")).toContain("Handoff already up to date for chat 100; no changes submitted.");
+    expect(relayRequests.map((entry) => `${entry.method} ${entry.path}`)).toEqual(["GET /v1/external-codex/routes"]);
+  });
+
+  it("stops background CodeFox process using pid file", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-cli-stop-"));
+    const repoPath = path.join(tmpDir, "repo");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+    const statePath = path.join(tmpDir, "state.json");
+    const pidFilePath = path.join(path.dirname(statePath), "codefox.dev.pid");
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          telegram: {
+            token: "dummy",
+            allowedUserIds: [1],
+            allowedChatIds: [100],
+            pollingTimeoutSeconds: 30,
+            pollIntervalMs: 1000,
+            discardBacklogOnStart: true
+          },
+          repos: [{ name: "payments-api", rootPath: repoPath }],
+          codex: {
+            command: "codex",
+            baseArgs: ["exec"],
+            runArgTemplate: ["{instruction}"],
+            repoArgTemplate: [],
+            timeoutMs: 60000,
+            blockedEnvVars: [],
+            preflightEnabled: false,
+            preflightArgs: ["--version"],
+            preflightTimeoutMs: 1000
+          },
+          policy: {
+            defaultMode: "observe"
+          },
+          safety: {
+            requireAgentsForRuns: false,
+            instructionPolicy: {
+              blockedPatterns: [],
+              allowedDownloadDomains: [],
+              forbiddenPathPatterns: []
+            }
+          },
+          repoInit: {
+            defaultParentPath: tmpDir
+          },
+          state: {
+            filePath: statePath,
+            codexSessionIdleMinutes: 120
+          },
+          audit: {
+            logFilePath: path.join(tmpDir, "audit.log")
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          sessions: [],
+          approvals: [],
+          specWorkflows: [],
+          externalHandoffs: []
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const background = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000);", "codefox", "src/index.ts"],
+      {
+        detached: true,
+        stdio: "ignore"
+      }
+    );
+    background.unref();
+    expect(typeof background.pid).toBe("number");
+    const pid = background.pid as number;
+    await writeFile(pidFilePath, `${pid}\n`, "utf8");
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const output = {
+      log(line: string) {
+        logs.push(line);
+      },
+      error(line: string) {
+        errors.push(line);
+      }
+    };
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+
+    try {
+      const code = await runLocalCli(["--config", configPath, "stop"], output);
+      expect(code).toBe(0);
+      expect(errors).toEqual([]);
+      expect(logs.join("\n")).toContain(`Stopped background CodeFox process pid ${pid}.`);
+    } finally {
+      if (typeof previousToken === "undefined") {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      }
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already stopped.
+      }
+    }
+  });
+
+  it("stops background CodeFox process by config scan when pid file is stale", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
+
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-cli-stop-fallback-"));
+    const repoPath = path.join(tmpDir, "repo");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+    const statePath = path.join(tmpDir, "state.json");
+    const pidFilePath = path.join(path.dirname(statePath), "codefox.dev.pid");
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          telegram: {
+            token: "dummy",
+            allowedUserIds: [1],
+            allowedChatIds: [100],
+            pollingTimeoutSeconds: 30,
+            pollIntervalMs: 1000,
+            discardBacklogOnStart: true
+          },
+          repos: [{ name: "payments-api", rootPath: repoPath }],
+          codex: {
+            command: "codex",
+            baseArgs: ["exec"],
+            runArgTemplate: ["{instruction}"],
+            repoArgTemplate: [],
+            timeoutMs: 60000,
+            blockedEnvVars: [],
+            preflightEnabled: false,
+            preflightArgs: ["--version"],
+            preflightTimeoutMs: 1000
+          },
+          policy: {
+            defaultMode: "observe"
+          },
+          safety: {
+            requireAgentsForRuns: false,
+            instructionPolicy: {
+              blockedPatterns: [],
+              allowedDownloadDomains: [],
+              forbiddenPathPatterns: []
+            }
+          },
+          repoInit: {
+            defaultParentPath: tmpDir
+          },
+          state: {
+            filePath: statePath,
+            codexSessionIdleMinutes: 120
+          },
+          audit: {
+            logFilePath: path.join(tmpDir, "audit.log")
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          sessions: [],
+          approvals: [],
+          specWorkflows: [],
+          externalHandoffs: []
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const background = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000);", "src/index.ts", path.resolve(configPath)],
+      {
+        detached: true,
+        stdio: "ignore"
+      }
+    );
+    background.unref();
+    const pid = background.pid as number;
+    await writeFile(pidFilePath, "999999\n", "utf8");
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const output = {
+      log(line: string) {
+        logs.push(line);
+      },
+      error(line: string) {
+        errors.push(line);
+      }
+    };
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+
+    try {
+      const code = await runLocalCli(["--config", configPath, "stop"], output);
+      expect(code).toBe(0);
+      expect(errors).toEqual([]);
+      expect(logs.join("\n")).toContain("Removed stale pid file");
+      expect(logs.join("\n")).toContain(`Stopped background CodeFox process pid ${pid}.`);
+    } finally {
+      if (typeof previousToken === "undefined") {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      }
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already stopped.
+      }
+    }
   });
 });

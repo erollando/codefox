@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig, resolveConfigPath } from "./config.js";
 import { buildExternalSessionId } from "./external-session-route.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
 import { JsonStateStore, pruneStateByTtl } from "./state-store.js";
 import { approveCurrentRevision, createInitialWorkflow, getCurrentRevision } from "./spec-workflow.js";
+import { areSemanticallyEquivalentExternalHandoffs } from "./external-handoff-idempotency.js";
 import type { PersistedSpecWorkflow, PersistedState } from "./state-store.js";
 
 export interface LocalCliOutput {
@@ -29,7 +30,8 @@ export interface LocalCliParsedArgs {
     | "continue"
     | "status"
     | "handoff-status"
-    | "handoff-show";
+    | "handoff-show"
+    | "stop";
   chatId?: number;
   userId?: number;
   text?: string;
@@ -139,7 +141,7 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
     };
   }
 
-  if (command === "sessions" || command === "approvals" || command === "specs") {
+  if (command === "sessions" || command === "approvals" || command === "specs" || command === "stop") {
     return {
       ok: true,
       args: {
@@ -628,6 +630,10 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
     return runLocalHandoff(args, config, output, resolvedConfigPath);
   }
 
+  if (args.command === "stop") {
+    return stopCodeFoxProcess(config.state.filePath, resolvedConfigPath, output);
+  }
+
   if (args.command === "chat") {
     return runLocalChat(args, config, output);
   }
@@ -861,6 +867,70 @@ async function runLocalHandoff(
   }
 
   const clientId = args.clientId || "codex-handoff-cli";
+  const session = pruned.sessions.find((entry) => entry.chatId === chatId);
+  const existingHandoff = findExistingHandoffSnapshot(pruned, chatId, sessionId);
+  const taskId = resolveTaskId(args, session, existingHandoff?.handoff.taskId);
+  const remainingSummary = resolveRemainingSummary(args, session, existingHandoff?.handoff.remainingWork[0]?.summary);
+  const sourceRepo = resolveSourceRepoMetadata(sessionId, args.repoPath, output);
+  const specRevisionRef = await resolveOrBootstrapSpecRevisionRef({
+    args,
+    chatId,
+    state: pruned,
+    store,
+    taskId,
+    remainingSummary
+  });
+  if (!specRevisionRef.ok || !specRevisionRef.value) {
+    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
+    return 1;
+  }
+  if (specRevisionRef.created) {
+    output.log(`Auto-created and approved spec ${specRevisionRef.value} for chat ${chatId}.`);
+  }
+  const workId = resolveWorkId(args, existingHandoff?.handoff.remainingWork[0]?.id);
+  const handoffTemplate = {
+    schemaVersion: "v1",
+    clientId,
+    taskId,
+    specRevisionRef: specRevisionRef.value,
+    completedWork: args.completedWork ?? [],
+    remainingWork: [
+      {
+        id: workId,
+        summary: remainingSummary
+      }
+    ],
+    ...(sourceRepo ? { sourceRepo } : {}),
+    ...(args.unresolvedQuestions && args.unresolvedQuestions.length > 0
+      ? { unresolvedQuestions: args.unresolvedQuestions }
+      : {}),
+    ...(args.unresolvedRisks && args.unresolvedRisks.length > 0 ? { unresolvedRisks: args.unresolvedRisks } : {})
+  };
+  if (
+    areSemanticallyEquivalentExternalHandoffs(
+      existingHandoff
+        ? {
+            sourceSessionId: existingHandoff.sourceSessionId,
+            bundle: existingHandoff.handoff
+          }
+        : undefined,
+      {
+        sourceSessionId: sessionId,
+        bundle: handoffTemplate
+      }
+    )
+  ) {
+    output.log(`Handoff already up to date for chat ${chatId}; no changes submitted.`);
+    output.log(`session: ${sessionId}`);
+    output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
+    output.log(`spec ref: ${specRevisionRef.value}`);
+    output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
+    output.log("Next steps in Telegram:");
+    output.log("  /handoff show");
+    output.log(`  /continue ${workId}`);
+    return 0;
+  }
+
   const bindResponse = await requestRelayJson<RelayBindResponse>({
     baseUrl: relayBaseUrl,
     path: "/v1/external-codex/bind",
@@ -908,26 +978,6 @@ async function runLocalHandoff(
     return 1;
   }
 
-  const session = pruned.sessions.find((entry) => entry.chatId === chatId);
-  const taskId = resolveTaskId(args, session);
-  const remainingSummary = resolveRemainingSummary(args, session);
-  const sourceRepo = resolveSourceRepoMetadata(sessionId, args.repoPath, output);
-  const specRevisionRef = await resolveOrBootstrapSpecRevisionRef({
-    args,
-    chatId,
-    state: pruned,
-    store,
-    taskId,
-    remainingSummary
-  });
-  if (!specRevisionRef.ok || !specRevisionRef.value) {
-    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
-    return 1;
-  }
-  if (specRevisionRef.created) {
-    output.log(`Auto-created and approved spec ${specRevisionRef.value} for chat ${chatId}.`);
-  }
-  const workId = args.workId || "rw-1";
   const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
   const handoffResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
     baseUrl: relayBaseUrl,
@@ -935,27 +985,11 @@ async function runLocalHandoff(
     method: "POST",
     authToken,
     body: {
+      ...handoffTemplate,
       schemaVersion,
       leaseId,
       handoffId,
-      clientId,
-      createdAt: new Date().toISOString(),
-      taskId,
-      specRevisionRef: specRevisionRef.value,
-      completedWork: args.completedWork ?? [],
-      remainingWork: [
-        {
-          id: workId,
-          summary: remainingSummary
-        }
-      ],
-      ...(sourceRepo ? { sourceRepo } : {}),
-      ...(args.unresolvedQuestions && args.unresolvedQuestions.length > 0
-        ? { unresolvedQuestions: args.unresolvedQuestions }
-        : {}),
-      ...(args.unresolvedRisks && args.unresolvedRisks.length > 0
-        ? { unresolvedRisks: args.unresolvedRisks }
-        : {})
+      createdAt: new Date().toISOString()
     }
   });
   if (!handoffResponse.ok || handoffResponse.body?.decision?.ok !== true) {
@@ -1153,10 +1187,14 @@ function resolveTaskId(
   session?: {
     activeRequestId?: string;
     codexThreadId?: string;
-  }
+  },
+  existingTaskId?: string
 ): string {
   if (args.taskId && args.taskId.trim().length > 0) {
     return args.taskId.trim();
+  }
+  if (existingTaskId && existingTaskId.trim().length > 0) {
+    return existingTaskId.trim();
   }
   if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
     return `TASK-${session.activeRequestId.trim()}`;
@@ -1172,10 +1210,14 @@ function resolveRemainingSummary(
   session?: {
     activeRequestId?: string;
     codexThreadId?: string;
-  }
+  },
+  existingSummary?: string
 ): string {
   if (args.remainingSummary && args.remainingSummary.trim().length > 0) {
     return args.remainingSummary.trim();
+  }
+  if (existingSummary && existingSummary.trim().length > 0) {
+    return existingSummary.trim();
   }
   if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
     return `Continue remaining work from request ${session.activeRequestId.trim()}`;
@@ -1184,6 +1226,26 @@ function resolveRemainingSummary(
     return `Continue remaining work from Codex session ${session.codexThreadId.trim()}`;
   }
   return "Continue remaining handoff work";
+}
+
+function resolveWorkId(args: LocalCliParsedArgs, existingWorkId?: string): string {
+  if (args.workId && args.workId.trim().length > 0) {
+    return args.workId.trim();
+  }
+  if (existingWorkId && existingWorkId.trim().length > 0) {
+    return existingWorkId.trim();
+  }
+  return "rw-1";
+}
+
+function findExistingHandoffSnapshot(
+  state: PersistedState,
+  chatId: number,
+  sessionId: string
+): PersistedState["externalHandoffs"][number] | undefined {
+  return state.externalHandoffs.find(
+    (entry) => entry.chatId === chatId && (entry.sourceSessionId?.trim() || "") === sessionId.trim()
+  );
 }
 
 function resolveHandoffContext(
@@ -1657,6 +1719,195 @@ async function persistRelayPid(pidFilePath: string, pid: number): Promise<void> 
   }
 }
 
+async function stopCodeFoxProcess(
+  stateFilePath: string,
+  resolvedConfigPath: string,
+  output: LocalCliOutput
+): Promise<number> {
+  const pidFilePath = relayPidFilePath(stateFilePath);
+  const pid = await readRelayPid(pidFilePath);
+  const candidatePids = new Set<number>();
+
+  if (pid) {
+    const alive = isProcessAlive(pid);
+    if (!alive) {
+      await removePidFile(pidFilePath);
+      output.log(`Removed stale pid file ${pidFilePath} (pid ${pid} was not running).`);
+    } else {
+      const looksSafeToStop = await isLikelyCodeFoxProcess(pid);
+      if (looksSafeToStop) {
+        candidatePids.add(pid);
+      } else {
+        output.log(`Ignoring pid ${pid} from ${pidFilePath}: process does not look like CodeFox.`);
+      }
+    }
+  }
+
+  const fallbackPids = await findCodeFoxPidsByConfig(resolvedConfigPath);
+  for (const fallbackPid of fallbackPids) {
+    candidatePids.add(fallbackPid);
+  }
+
+  if (candidatePids.size === 0) {
+    output.error(`No running CodeFox process found for config ${resolvedConfigPath}.`);
+    output.log("If CodeFox was started manually in another terminal, stop it there.");
+    return 1;
+  }
+
+  const sortedPids = [...candidatePids].sort((left, right) => left - right);
+  let stoppedAny = false;
+  for (const targetPid of sortedPids) {
+    const stopResult = await stopProcessByPid(targetPid);
+    if (stopResult.ok) {
+      stoppedAny = true;
+      output.log(`Stopped background CodeFox process pid ${targetPid}.`);
+      continue;
+    }
+    output.error(`Failed to stop CodeFox pid ${targetPid}: ${stopResult.error ?? "unknown error"}.`);
+  }
+
+  if (!stoppedAny) {
+    return 1;
+  }
+
+  await removePidFile(pidFilePath);
+  return 0;
+}
+
+async function readRelayPid(pidFilePath: string): Promise<number | undefined> {
+  try {
+    const raw = await readFile(pidFilePath, "utf8");
+    const parsed = Number(raw.trim());
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isProcessAlive(pid);
+}
+
+async function stopProcessByPid(pid: number): Promise<{ ok: boolean; error?: string }> {
+  if (!isProcessAlive(pid)) {
+    return { ok: true };
+  }
+  try {
+    process.kill(pid);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: String(error)
+    };
+  }
+
+  const stoppedGracefully = await waitForProcessExit(pid, 5000);
+  if (stoppedGracefully) {
+    return { ok: true };
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: `did not stop gracefully and SIGKILL failed: ${String(error)}`
+    };
+  }
+  const stoppedAfterKill = await waitForProcessExit(pid, 2000);
+  if (!stoppedAfterKill) {
+    return {
+      ok: false,
+      error: "still running after SIGKILL"
+    };
+  }
+  return { ok: true };
+}
+
+async function isLikelyCodeFoxProcess(pid: number): Promise<boolean> {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8");
+    const normalized = cmdline.replace(/\u0000/g, " ");
+    return normalized.includes("codefox") && (normalized.includes("src/index.ts") || normalized.includes("dist/index.js"));
+  } catch {
+    return true;
+  }
+}
+
+async function findCodeFoxPidsByConfig(configPath: string): Promise<number[]> {
+  if (process.platform !== "linux") {
+    return [];
+  }
+  const resolvedConfigPath = path.resolve(configPath);
+  const entries = await readdir("/proc", { withFileTypes: true }).catch(() => []);
+  const matches: number[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (!/^\d+$/.test(entry.name)) {
+      continue;
+    }
+    const pid = Number(entry.name);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) {
+      continue;
+    }
+    const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
+    if (!cmdline) {
+      continue;
+    }
+    const normalized = cmdline.replace(/\u0000/g, " ").trim();
+    if (
+      (normalized.includes("src/index.ts") || normalized.includes("dist/index.js")) &&
+      normalized.includes(resolvedConfigPath)
+    ) {
+      matches.push(pid);
+    }
+  }
+  return matches;
+}
+
+async function removePidFile(pidFilePath: string): Promise<void> {
+  try {
+    await unlink(pidFilePath);
+  } catch {
+    // Non-fatal cleanup.
+  }
+}
+
 async function waitForRelayReady(baseUrl: string, authToken: string | undefined, timeoutMs: number): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt <= timeoutMs) {
@@ -1696,6 +1947,7 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] [--user <id>] handoff-show [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] continue [chatId] [workId]",
     "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
+    "  npm run local:cli -- [--config <path>] stop",
     "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
     "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>] [--repo-path <path>]",

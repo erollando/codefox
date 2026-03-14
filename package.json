@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "dev:stop": "tsx src/local-cli.ts stop",
     "cli": "tsx src/chat-cli.ts",
     "local:cli": "tsx src/local-cli.ts",
     "chat:cli": "tsx src/chat-cli.ts",

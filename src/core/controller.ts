@@ -13,6 +13,7 @@ import type { AccessControl } from "./auth.js";
 import type { AuditEventInput, AuditLogger } from "./audit-logger.js";
 import { CapabilityRegistry, toCapabilityRef, type CapabilityActionSpec } from "./capability-registry.js";
 import { parseCommand, type ParsedCommand } from "./command-parser.js";
+import { areSemanticallyEquivalentExternalHandoffs } from "./external-handoff-idempotency.js";
 import type { ApprovalStore } from "./approval-store.js";
 import type { PolicyEngine } from "./policy.js";
 import type { RepoRegistry } from "./repo-registry.js";
@@ -327,6 +328,33 @@ export class CodeFoxController {
       return {
         accepted: false,
         reason
+      };
+    }
+
+    const existing = this.externalHandoffs.get(chatId);
+    if (
+      areSemanticallyEquivalentExternalHandoffs(
+        existing
+          ? {
+              sourceSessionId: existing.sourceSessionId,
+              bundle: existing.bundle
+            }
+          : undefined,
+        {
+          sourceSessionId: sourceSessionId?.trim(),
+          bundle: handoff
+        }
+      )
+    ) {
+      await this.deps.audit.log({
+        type: "external_handoff_ingest_duplicate",
+        chatId,
+        leaseId,
+        handoffId: handoff.handoffId,
+        taskId: handoff.taskId
+      });
+      return {
+        accepted: true
       };
     }
 
