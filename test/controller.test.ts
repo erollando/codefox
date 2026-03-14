@@ -164,6 +164,65 @@ describe("CodeFoxController", () => {
     expect(audit.events.length).toBe(0);
   });
 
+  it("auto-selects the only configured repo when running without explicit /repo", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const { controller, telegram, sessions } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/run check status"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0].repoPath).toBe("/tmp/payments-api");
+    expect(sessions.getOrCreate(100).selectedRepo).toBe("payments-api");
+    expect(
+      telegram.sent.some((item) => item.text.includes("Auto-selected repo 'payments-api' (only configured repo)."))
+    ).toBe(true);
+  });
+
+  it("defaults to most-recent repo context when multiple repos are configured", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+
+    const { controller, telegram, sessions } = makeController(fakeCodex, {
+      repos: [
+        { name: "payments-api", rootPath: "/tmp/payments-api" },
+        { name: "codefox", rootPath: "/tmp/codefox" }
+      ]
+    });
+    sessions.setRepo(200, "codefox");
+    sessions.clearRepo(100);
+
+    await controller.handleUpdate(makeUpdate("/run continue remote session"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(fakeCodex.calls[0].repoPath).toBe("/tmp/codefox");
+    expect(sessions.getOrCreate(100).selectedRepo).toBe("codefox");
+    const selectionMessage = telegram.sent.find((item) =>
+      item.text.includes("No repo was selected. Defaulted to 'codefox' from recent context.")
+    );
+    expect(selectionMessage).toBeDefined();
+    expect(selectionMessage?.text).toContain("/repo payments-api");
+    expect(selectionMessage?.text).toContain("/repo codefox");
+  });
+
   it("includes effective spec policy in /status output", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],

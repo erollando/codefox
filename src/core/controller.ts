@@ -712,8 +712,8 @@ export class CodeFoxController {
         return;
       }
       case "act": {
-        if (!session.selectedRepo) {
-          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+        const selectedRepo = await this.ensureRepoSelectedForExecution(chatId, userId);
+        if (!selectedRepo) {
           return;
         }
         const capabilityAction = this.capabilityRegistry.resolveAction(command.capabilityRef);
@@ -741,7 +741,7 @@ export class CodeFoxController {
             runKind: "run",
             admissionSource: "act",
             instruction: command.instruction,
-            repoName: session.selectedRepo,
+            repoName: selectedRepo,
             mode: session.mode,
             chatId,
             userId,
@@ -764,8 +764,8 @@ export class CodeFoxController {
           await this.queueSteerWhileAdmission(chatId, userId, command.instruction, attachments);
           return;
         }
-        if (!session.selectedRepo) {
-          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+        const selectedRepo = await this.ensureRepoSelectedForExecution(chatId, userId);
+        if (!selectedRepo) {
           return;
         }
         const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
@@ -775,7 +775,7 @@ export class CodeFoxController {
             runKind: "run",
             admissionSource: "run",
             instruction: command.instruction,
-            repoName: session.selectedRepo,
+            repoName: selectedRepo,
             mode: session.mode,
             chatId,
             userId,
@@ -1513,6 +1513,58 @@ export class CodeFoxController {
       chatId,
       `Queued follow-up (${existing.length}) while ${sourceLabel} is being prepared.\nNext: wait for run start; CodeFox will apply it automatically.`
     );
+  }
+
+  private async ensureRepoSelectedForExecution(chatId: number, userId: number): Promise<string | undefined> {
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (session.selectedRepo) {
+      return session.selectedRepo;
+    }
+
+    const repos = this.deps.repos.list();
+    if (repos.length === 0) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No repo is configured.\nNext: add one with /repo add <name> <absolute-path>, then retry."
+      );
+      return undefined;
+    }
+
+    const preferredRepo = selectPreferredRepoForChat(session.chatId, repos.map((entry) => entry.name), this.deps.sessions.list());
+    if (!preferredRepo) {
+      await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+      return undefined;
+    }
+
+    this.deps.sessions.setRepo(chatId, preferredRepo);
+    await this.deps.audit.log({
+      type: "repo_auto_selected_for_run",
+      chatId,
+      userId,
+      repo: preferredRepo
+    });
+
+    if (repos.length === 1) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Auto-selected repo '${preferredRepo}' (only configured repo).`
+      );
+      return preferredRepo;
+    }
+
+    const options = repos
+      .slice(0, 5)
+      .map((repo, index) => `${index + 1}. /repo ${repo.name}`)
+      .join("\n");
+    await this.deps.telegram.sendMessage(
+      chatId,
+      [
+        `No repo was selected. Defaulted to '${preferredRepo}' from recent context.`,
+        "Use /repo <name> to switch.",
+        `Options:\n${options}`
+      ].join("\n")
+    );
+    return preferredRepo;
   }
 
   private async handleRepoAdd(chatId: number, userId: number, repoName: string, repoPath: string): Promise<void> {
@@ -2735,6 +2787,33 @@ function formatAdmissionSource(source: AdmissionSource): string {
     default:
       return "Request";
   }
+}
+
+function selectPreferredRepoForChat(
+  chatId: number,
+  availableRepoNames: string[],
+  sessions: Array<{ chatId: number; selectedRepo?: string; updatedAt: string }>
+): string | undefined {
+  if (availableRepoNames.length === 1) {
+    return availableRepoNames[0];
+  }
+
+  const available = new Set(availableRepoNames);
+  const currentChatRecent = [...sessions]
+    .filter((session) => session.chatId === chatId && session.selectedRepo && available.has(session.selectedRepo))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (currentChatRecent?.selectedRepo) {
+    return currentChatRecent.selectedRepo;
+  }
+
+  const globalRecent = [...sessions]
+    .filter((session) => session.selectedRepo && available.has(session.selectedRepo))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  if (globalRecent?.selectedRepo) {
+    return globalRecent.selectedRepo;
+  }
+
+  return availableRepoNames[0];
 }
 
 function formatExternalHandoffStatus(state: ExternalHandoffState): string {

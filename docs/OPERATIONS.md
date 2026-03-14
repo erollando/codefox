@@ -72,6 +72,7 @@ npm run verify
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
+- If no repo is selected, CodeFox auto-selects a default repo (single configured repo or most-recent context) and reports it.
 - Plain text while a run is active is treated as steer guidance automatically.
 - Plain text while a run is being prepared is queued as follow-up and auto-applied when the run starts.
 - Run updates are concise by default; ask `/details` when you need full technical context.
