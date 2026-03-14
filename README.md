@@ -92,11 +92,13 @@ What you can do in UI:
 - use quick action buttons (`/status`, `/continue`, `/approve`, `/abort`, ...)
 - send plain text or slash commands without Telegram
 - use compact mobile layout on small screens (or force with `?mobile=1`)
+- open the same UI from phone (trusted LAN) to continue away from your desk
 
 UI behavior:
 - by default, UI binds to `127.0.0.1` (local machine only)
 - header/actions/composer stay fixed; transcript is the primary scroll area
 - top quick-actions are the main action surface (message-level duplicate buttons are intentionally hidden)
+- laptop UI and mobile UI read the same CodeFox state, so both surfaces show the same sessions, handoffs, and transcript context
 
 Optional LAN access (trusted network only):
 
