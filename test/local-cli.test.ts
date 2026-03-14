@@ -59,6 +59,18 @@ describe("local CLI", () => {
     expect(parsed.args.unresolvedRisks).toEqual(["Regression may fail"]);
   });
 
+  it("parses handoff command without chatId and taskId", () => {
+    const parsed = parseLocalCliArgs(["handoff", "--remaining", "Run regression suite"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || !parsed.args) {
+      return;
+    }
+    expect(parsed.args.command).toBe("handoff");
+    expect(parsed.args.chatId).toBeUndefined();
+    expect(parsed.args.taskId).toBeUndefined();
+    expect(parsed.args.remainingSummary).toBe("Run regression suite");
+  });
+
   it("returns parse errors for invalid session command", () => {
     const missing = parseLocalCliArgs(["session"]);
     expect(missing.ok).toBe(false);
@@ -549,9 +561,6 @@ describe("local CLI", () => {
           "--config",
           configPath,
           "handoff",
-          "100",
-          "--task",
-          "TASK-99",
           "--remaining",
           "Run full regression checks",
           "--capability",
@@ -582,6 +591,8 @@ describe("local CLI", () => {
     expect(code).toBe(0);
     expect(errors).toEqual([]);
     expect(logs.join("\n")).toContain("Handoff submitted successfully");
+    expect(logs.join("\n")).toContain("Auto-selected session chat:100/repo:payments-api/mode:active");
+    expect(logs.join("\n")).toContain("task id: TASK-");
     expect(logs.join("\n")).toContain("/handoff continue rw-1");
 
     expect(relayRequests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
@@ -595,7 +606,8 @@ describe("local CLI", () => {
     const bindBody = relayRequests[1]?.body;
     expect(bindBody?.session).toEqual({ sessionId: "chat:100/repo:payments-api/mode:active" });
     const handoffBody = relayRequests[3]?.body;
-    expect(handoffBody?.taskId).toBe("TASK-99");
+    expect(typeof handoffBody?.taskId).toBe("string");
+    expect(String(handoffBody?.taskId)).toContain("TASK-");
     expect(handoffBody?.specRevisionRef).toBe("v2");
   });
 });

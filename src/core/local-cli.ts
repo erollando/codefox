@@ -215,8 +215,8 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
 }
 
 interface HandoffParsedArgs {
-  chatId: number;
-  taskId: string;
+  chatId?: number;
+  taskId?: string;
   remainingSummary: string;
   workId?: string;
   capabilityRef?: string;
@@ -233,19 +233,19 @@ interface HandoffParsedArgs {
 }
 
 function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffParsedArgs; error?: string } {
-  const chatIdRaw = tokens[0];
-  if (!chatIdRaw) {
-    return {
-      ok: false,
-      error: "handoff command requires <chatId>."
-    };
-  }
-  const chatId = Number(chatIdRaw);
-  if (!Number.isSafeInteger(chatId) || chatId <= 0) {
-    return {
-      ok: false,
-      error: "chatId must be a positive integer."
-    };
+  let chatId: number | undefined;
+  let startIndex = 0;
+  const first = tokens[0];
+  if (first && !first.startsWith("--")) {
+    const parsedChatId = Number(first);
+    if (!Number.isSafeInteger(parsedChatId) || parsedChatId <= 0) {
+      return {
+        ok: false,
+        error: "chatId must be a positive integer."
+      };
+    }
+    chatId = parsedChatId;
+    startIndex = 1;
   }
 
   const completedWork: string[] = [];
@@ -263,7 +263,7 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
   let relayPort: number | undefined;
   let leaseSeconds: number | undefined;
 
-  for (let index = 1; index < tokens.length; index += 1) {
+  for (let index = startIndex; index < tokens.length; index += 1) {
     const token = tokens[index];
     const next = tokens[index + 1];
     const readRequired = (flag: string): string | undefined => {
@@ -449,12 +449,6 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
     };
   }
 
-  if (!taskId || taskId.trim().length === 0) {
-    return {
-      ok: false,
-      error: "handoff command requires --task <taskId>."
-    };
-  }
   if (!remainingSummary || remainingSummary.trim().length === 0) {
     return {
       ok: false,
@@ -466,7 +460,7 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
     ok: true,
     args: {
       chatId,
-      taskId: taskId.trim(),
+      taskId: taskId?.trim(),
       remainingSummary: remainingSummary.trim(),
       workId: workId?.trim(),
       capabilityRef: capabilityRef?.trim(),
@@ -588,19 +582,6 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
     approvalTtlHours: config.state.approvalTtlHours
   }).state;
 
-  const chatId = args.chatId as number;
-  const sessionId = resolveHandoffSessionId(args, pruned.sessions);
-  if (!sessionId.ok || !sessionId.value) {
-    output.error(sessionId.error ?? "Could not resolve session id.");
-    return 1;
-  }
-
-  const specRevisionRef = resolveSpecRevisionRef(args, pruned.specWorkflows);
-  if (!specRevisionRef.ok || !specRevisionRef.value) {
-    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
-    return 1;
-  }
-
   const routesResponse = await requestRelayJson<RelayRoutesResponse>({
     baseUrl: relayBaseUrl,
     path: "/v1/external-codex/routes",
@@ -612,10 +593,27 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
     return 1;
   }
   const routes = routesResponse.body.routes ?? [];
-  const matchedRoute = routes.find((route) => route.sessionId === sessionId.value);
+
+  const context = resolveHandoffContext(args, pruned.sessions, routes);
+  if (!context.ok || !context.value) {
+    output.error(context.error ?? "Could not resolve handoff context.");
+    return 1;
+  }
+  const { chatId, sessionId, autoSelected } = context.value;
+  if (autoSelected) {
+    output.log(`Auto-selected session ${sessionId} for chat ${chatId}.`);
+  }
+
+  const specRevisionRef = resolveSpecRevisionRef(args, chatId, pruned.specWorkflows);
+  if (!specRevisionRef.ok || !specRevisionRef.value) {
+    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
+    return 1;
+  }
+
+  const matchedRoute = routes.find((route) => route.sessionId === sessionId);
   if (!matchedRoute) {
     output.error(
-      `Session '${sessionId.value}' is not currently routed. Set /repo and /mode in Telegram first, then retry.`
+      `Session '${sessionId}' is not currently routed. Set /repo and /mode in Telegram first, then retry.`
     );
     return 1;
   }
@@ -628,7 +626,7 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
     authToken,
     body: {
       clientId,
-      session: { sessionId: sessionId.value },
+      session: { sessionId },
       requestedSchemaVersion: "v1",
       requestedCapabilityClasses: ["completion", "handoff_bundle"],
       ...(typeof args.leaseSeconds === "number" ? { requestedLeaseSeconds: args.leaseSeconds } : {})
@@ -668,6 +666,8 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
     return 1;
   }
 
+  const session = pruned.sessions.find((entry) => entry.chatId === chatId);
+  const taskId = resolveTaskId(args, session);
   const workId = args.workId || "rw-1";
   const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
   const handoffResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
@@ -681,13 +681,13 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
       handoffId,
       clientId,
       createdAt: new Date().toISOString(),
-      taskId: args.taskId,
+      taskId,
       specRevisionRef: specRevisionRef.value,
       completedWork: args.completedWork ?? [],
       remainingWork: [
         {
           id: workId,
-          summary: args.remainingSummary,
+          summary: args.remainingSummary as string,
           ...(args.capabilityRef ? { requestedCapabilityRef: args.capabilityRef } : {})
         }
       ],
@@ -708,61 +708,148 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
   await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
 
   output.log(`Handoff submitted successfully for chat ${chatId}.`);
-  output.log(`session: ${sessionId.value}`);
+  output.log(`session: ${sessionId}`);
   output.log(`lease: ${leaseId}`);
   output.log(`handoff id: ${handoffId}`);
-  output.log(`task id: ${args.taskId}`);
+  output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
   output.log(`spec ref: ${specRevisionRef.value}`);
-  output.log(`remaining work: ${workId} (${args.remainingSummary})`);
+  output.log(`remaining work: ${workId} (${args.remainingSummary as string})`);
   output.log("Next steps in Telegram:");
   output.log("  /handoff show");
   output.log(`  /handoff continue ${workId}`);
   return 0;
 }
 
-function resolveHandoffSessionId(
+function resolveTaskId(
+  args: LocalCliParsedArgs,
+  session?: {
+    activeRequestId?: string;
+    codexThreadId?: string;
+  }
+): string {
+  if (args.taskId && args.taskId.trim().length > 0) {
+    return args.taskId.trim();
+  }
+  if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
+    return `TASK-${session.activeRequestId.trim()}`;
+  }
+  if (session?.codexThreadId && session.codexThreadId.trim().length > 0) {
+    return `TASK-${session.codexThreadId.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 20)}`;
+  }
+  return `TASK-${randomUUID().slice(0, 8)}`;
+}
+
+function resolveHandoffContext(
   args: LocalCliParsedArgs,
   sessions: Array<{
     chatId: number;
     selectedRepo?: string;
     mode: string;
+    updatedAt: string;
+  }>,
+  routes: Array<{
+    sessionId: string;
+    chatId: number;
   }>
-): { ok: boolean; value?: string; error?: string } {
+): { ok: boolean; value?: { chatId: number; sessionId: string; autoSelected: boolean }; error?: string } {
   if (args.sessionId && args.sessionId.trim().length > 0) {
+    const sessionId = args.sessionId.trim();
+    const routed = routes.find((entry) => entry.sessionId === sessionId);
+    const parsedChatId = parseChatIdFromSessionId(sessionId);
+    const chatId = routed?.chatId ?? args.chatId ?? parsedChatId;
+    if (!chatId) {
+      return {
+        ok: false,
+        error: `Could not determine chat id for session '${sessionId}'.`
+      };
+    }
     return {
       ok: true,
-      value: args.sessionId.trim()
+      value: {
+        chatId,
+        sessionId,
+        autoSelected: false
+      }
     };
   }
 
-  const chatId = args.chatId as number;
-  const session = sessions.find((entry) => entry.chatId === chatId);
-  if (!session) {
+  if (typeof args.chatId === "number") {
+    const chatId = args.chatId;
+    const session = sessions.find((entry) => entry.chatId === chatId);
+    if (!session) {
+      return {
+        ok: false,
+        error: `No persisted session found for chatId ${chatId}.`
+      };
+    }
+    if (!session.selectedRepo) {
+      return {
+        ok: false,
+        error: `Session ${chatId} has no selected repo. Set /repo in Telegram first.`
+      };
+    }
+    if (session.mode !== "observe" && session.mode !== "active" && session.mode !== "full-access") {
+      return {
+        ok: false,
+        error: `Session ${chatId} has invalid mode '${session.mode}'.`
+      };
+    }
     return {
-      ok: false,
-      error: `No persisted session found for chatId ${chatId}.`
+      ok: true,
+      value: {
+        chatId,
+        sessionId: buildExternalSessionId(chatId, session.selectedRepo, session.mode),
+        autoSelected: false
+      }
     };
   }
-  if (!session.selectedRepo) {
+
+  if (routes.length === 0) {
     return {
       ok: false,
-      error: `Session ${chatId} has no selected repo. Set /repo in Telegram first.`
+      error: "No external routes are active. Set /repo and /mode in Telegram first."
     };
   }
-  if (session.mode !== "observe" && session.mode !== "active" && session.mode !== "full-access") {
-    return {
-      ok: false,
-      error: `Session ${chatId} has invalid mode '${session.mode}'.`
-    };
-  }
+
+  const chooseRoute = (): { sessionId: string; chatId: number } => {
+    if (routes.length === 1) {
+      return routes[0];
+    }
+    const ranked = routes
+      .map((route) => ({
+        route,
+        updatedAt: sessions.find((entry) => entry.chatId === route.chatId)?.updatedAt ?? ""
+      }))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return ranked[0]?.route ?? routes[0];
+  };
+
+  const selectedRoute = chooseRoute();
   return {
     ok: true,
-    value: buildExternalSessionId(chatId, session.selectedRepo, session.mode)
+    value: {
+      chatId: selectedRoute.chatId,
+      sessionId: selectedRoute.sessionId,
+      autoSelected: true
+    }
   };
+}
+
+function parseChatIdFromSessionId(sessionId: string): number | undefined {
+  const match = /^chat:(\d+)\/repo:[^/]+\/mode:(observe|active|full-access)$/.exec(sessionId);
+  if (!match) {
+    return undefined;
+  }
+  const chatId = Number(match[1]);
+  if (!Number.isSafeInteger(chatId) || chatId <= 0) {
+    return undefined;
+  }
+  return chatId;
 }
 
 function resolveSpecRevisionRef(
   args: LocalCliParsedArgs,
+  chatId: number,
   specWorkflows: PersistedSpecWorkflow[]
 ): { ok: boolean; value?: string; error?: string } {
   if (args.specRevisionRef && args.specRevisionRef.trim().length > 0) {
@@ -771,8 +858,6 @@ function resolveSpecRevisionRef(
       value: args.specRevisionRef.trim()
     };
   }
-
-  const chatId = args.chatId as number;
   const spec = specWorkflows.find((entry) => entry.chatId === chatId);
   if (!spec) {
     return {
@@ -877,9 +962,9 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] specs",
     "  npm run local:cli -- [--config <path>] session <chatId>",
     "  npm run local:cli -- [--config <path>] [--user <id>] send <chatId> <command-text>",
-    "  npm run local:cli -- [--config <path>] handoff <chatId> --task <taskId> --remaining <summary> [options]",
+    "  npm run local:cli -- [--config <path>] handoff [chatId] --remaining <summary> [options]",
     "    options: [--work-id <id>] [--capability <ref>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
-    "             [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
+    "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
     "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>]",
     "  npm run local:cli -- help"
   ].join("\n");

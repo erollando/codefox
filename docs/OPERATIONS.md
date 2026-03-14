@@ -101,8 +101,9 @@ npm run verify
 
 - Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
 - For an operator-facing handoff bridge without manual API calls, use:
-  - `npm run handoff:cli -- --config <path> <chatId> --task <taskId> --remaining "<summary>" [--capability <ref>] [--completed "<item>"]`
-  - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke.
+  - `npm run handoff:cli -- --config <path> --remaining "<summary>" [--capability <ref>] [--completed "<item>"]`
+  - Optional overrides: `<chatId>` positional and `--task <taskId>`.
+  - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-selects routed session and auto-generates task id when omitted).
 - Endpoints:
   - `GET /health`
   - `GET /v1/external-codex/routes`
