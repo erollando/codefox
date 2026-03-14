@@ -200,7 +200,7 @@ Copy the sample config to `config/codefox.config.json`:
 }
 ```
 
-`state.filePath` persists chat sessions, pending approvals, and spec workflow revisions across service restarts.
+`state.filePath` persists chat sessions, pending approvals, spec workflow revisions, and external handoff continuation state across service restarts.
 Any stale `activeRequestId` values from a previous process are cleared on startup.
 If set, `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
 `state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.
@@ -284,6 +284,7 @@ External relay HTTP transport (optional):
 
 When enabled, routes are derived from active CodeFox sessions (`chat:<id>/repo:<name>/mode:<mode>`). The relay remains transport-agnostic; this HTTP server is a thin adapter boundary suitable for future VS Code plugin/skill clients.
 `approval_request` events are converted into CodeFox pending approvals and must be resolved by `/approve` or `/deny` inside CodeFox channels.
+Only one active lease is allowed per external session id; clients must call revoke before re-binding.
 
 ## Validate
 

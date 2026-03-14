@@ -110,6 +110,17 @@ describe("ExternalCodexIntegration", () => {
       return;
     }
 
+    const duplicateSessionBind = integration.bind({
+      clientId: "vscode-codex-b",
+      session: { sessionId: "session-2" },
+      requestedSchemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
+      requestedCapabilityClasses: ["progress"]
+    });
+    expect(duplicateSessionBind.ok).toBe(false);
+    if (!duplicateSessionBind.ok) {
+      expect(duplicateSessionBind.reasonCode).toBe("session_already_bound");
+    }
+
     const first = integration.acceptEvent({
       schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
       leaseId: bind.lease.leaseId,

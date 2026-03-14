@@ -1,6 +1,13 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { ApprovalRequest, CodexReasoningEffort, PolicyMode, SessionState, TaskTokenUsage } from "../types/domain.js";
+import type {
+  ApprovalRequest,
+  CodexReasoningEffort,
+  ExternalHandoffStateSnapshot,
+  PolicyMode,
+  SessionState,
+  TaskTokenUsage
+} from "../types/domain.js";
 import type { SpecRevision, SpecWorkflowState } from "./spec-workflow.js";
 
 export interface PersistedSpecWorkflow {
@@ -12,6 +19,7 @@ export interface PersistedState {
   sessions: SessionState[];
   approvals: ApprovalRequest[];
   specWorkflows: PersistedSpecWorkflow[];
+  externalHandoffs: ExternalHandoffStateSnapshot[];
 }
 
 export interface StateTtlOptions {
@@ -22,7 +30,8 @@ export interface StateTtlOptions {
 const EMPTY_STATE: PersistedState = {
   sessions: [],
   approvals: [],
-  specWorkflows: []
+  specWorkflows: [],
+  externalHandoffs: []
 };
 
 const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
@@ -62,11 +71,15 @@ export class JsonStateStore {
     const sessions = Array.isArray(obj.sessions) ? (obj.sessions as SessionState[]) : [];
     const approvals = Array.isArray(obj.approvals) ? (obj.approvals as ApprovalRequest[]) : [];
     const specWorkflows = Array.isArray(obj.specWorkflows) ? (obj.specWorkflows as PersistedSpecWorkflow[]) : [];
+    const externalHandoffs = Array.isArray(obj.externalHandoffs)
+      ? (obj.externalHandoffs as ExternalHandoffStateSnapshot[])
+      : [];
 
     return {
       sessions: sanitizeSessions(sessions),
       approvals: sanitizeApprovals(approvals),
-      specWorkflows: sanitizeSpecWorkflows(specWorkflows)
+      specWorkflows: sanitizeSpecWorkflows(specWorkflows),
+      externalHandoffs: sanitizeExternalHandoffs(externalHandoffs)
     };
   }
 
@@ -78,7 +91,8 @@ export class JsonStateStore {
       const safeState: PersistedState = {
         sessions: sanitizeSessions(state.sessions),
         approvals: sanitizeApprovals(state.approvals),
-        specWorkflows: sanitizeSpecWorkflows(state.specWorkflows)
+        specWorkflows: sanitizeSpecWorkflows(state.specWorkflows),
+        externalHandoffs: sanitizeExternalHandoffs(state.externalHandoffs)
       };
 
       const tempPath = `${this.filePath}.tmp`;
@@ -236,6 +250,58 @@ function sanitizeSpecWorkflows(specWorkflows: PersistedSpecWorkflow[]): Persiste
     .filter((entry) => entry.workflow.revisions.length > 0);
 }
 
+function sanitizeExternalHandoffs(externalHandoffs: ExternalHandoffStateSnapshot[]): ExternalHandoffStateSnapshot[] {
+  return externalHandoffs
+    .filter(
+      (entry) =>
+        typeof entry?.chatId === "number" &&
+        Number.isSafeInteger(entry.chatId) &&
+        typeof entry.leaseId === "string" &&
+        entry.leaseId.trim().length > 0 &&
+        entry.handoff &&
+        typeof entry.handoff === "object" &&
+        Array.isArray(entry.handoff.completedWork) &&
+        Array.isArray(entry.handoff.remainingWork) &&
+        Array.isArray(entry.continuedWorkIds)
+    )
+    .map((entry) => ({
+      chatId: entry.chatId,
+      leaseId: entry.leaseId.trim(),
+      handoff: {
+        schemaVersion: typeof entry.handoff.schemaVersion === "string" ? entry.handoff.schemaVersion : "v1",
+        leaseId: typeof entry.handoff.leaseId === "string" ? entry.handoff.leaseId : entry.leaseId.trim(),
+        handoffId: typeof entry.handoff.handoffId === "string" ? entry.handoff.handoffId : "",
+        clientId: typeof entry.handoff.clientId === "string" ? entry.handoff.clientId : "",
+        createdAt: isValidIsoTimestamp(entry.handoff.createdAt) ? entry.handoff.createdAt : new Date().toISOString(),
+        taskId: typeof entry.handoff.taskId === "string" ? entry.handoff.taskId : "",
+        specRevisionRef: typeof entry.handoff.specRevisionRef === "string" ? entry.handoff.specRevisionRef : "",
+        completedWork: entry.handoff.completedWork.filter((value): value is string => typeof value === "string"),
+        remainingWork: entry.handoff.remainingWork
+          .filter((work) => work && typeof work === "object")
+          .map((work) => ({
+            id: typeof work.id === "string" ? work.id : "",
+            summary: typeof work.summary === "string" ? work.summary : "",
+            requestedCapabilityRef:
+              typeof work.requestedCapabilityRef === "string" ? work.requestedCapabilityRef : undefined,
+            blockedByApproval: typeof work.blockedByApproval === "boolean" ? work.blockedByApproval : undefined
+          }))
+          .filter((work) => work.id.length > 0 && work.summary.length > 0),
+        evidenceRefs: Array.isArray(entry.handoff.evidenceRefs)
+          ? entry.handoff.evidenceRefs.filter((value): value is string => typeof value === "string")
+          : undefined,
+        unresolvedQuestions: Array.isArray(entry.handoff.unresolvedQuestions)
+          ? entry.handoff.unresolvedQuestions.filter((value): value is string => typeof value === "string")
+          : undefined,
+        unresolvedRisks: Array.isArray(entry.handoff.unresolvedRisks)
+          ? entry.handoff.unresolvedRisks.filter((value): value is string => typeof value === "string")
+          : undefined
+      },
+      receivedAt: isValidIsoTimestamp(entry.receivedAt) ? entry.receivedAt : new Date().toISOString(),
+      continuedWorkIds: entry.continuedWorkIds.filter((value): value is string => typeof value === "string")
+    }))
+    .filter((entry) => entry.handoff.handoffId.length > 0 && entry.handoff.taskId.length > 0);
+}
+
 function sanitizeSpecRevisions(revisions: SpecRevision[]): SpecRevision[] {
   return revisions
     .filter(
@@ -327,7 +393,10 @@ export function pruneStateByTtl(
     state: {
       sessions,
       approvals,
-      specWorkflows: state.specWorkflows.filter((entry) => sessions.some((session) => session.chatId === entry.chatId))
+      specWorkflows: state.specWorkflows.filter((entry) => sessions.some((session) => session.chatId === entry.chatId)),
+      externalHandoffs: state.externalHandoffs.filter((entry) =>
+        sessions.some((session) => session.chatId === entry.chatId)
+      )
     },
     removedSessions: state.sessions.length - sessions.length,
     removedApprovals: state.approvals.length - approvals.length

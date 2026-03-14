@@ -46,6 +46,8 @@ import {
 import type {
   AgentTemplateName,
   CodexReasoningEffort,
+  ExternalHandoffBundleState,
+  ExternalHandoffStateSnapshot,
   PolicyMode,
   RepoConfig,
   RunKind,
@@ -125,6 +127,7 @@ export interface ControllerDeps {
   codexSessionIdleMinutes: number;
   codexDefaultReasoningEffort?: CodexReasoningEffort;
   initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
+  initialExternalHandoffs?: ExternalHandoffStateSnapshot[];
   persistState?: () => Promise<void>;
   specPolicy?: SpecPolicyEngine;
   capabilityRegistry?: CapabilityRegistry;
@@ -156,6 +159,17 @@ export class CodeFoxController {
       }
       this.specDrafts.set(entry.chatId, cloneSpecWorkflow(entry.workflow));
     }
+    for (const entry of deps.initialExternalHandoffs ?? []) {
+      if (!Number.isSafeInteger(entry.chatId)) {
+        continue;
+      }
+      this.externalHandoffs.set(entry.chatId, {
+        leaseId: entry.leaseId,
+        bundle: mapStateBundleToExternalBundle(entry.handoff),
+        receivedAt: entry.receivedAt,
+        continuedWorkIds: [...entry.continuedWorkIds]
+      });
+    }
   }
 
   listSpecWorkflows(): Array<{ chatId: number; workflow: SpecWorkflowState }> {
@@ -164,6 +178,18 @@ export class CodeFoxController {
       .map(([chatId, workflow]) => ({
         chatId,
         workflow: cloneSpecWorkflow(workflow)
+      }));
+  }
+
+  listExternalHandoffs(): ExternalHandoffStateSnapshot[] {
+    return [...this.externalHandoffs.entries()]
+      .sort(([leftChatId], [rightChatId]) => leftChatId - rightChatId)
+      .map(([chatId, handoff]) => ({
+        chatId,
+        leaseId: handoff.leaseId,
+        handoff: mapExternalBundleToStateBundle(handoff.bundle),
+        receivedAt: handoff.receivedAt,
+        continuedWorkIds: [...handoff.continuedWorkIds]
       }));
   }
 
@@ -228,16 +254,42 @@ export class CodeFoxController {
     }
 
     const unresolvedCapabilities: string[] = [];
+    const unrunnableCapabilities: string[] = [];
+    const sessionMode = this.deps.sessions.getOrCreate(chatId).mode;
     for (const work of handoff.remainingWork) {
       if (!work.requestedCapabilityRef) {
         continue;
       }
-      if (!this.capabilityRegistry.resolveAction(work.requestedCapabilityRef)) {
+      const action = this.capabilityRegistry.resolveAction(work.requestedCapabilityRef);
+      if (!action) {
         unresolvedCapabilities.push(work.requestedCapabilityRef);
+        continue;
+      }
+      if (
+        !this.capabilityRegistry.isActionRunnableInMode(action, sessionMode) ||
+        action.approvalLevel === "local-presence-required"
+      ) {
+        unrunnableCapabilities.push(work.requestedCapabilityRef);
       }
     }
     if (unresolvedCapabilities.length > 0) {
       const reason = `Unknown requested capability refs: ${[...new Set(unresolvedCapabilities)].join(", ")}`;
+      await this.deps.audit.log({
+        type: "external_handoff_ingest_rejected",
+        chatId,
+        leaseId,
+        handoffId: handoff.handoffId,
+        reason
+      });
+      return {
+        accepted: false,
+        reason
+      };
+    }
+    if (unrunnableCapabilities.length > 0) {
+      const reason = `Requested capability refs not runnable in mode ${sessionMode}: ${[
+        ...new Set(unrunnableCapabilities)
+      ].join(", ")}`;
       await this.deps.audit.log({
         type: "external_handoff_ingest_rejected",
         chatId,
@@ -257,6 +309,7 @@ export class CodeFoxController {
       receivedAt: new Date().toISOString(),
       continuedWorkIds: []
     });
+    this.persistState();
     await this.deps.audit.log({
       type: "external_handoff_ingested",
       chatId,
@@ -1054,6 +1107,7 @@ export class CodeFoxController {
         return;
       }
       this.externalHandoffs.delete(chatId);
+      this.persistState();
       await this.deps.audit.log({
         type: "external_handoff_cleared",
         chatId,
@@ -1141,6 +1195,7 @@ export class CodeFoxController {
       ...state,
       continuedWorkIds: [...state.continuedWorkIds, nextWork.id]
     });
+    this.persistState();
     await this.deps.audit.log({
       type: "external_handoff_continue_requested",
       chatId,
@@ -2377,6 +2432,7 @@ export function createControllerFromAdapters(params: {
   codexSessionIdleMinutes: number;
   codexDefaultReasoningEffort?: CodexReasoningEffort;
   initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
+  initialExternalHandoffs?: ExternalHandoffStateSnapshot[];
   persistState?: () => Promise<void>;
   specPolicy?: SpecPolicyEngine;
   capabilityRegistry?: CapabilityRegistry;
@@ -2405,6 +2461,7 @@ export function createControllerFromAdapters(params: {
     codexSessionIdleMinutes: params.codexSessionIdleMinutes,
     codexDefaultReasoningEffort: params.codexDefaultReasoningEffort,
     initialSpecWorkflows: params.initialSpecWorkflows,
+    initialExternalHandoffs: params.initialExternalHandoffs,
     persistState: params.persistState,
     specPolicy: params.specPolicy,
     capabilityRegistry: params.capabilityRegistry,
@@ -2439,5 +2496,39 @@ function cloneExternalHandoffBundle(handoff: ExternalCodexHandoffBundle): Extern
     evidenceRefs: handoff.evidenceRefs ? [...handoff.evidenceRefs] : undefined,
     unresolvedQuestions: handoff.unresolvedQuestions ? [...handoff.unresolvedQuestions] : undefined,
     unresolvedRisks: handoff.unresolvedRisks ? [...handoff.unresolvedRisks] : undefined
+  };
+}
+
+function mapExternalBundleToStateBundle(bundle: ExternalCodexHandoffBundle): ExternalHandoffBundleState {
+  return {
+    schemaVersion: bundle.schemaVersion,
+    leaseId: bundle.leaseId,
+    handoffId: bundle.handoffId,
+    clientId: bundle.clientId,
+    createdAt: bundle.createdAt,
+    taskId: bundle.taskId,
+    specRevisionRef: bundle.specRevisionRef,
+    completedWork: [...bundle.completedWork],
+    remainingWork: bundle.remainingWork.map((work) => ({ ...work })),
+    evidenceRefs: bundle.evidenceRefs ? [...bundle.evidenceRefs] : undefined,
+    unresolvedQuestions: bundle.unresolvedQuestions ? [...bundle.unresolvedQuestions] : undefined,
+    unresolvedRisks: bundle.unresolvedRisks ? [...bundle.unresolvedRisks] : undefined
+  };
+}
+
+function mapStateBundleToExternalBundle(bundle: ExternalHandoffBundleState): ExternalCodexHandoffBundle {
+  return {
+    schemaVersion: bundle.schemaVersion as ExternalCodexHandoffBundle["schemaVersion"],
+    leaseId: bundle.leaseId,
+    handoffId: bundle.handoffId,
+    clientId: bundle.clientId,
+    createdAt: bundle.createdAt,
+    taskId: bundle.taskId,
+    specRevisionRef: bundle.specRevisionRef,
+    completedWork: [...bundle.completedWork],
+    remainingWork: bundle.remainingWork.map((work) => ({ ...work })),
+    evidenceRefs: bundle.evidenceRefs ? [...bundle.evidenceRefs] : undefined,
+    unresolvedQuestions: bundle.unresolvedQuestions ? [...bundle.unresolvedQuestions] : undefined,
+    unresolvedRisks: bundle.unresolvedRisks ? [...bundle.unresolvedRisks] : undefined
   };
 }
