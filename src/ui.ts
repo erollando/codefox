@@ -401,15 +401,15 @@ const UI_HTML = `<!doctype html>
       --brand-soft-2: #effaf8;
       --shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
     }
-    * {
-      box-sizing: border-box;
-    }
+    html, body { height: 100%; }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
       color: var(--text);
-      height: 100vh;
+      min-height: 100dvh;
+      height: 100dvh;
       overflow: hidden;
     }
     .shell {
@@ -419,7 +419,7 @@ const UI_HTML = `<!doctype html>
       display: grid;
       grid-template-columns: 280px 1fr;
       gap: 14px;
-      height: 100vh;
+      height: 100dvh;
     }
     .card {
       background: var(--card);
@@ -432,12 +432,7 @@ const UI_HTML = `<!doctype html>
       min-height: 0;
       overflow: auto;
     }
-    .sessions h2,
-    .main h2 {
-      margin: 6px 0 10px;
-      font-size: 15px;
-      letter-spacing: 0.01em;
-    }
+    #sessions { display: grid; gap: 10px; }
     .session-item {
       width: 100%;
       text-align: left;
@@ -463,67 +458,57 @@ const UI_HTML = `<!doctype html>
     }
     .main {
       display: grid;
-      grid-template-rows: auto auto auto 1fr auto;
+      grid-template-rows: auto auto 1fr auto;
       min-height: 0;
       height: 100%;
       overflow: hidden;
     }
-    .header,
     .context,
     .composer {
       padding: 12px 14px;
       border-bottom: 1px solid var(--line);
     }
-    .header {
-      background: linear-gradient(180deg, var(--brand-soft-2) 0%, #fff 100%);
-    }
-    .header h2 {
-      margin: 2px 0 6px;
-      font-size: 22px;
-      font-weight: 650;
-    }
     .context {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
       background: #fbfdff;
+      padding: 9px 12px;
     }
     .pill {
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 4px 10px;
-      font-size: 12px;
+      padding: 3px 8px;
+      font-size: 11px;
       background: #fff;
       color: #1e293b;
     }
     .quick {
       display: flex;
       flex-wrap: wrap;
-      gap: 7px;
-      padding: 10px 14px;
+      gap: 6px;
+      padding: 8px 12px;
       border-bottom: 1px solid var(--line);
       align-items: center;
       align-content: flex-start;
       background: #fdfefe;
     }
     .quick button,
-    .msg-buttons button,
     .composer button {
       border: 1px solid var(--line);
       background: #fff;
       color: var(--text);
       border-radius: 999px;
-      padding: 6px 12px;
+      padding: 5px 10px;
       cursor: pointer;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       line-height: 1;
       white-space: nowrap;
-      min-height: 32px;
+      min-height: 28px;
       transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
     }
     .quick button:hover,
-    .msg-buttons button:hover,
     .composer button:hover {
       border-color: var(--brand);
       background: #f9fdfd;
@@ -558,12 +543,6 @@ const UI_HTML = `<!doctype html>
       font-size: 12px;
       line-height: 1.45;
     }
-    .msg-buttons {
-      margin-top: 8px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
     .composer {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -595,34 +574,81 @@ const UI_HTML = `<!doctype html>
     @media (max-width: 860px) {
       .shell {
         grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
         padding: 10px;
         gap: 10px;
-        height: 100vh;
+        height: 100dvh;
       }
       .sessions {
-        max-height: 180px;
+        max-height: 116px;
+        padding: 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      #sessions {
+        display: flex;
+        gap: 8px;
+      }
+      .session-item {
+        min-width: 210px;
+        margin-bottom: 0;
       }
       .main {
         min-height: 0;
         height: 100%;
       }
-      .header h2 {
-        font-size: 19px;
+      .context,
+      .quick,
+      .composer {
+        padding-left: 10px;
+        padding-right: 10px;
       }
+      .quick {
+        gap: 5px;
+      }
+    }
+    body.mobile-mode .shell {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+      padding: 10px;
+      gap: 10px;
+      height: 100dvh;
+    }
+    body.mobile-mode .sessions {
+      max-height: 116px;
+      padding: 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    body.mobile-mode #sessions {
+      display: flex;
+      gap: 8px;
+    }
+    body.mobile-mode .session-item {
+      min-width: 210px;
+      margin-bottom: 0;
+    }
+    body.mobile-mode .main {
+      min-height: 0;
+      height: 100%;
+    }
+    body.mobile-mode .context,
+    body.mobile-mode .quick,
+    body.mobile-mode .composer {
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+    body.mobile-mode .quick {
+      gap: 5px;
     }
   </style>
 </head>
 <body>
   <div class="shell">
     <aside class="card sessions">
-      <h2>Sessions</h2>
       <div id="sessions"></div>
     </aside>
     <section class="card main">
-      <div class="header">
-        <h2 id="title">CodeFox Local UI</h2>
-        <div class="tiny" id="subtitle">Waiting for state...</div>
-      </div>
       <div class="context" id="context"></div>
       <div class="quick" id="quick"></div>
       <div class="feed" id="feed"></div>
@@ -633,10 +659,13 @@ const UI_HTML = `<!doctype html>
     </section>
   </div>
   <script>
+    const params = new URLSearchParams(window.location.search);
+    const forcedMobile = params.get("mobile") === "1";
+    if (forcedMobile) {
+      document.body.classList.add("mobile-mode");
+    }
     let selectedChatId;
     const sessionsEl = document.getElementById("sessions");
-    const titleEl = document.getElementById("title");
-    const subtitleEl = document.getElementById("subtitle");
     const contextEl = document.getElementById("context");
     const quickEl = document.getElementById("quick");
     const feedEl = document.getElementById("feed");
@@ -671,18 +700,16 @@ const UI_HTML = `<!doctype html>
 
       const selected = data.selected;
       if (!selected) {
-        titleEl.textContent = "CodeFox Local UI";
-        subtitleEl.textContent = "No active session yet. Start a chat in Telegram or run a local command.";
-        contextEl.innerHTML = "";
+        contextEl.innerHTML = "<span class='tiny'>No active session yet. Start from Telegram, REPL, or handoff.</span>";
         quickEl.innerHTML = "";
         feedEl.innerHTML = "<div class='tiny'>No messages yet.</div>";
         return;
       }
 
-      titleEl.textContent = "chat " + selected.chatId + " • " + (selected.repo || "(no repo)");
-      subtitleEl.textContent = "mode=" + selected.mode + (selected.activeRequestId ? " • active=" + selected.activeRequestId : "");
-
       const pills = [];
+      if (selected.activeRequestId) {
+        pills.push("<span class='pill'>active: " + selected.activeRequestId + "</span>");
+      }
       pills.push("<span class='pill'>approvals: " + selected.approvalCount + "</span>");
       if (selected.spec) {
         pills.push("<span class='pill'>spec: " + selected.spec.revision + " (" + selected.spec.stage + ")</span>");
@@ -714,17 +741,6 @@ const UI_HTML = `<!doctype html>
           body.textContent = message.text;
           card.appendChild(header);
           card.appendChild(body);
-          if (Array.isArray(message.commandButtons) && message.commandButtons.length > 0) {
-            const commandRow = document.createElement("div");
-            commandRow.className = "msg-buttons";
-            for (const cmd of message.commandButtons) {
-              const btn = document.createElement("button");
-              btn.textContent = cmd;
-              btn.onclick = () => sendText(cmd);
-              commandRow.appendChild(btn);
-            }
-            card.appendChild(commandRow);
-          }
           feedEl.appendChild(card);
         }
       }
