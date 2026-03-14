@@ -722,7 +722,7 @@ const UI_HTML = `<!doctype html>
       quickEl.innerHTML = "";
       for (const command of selected.quickCommands) {
         const button = document.createElement("button");
-        button.textContent = command;
+        button.textContent = formatCommandLabel(command);
         button.onclick = () => sendText(command);
         quickEl.appendChild(button);
       }
@@ -763,6 +763,13 @@ const UI_HTML = `<!doctype html>
       }
       inputEl.value = "";
       await fetchState();
+    }
+
+    function formatCommandLabel(command) {
+      if (typeof command !== "string") {
+        return "";
+      }
+      return command.startsWith("/") ? command.slice(1) : command;
     }
 
     composerEl.addEventListener("submit", async (event) => {
