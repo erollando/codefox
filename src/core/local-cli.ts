@@ -7,6 +7,7 @@ import { buildExternalSessionId } from "./external-session-route.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
 import { JsonStateStore, pruneStateByTtl } from "./state-store.js";
 import { approveCurrentRevision, createInitialWorkflow, getCurrentRevision } from "./spec-workflow.js";
+import { areSemanticallyEquivalentExternalHandoffs } from "./external-handoff-idempotency.js";
 import type { PersistedSpecWorkflow, PersistedState } from "./state-store.js";
 
 export interface LocalCliOutput {
@@ -861,6 +862,70 @@ async function runLocalHandoff(
   }
 
   const clientId = args.clientId || "codex-handoff-cli";
+  const session = pruned.sessions.find((entry) => entry.chatId === chatId);
+  const existingHandoff = findExistingHandoffSnapshot(pruned, chatId, sessionId);
+  const taskId = resolveTaskId(args, session, existingHandoff?.handoff.taskId);
+  const remainingSummary = resolveRemainingSummary(args, session, existingHandoff?.handoff.remainingWork[0]?.summary);
+  const sourceRepo = resolveSourceRepoMetadata(sessionId, args.repoPath, output);
+  const specRevisionRef = await resolveOrBootstrapSpecRevisionRef({
+    args,
+    chatId,
+    state: pruned,
+    store,
+    taskId,
+    remainingSummary
+  });
+  if (!specRevisionRef.ok || !specRevisionRef.value) {
+    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
+    return 1;
+  }
+  if (specRevisionRef.created) {
+    output.log(`Auto-created and approved spec ${specRevisionRef.value} for chat ${chatId}.`);
+  }
+  const workId = resolveWorkId(args, existingHandoff?.handoff.remainingWork[0]?.id);
+  const handoffTemplate = {
+    schemaVersion: "v1",
+    clientId,
+    taskId,
+    specRevisionRef: specRevisionRef.value,
+    completedWork: args.completedWork ?? [],
+    remainingWork: [
+      {
+        id: workId,
+        summary: remainingSummary
+      }
+    ],
+    ...(sourceRepo ? { sourceRepo } : {}),
+    ...(args.unresolvedQuestions && args.unresolvedQuestions.length > 0
+      ? { unresolvedQuestions: args.unresolvedQuestions }
+      : {}),
+    ...(args.unresolvedRisks && args.unresolvedRisks.length > 0 ? { unresolvedRisks: args.unresolvedRisks } : {})
+  };
+  if (
+    areSemanticallyEquivalentExternalHandoffs(
+      existingHandoff
+        ? {
+            sourceSessionId: existingHandoff.sourceSessionId,
+            bundle: existingHandoff.handoff
+          }
+        : undefined,
+      {
+        sourceSessionId: sessionId,
+        bundle: handoffTemplate
+      }
+    )
+  ) {
+    output.log(`Handoff already up to date for chat ${chatId}; no changes submitted.`);
+    output.log(`session: ${sessionId}`);
+    output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
+    output.log(`spec ref: ${specRevisionRef.value}`);
+    output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
+    output.log("Next steps in Telegram:");
+    output.log("  /handoff show");
+    output.log(`  /continue ${workId}`);
+    return 0;
+  }
+
   const bindResponse = await requestRelayJson<RelayBindResponse>({
     baseUrl: relayBaseUrl,
     path: "/v1/external-codex/bind",
@@ -908,26 +973,6 @@ async function runLocalHandoff(
     return 1;
   }
 
-  const session = pruned.sessions.find((entry) => entry.chatId === chatId);
-  const taskId = resolveTaskId(args, session);
-  const remainingSummary = resolveRemainingSummary(args, session);
-  const sourceRepo = resolveSourceRepoMetadata(sessionId, args.repoPath, output);
-  const specRevisionRef = await resolveOrBootstrapSpecRevisionRef({
-    args,
-    chatId,
-    state: pruned,
-    store,
-    taskId,
-    remainingSummary
-  });
-  if (!specRevisionRef.ok || !specRevisionRef.value) {
-    output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
-    return 1;
-  }
-  if (specRevisionRef.created) {
-    output.log(`Auto-created and approved spec ${specRevisionRef.value} for chat ${chatId}.`);
-  }
-  const workId = args.workId || "rw-1";
   const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
   const handoffResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
     baseUrl: relayBaseUrl,
@@ -935,27 +980,11 @@ async function runLocalHandoff(
     method: "POST",
     authToken,
     body: {
+      ...handoffTemplate,
       schemaVersion,
       leaseId,
       handoffId,
-      clientId,
-      createdAt: new Date().toISOString(),
-      taskId,
-      specRevisionRef: specRevisionRef.value,
-      completedWork: args.completedWork ?? [],
-      remainingWork: [
-        {
-          id: workId,
-          summary: remainingSummary
-        }
-      ],
-      ...(sourceRepo ? { sourceRepo } : {}),
-      ...(args.unresolvedQuestions && args.unresolvedQuestions.length > 0
-        ? { unresolvedQuestions: args.unresolvedQuestions }
-        : {}),
-      ...(args.unresolvedRisks && args.unresolvedRisks.length > 0
-        ? { unresolvedRisks: args.unresolvedRisks }
-        : {})
+      createdAt: new Date().toISOString()
     }
   });
   if (!handoffResponse.ok || handoffResponse.body?.decision?.ok !== true) {
@@ -1153,10 +1182,14 @@ function resolveTaskId(
   session?: {
     activeRequestId?: string;
     codexThreadId?: string;
-  }
+  },
+  existingTaskId?: string
 ): string {
   if (args.taskId && args.taskId.trim().length > 0) {
     return args.taskId.trim();
+  }
+  if (existingTaskId && existingTaskId.trim().length > 0) {
+    return existingTaskId.trim();
   }
   if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
     return `TASK-${session.activeRequestId.trim()}`;
@@ -1172,10 +1205,14 @@ function resolveRemainingSummary(
   session?: {
     activeRequestId?: string;
     codexThreadId?: string;
-  }
+  },
+  existingSummary?: string
 ): string {
   if (args.remainingSummary && args.remainingSummary.trim().length > 0) {
     return args.remainingSummary.trim();
+  }
+  if (existingSummary && existingSummary.trim().length > 0) {
+    return existingSummary.trim();
   }
   if (session?.activeRequestId && session.activeRequestId.trim().length > 0) {
     return `Continue remaining work from request ${session.activeRequestId.trim()}`;
@@ -1184,6 +1221,26 @@ function resolveRemainingSummary(
     return `Continue remaining work from Codex session ${session.codexThreadId.trim()}`;
   }
   return "Continue remaining handoff work";
+}
+
+function resolveWorkId(args: LocalCliParsedArgs, existingWorkId?: string): string {
+  if (args.workId && args.workId.trim().length > 0) {
+    return args.workId.trim();
+  }
+  if (existingWorkId && existingWorkId.trim().length > 0) {
+    return existingWorkId.trim();
+  }
+  return "rw-1";
+}
+
+function findExistingHandoffSnapshot(
+  state: PersistedState,
+  chatId: number,
+  sessionId: string
+): PersistedState["externalHandoffs"][number] | undefined {
+  return state.externalHandoffs.find(
+    (entry) => entry.chatId === chatId && (entry.sourceSessionId?.trim() || "") === sessionId.trim()
+  );
 }
 
 function resolveHandoffContext(

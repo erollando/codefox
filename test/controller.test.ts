@@ -652,6 +652,124 @@ describe("CodeFoxController", () => {
     ).toBe(true);
   });
 
+  it("treats semantically identical external handoff ingest as idempotent", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex, {
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_existing",
+          sourceSessionId: "chat:100/repo:payments-api/mode:active",
+          sourceRepoName: "payments-api",
+          sourceMode: "active",
+          receivedAt: "2026-03-14T12:01:00.000Z",
+          continuedWorkIds: ["rw-1"],
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_existing",
+            handoffId: "handoff_existing",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-100",
+            specRevisionRef: "v1",
+            completedWork: ["B item", "A item"],
+            remainingWork: [
+              {
+                id: "rw-1",
+                summary: "Run regression checks",
+                requestedCapabilityRef: "repo.run_checks"
+              }
+            ],
+            unresolvedQuestions: ["question-b", "question-a"]
+          }
+        }
+      ],
+      initialSpecWorkflows: [
+        {
+          chatId: 100,
+          workflow: {
+            revisions: [
+              {
+                version: 1,
+                stage: "approved",
+                status: "approved",
+                sourceIntent: "continue external work",
+                createdAt: "2026-03-14T12:00:00.000Z",
+                updatedAt: "2026-03-14T12:00:00.000Z",
+                approvedAt: "2026-03-14T12:00:00.000Z",
+                sections: {
+                  REQUEST: "continue work",
+                  GOAL: "goal",
+                  OUTCOME: "outcome",
+                  CONSTRAINTS: ["constraint"],
+                  NON_GOALS: [],
+                  CONTEXT: [],
+                  ASSUMPTIONS: [],
+                  QUESTIONS: [],
+                  PLAN: ["plan"],
+                  APPROVALS_REQUIRED: [],
+                  DONE_WHEN: ["done"]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    });
+
+    const duplicateHandoff: ExternalCodexHandoffBundle = {
+      schemaVersion: "v1",
+      leaseId: "lease_new",
+      handoffId: "handoff_new",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:05:00.000Z",
+      taskId: "TASK-100",
+      specRevisionRef: "v1",
+      completedWork: ["A item", "B item"],
+      remainingWork: [
+        {
+          id: "rw-1",
+          summary: "Run regression checks",
+          requestedCapabilityRef: "repo.run_checks"
+        }
+      ],
+      unresolvedQuestions: ["question-a", "question-b"]
+    };
+
+    const ingest = await controller.ingestExternalHandoff(
+      100,
+      "lease_new",
+      duplicateHandoff,
+      "chat:100/repo:payments-api/mode:active"
+    );
+
+    expect(ingest.accepted).toBe(true);
+    expect(telegram.sent).toHaveLength(0);
+
+    const handoffs = controller.listExternalHandoffs();
+    expect(handoffs).toHaveLength(1);
+    expect(handoffs[0]?.leaseId).toBe("lease_existing");
+    expect(handoffs[0]?.handoff.handoffId).toBe("handoff_existing");
+    expect(handoffs[0]?.continuedWorkIds).toEqual(["rw-1"]);
+    expect(
+      audit.events.some(
+        (event) =>
+          event.type === "external_handoff_ingest_duplicate" &&
+          event.chatId === 100 &&
+          event.handoffId === "handoff_new"
+      )
+    ).toBe(true);
+  });
+
   it("returns actionable guidance when /continue is requested without a handoff", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
