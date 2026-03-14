@@ -85,6 +85,34 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     audit,
     notify: (chatId, message) => telegram.sendMessage(chatId, message),
     onApprovalRequested: async (event) => {
+      const session = sessions.getOrCreate(event.chatId);
+      const repoName = session.selectedRepo;
+      if (!repoName) {
+        await audit.log({
+          type: "external_approval_request_unbound",
+          leaseId: event.leaseId,
+          chatId: event.chatId,
+          approvalKey: event.approvalKey
+        });
+        return;
+      }
+
+      const pendingId = `extapr_${event.leaseId.slice(-6)}_${event.approvalKey}`;
+      approvals.set({
+        id: pendingId,
+        chatId: event.chatId,
+        userId: config.telegram.allowedUserIds[0] ?? 1,
+        repoName,
+        mode: session.mode,
+        instruction: event.summary,
+        capabilityRef: event.requestedCapabilityRef,
+        source: "external-codex",
+        externalApproval: {
+          leaseId: event.leaseId,
+          approvalKey: event.approvalKey
+        },
+        createdAt: new Date().toISOString()
+      });
       await audit.log({
         type: "external_approval_request_relayed",
         leaseId: event.leaseId,
@@ -124,7 +152,11 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     codexDefaultReasoningEffort: config.codex.reasoningEffort,
     initialSpecWorkflows: initialState.specWorkflows,
     persistState,
-    specPolicy
+    specPolicy,
+    externalApprovalDecision: async ({ leaseId, approvalKey, approved, userId }) => {
+      const result = await externalRelay.decideApproval(leaseId, approvalKey, approved, userId);
+      return Boolean(result);
+    }
   });
 
   let started = false;

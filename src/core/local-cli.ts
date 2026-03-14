@@ -267,6 +267,11 @@ function renderApprovals(
     repoName: string;
     mode: string;
     capabilityRef?: string;
+    source?: "codefox" | "external-codex";
+    externalApproval?: {
+      leaseId: string;
+      approvalKey: string;
+    };
     createdAt: string;
   }>
 ): string {
@@ -276,8 +281,9 @@ function renderApprovals(
 
   const lines = ["Approvals:"];
   for (const approval of approvals) {
+    const externalRef = approval.externalApproval ? ` externalKey=${approval.externalApproval.approvalKey}` : "";
     lines.push(
-      `- id=${approval.id} chat=${approval.chatId} user=${approval.userId} repo=${approval.repoName} mode=${approval.mode} capability=${approval.capabilityRef ?? "(untyped)"} createdAt=${approval.createdAt}`
+      `- id=${approval.id} chat=${approval.chatId} user=${approval.userId} repo=${approval.repoName} mode=${approval.mode} source=${approval.source ?? "codefox"} capability=${approval.capabilityRef ?? "(untyped)"}${externalRef} createdAt=${approval.createdAt}`
     );
   }
   return lines.join("\n");
@@ -313,6 +319,11 @@ function renderSessionDetail(
   approval?: {
     id: string;
     createdAt: string;
+    source?: "codefox" | "external-codex";
+    externalApproval?: {
+      leaseId: string;
+      approvalKey: string;
+    };
     capabilityRef?: string;
   },
   spec?: PersistedSpecWorkflow
@@ -329,7 +340,9 @@ function renderSessionDetail(
 
   if (approval) {
     lines.push(
-      `pending approval: ${approval.id} (capability=${approval.capabilityRef ?? "(untyped)"}, createdAt=${approval.createdAt})`
+      `pending approval: ${approval.id} (source=${approval.source ?? "codefox"}, capability=${approval.capabilityRef ?? "(untyped)"}${
+        approval.externalApproval ? `, externalKey=${approval.externalApproval.approvalKey}` : ""
+      }, createdAt=${approval.createdAt})`
     );
   } else {
     lines.push("pending approval: none");

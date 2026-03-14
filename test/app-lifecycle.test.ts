@@ -176,6 +176,7 @@ describe("createApp lifecycle", () => {
         repoName: "payments-api",
         mode: "active",
         instruction: "fix tests",
+        source: "codefox",
         createdAt: "2026-01-01T11:00:00.000Z"
       }
     ]);

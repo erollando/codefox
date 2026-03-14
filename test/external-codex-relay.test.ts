@@ -102,8 +102,14 @@ describe("ExternalCodexRelay", () => {
     expect(notifications[3]?.message).toContain("handoff bundle received");
     expect(approvalCallbacks).toHaveLength(1);
     expect(approvalCallbacks[0]?.approvalKey).toBe("push-branch");
+    const pendingApproval = relay.getApprovalDecision(bind.lease.leaseId, "push-branch");
+    expect(pendingApproval?.status).toBe("pending");
+    const approvedDecision = await relay.decideApproval(bind.lease.leaseId, "push-branch", true, 1);
+    expect(approvedDecision?.status).toBe("approved");
+    expect(approvedDecision?.decidedByUserId).toBe(1);
     expect(auditEvents.some((event) => event.type === "external_event_relayed")).toBe(true);
     expect(auditEvents.some((event) => event.type === "external_handoff_relayed")).toBe(true);
+    expect(auditEvents.some((event) => event.type === "external_approval_decided")).toBe(true);
   });
 
   it("rejects binds and events for unrouted sessions", async () => {

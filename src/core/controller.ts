@@ -120,6 +120,13 @@ export interface ControllerDeps {
   persistState?: () => Promise<void>;
   specPolicy?: SpecPolicyEngine;
   capabilityRegistry?: CapabilityRegistry;
+  externalApprovalDecision?: (input: {
+    leaseId: string;
+    approvalKey: string;
+    approved: boolean;
+    chatId: number;
+    userId: number;
+  }) => Promise<boolean>;
 }
 
 export class CodeFoxController {
@@ -821,6 +828,36 @@ export class CodeFoxController {
       return;
     }
 
+    if (pending.externalApproval) {
+      const decisionSink = this.deps.externalApprovalDecision;
+      if (!decisionSink) {
+        await this.deps.telegram.sendMessage(chatId, "External approval bridge is not configured.");
+        return;
+      }
+      const decided = await decisionSink({
+        leaseId: pending.externalApproval.leaseId,
+        approvalKey: pending.externalApproval.approvalKey,
+        approved: true,
+        chatId,
+        userId
+      });
+      if (!decided) {
+        await this.deps.telegram.sendMessage(chatId, "External approval request is stale or unknown.");
+        return;
+      }
+      this.deps.approvals.delete(chatId);
+      await this.deps.audit.log({
+        type: "external_approval_granted",
+        chatId,
+        userId,
+        requestId: pending.id,
+        leaseId: pending.externalApproval.leaseId,
+        approvalKey: pending.externalApproval.approvalKey
+      });
+      await this.deps.telegram.sendMessage(chatId, `Approved external request ${pending.id}.`);
+      return;
+    }
+
     this.deps.approvals.delete(chatId);
     const capabilityAction = pending.capabilityRef ? this.capabilityRegistry.resolveAction(pending.capabilityRef) : undefined;
     if (!capabilityAction) {
@@ -885,6 +922,36 @@ export class CodeFoxController {
         pendingOwnerUserId: pending.userId
       });
       await this.deps.telegram.sendMessage(chatId, "Only the requesting user can deny this request.");
+      return;
+    }
+
+    if (pending.externalApproval) {
+      const decisionSink = this.deps.externalApprovalDecision;
+      if (!decisionSink) {
+        await this.deps.telegram.sendMessage(chatId, "External approval bridge is not configured.");
+        return;
+      }
+      const decided = await decisionSink({
+        leaseId: pending.externalApproval.leaseId,
+        approvalKey: pending.externalApproval.approvalKey,
+        approved: false,
+        chatId,
+        userId
+      });
+      if (!decided) {
+        await this.deps.telegram.sendMessage(chatId, "External approval request is stale or unknown.");
+        return;
+      }
+      this.deps.approvals.delete(chatId);
+      await this.deps.audit.log({
+        type: "external_approval_denied",
+        chatId,
+        userId,
+        requestId: pending.id,
+        leaseId: pending.externalApproval.leaseId,
+        approvalKey: pending.externalApproval.approvalKey
+      });
+      await this.deps.telegram.sendMessage(chatId, `Denied external request ${pending.id}.`);
       return;
     }
 
@@ -1561,6 +1628,7 @@ export class CodeFoxController {
           mode,
           instruction,
           capabilityRef: params.capabilityAction ? toCapabilityRef(params.capabilityAction) : undefined,
+          source: "codefox",
           createdAt: new Date().toISOString()
         });
 
@@ -2027,6 +2095,13 @@ export function createControllerFromAdapters(params: {
   persistState?: () => Promise<void>;
   specPolicy?: SpecPolicyEngine;
   capabilityRegistry?: CapabilityRegistry;
+  externalApprovalDecision?: (input: {
+    leaseId: string;
+    approvalKey: string;
+    approved: boolean;
+    chatId: number;
+    userId: number;
+  }) => Promise<boolean>;
 }): CodeFoxController {
   return new CodeFoxController({
     telegram: params.telegram,
@@ -2047,7 +2122,8 @@ export function createControllerFromAdapters(params: {
     initialSpecWorkflows: params.initialSpecWorkflows,
     persistState: params.persistState,
     specPolicy: params.specPolicy,
-    capabilityRegistry: params.capabilityRegistry
+    capabilityRegistry: params.capabilityRegistry,
+    externalApprovalDecision: params.externalApprovalDecision
   });
 }
 

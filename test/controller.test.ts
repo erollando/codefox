@@ -91,6 +91,13 @@ function makeController(
     telegram?: FakeTelegram;
     initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
     persistState?: () => Promise<void>;
+    externalApprovalDecision?: (input: {
+      leaseId: string;
+      approvalKey: string;
+      approved: boolean;
+      chatId: number;
+      userId: number;
+    }) => Promise<boolean>;
   }
 ) {
   const telegram = options?.telegram ?? new FakeTelegram();
@@ -119,7 +126,8 @@ function makeController(
       }),
     codexSessionIdleMinutes: 120,
     initialSpecWorkflows: options?.initialSpecWorkflows,
-    persistState: options?.persistState
+    persistState: options?.persistState,
+    externalApprovalDecision: options?.externalApprovalDecision
   });
 
   return { controller, telegram, audit, approvals, sessions };
@@ -415,6 +423,54 @@ describe("CodeFoxController", () => {
         (event) => event.type === "capability_policy_block" && event.reasonCode === "local_presence_required"
       )
     ).toBe(true);
+  });
+
+  it("resolves external approvals through configured decision sink", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const decisions: Array<Record<string, unknown>> = [];
+    const { controller, approvals, telegram, audit } = makeController(fakeCodex, {
+      externalApprovalDecision: async (input) => {
+        decisions.push(input);
+        return true;
+      }
+    });
+
+    approvals.set({
+      id: "extapr_1",
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "approve external push",
+      capabilityRef: "repo.prepare_branch",
+      source: "external-codex",
+      externalApproval: {
+        leaseId: "lease_abc",
+        approvalKey: "push-branch"
+      },
+      createdAt: new Date().toISOString()
+    });
+
+    await controller.handleUpdate(makeUpdate("/approve"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]?.approved).toBe(true);
+    expect(decisions[0]?.leaseId).toBe("lease_abc");
+    expect(approvals.get(100)).toBeUndefined();
+    expect(telegram.sent.some((item) => item.text.includes("Approved external request extapr_1"))).toBe(true);
+    expect(audit.events.some((event) => event.type === "external_approval_granted")).toBe(true);
   });
 
   it("revalidates capability ref on /approve and blocks stale unknown actions", async () => {

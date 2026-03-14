@@ -140,6 +140,8 @@ describe("JsonStateStore", () => {
         mode: "active",
         instruction: "do thing",
         capabilityRef: undefined,
+        source: "codefox",
+        externalApproval: undefined,
         createdAt: "2026-01-01T00:00:00.000Z"
       }
     ]);

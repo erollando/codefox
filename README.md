@@ -268,11 +268,15 @@ External relay HTTP transport (optional):
 
 - `GET /health`
 - `GET /v1/external-codex/routes`
+- `GET /v1/external-codex/approval?leaseId=<id>&approvalKey=<key>`
 - `POST /v1/external-codex/bind`
+- `POST /v1/external-codex/heartbeat`
+- `POST /v1/external-codex/revoke`
 - `POST /v1/external-codex/event`
 - `POST /v1/external-codex/handoff`
 
 When enabled, routes are derived from active CodeFox sessions (`chat:<id>/repo:<name>/mode:<mode>`). The relay remains transport-agnostic; this HTTP server is a thin adapter boundary suitable for future VS Code plugin/skill clients.
+`approval_request` events are converted into CodeFox pending approvals and must be resolved by `/approve` or `/deny` inside CodeFox channels.
 
 ## Validate
 
