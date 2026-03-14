@@ -18,13 +18,7 @@ CodeFox lets you start work at your desk, continue from your phone, and keep pol
 npm install
 cp config/codefox.config.sample.json config/codefox.config.json
 cp .env.example .env
-npm run dev -- ./config/codefox.config.json
-```
-
-Stop background dev instance (no `ps` needed):
-
-```bash
-npm run dev:stop -- --config ./config/codefox.config.json
+npm run dev
 ```
 
 Then in Telegram:
@@ -47,7 +41,7 @@ What happens:
 At your desk (same machine where CodeFox is running):
 
 ```bash
-npm run handoff:cli -- --config ./config/codefox.config.json
+npm run handoff:cli
 ```
 
 Then in Telegram:
@@ -64,7 +58,7 @@ What happens:
 ### Goal 3: Use local chat-like CLI
 
 ```bash
-npm run cli -- --config ./config/codefox.config.json
+npm run cli
 ```
 
 Inside REPL:
@@ -74,6 +68,12 @@ status
 what changed in the last run?
 :handoff
 :continue rw-1
+```
+
+Stop background dev instance (no `ps` needed):
+
+```bash
+npm run dev:stop
 ```
 
 ## Trust Boundary
