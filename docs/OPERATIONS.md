@@ -94,7 +94,6 @@ npm run verify
 - Codex subprocess environment is filtered by `codex.blockedEnvVars` before run start.
 - Codex runtime tuning can be set in config via `codex.model`, `codex.reasoningEffort`, and `codex.configOverrides`.
 - Image/document prompts are supported: upload attachment(s) and then send `/run ...`, or include a caption on upload.
-- Attachment context is consumed by the next `/run` or `/steer` and then cleared.
 - Attachment context is consumed by the next `/run`, `/act`, or `/steer` and then cleared.
 - `/repo bootstrap` and `/repo template` apply downstream `AGENTS.md` templates intended for normal git tracking.
 
@@ -112,6 +111,7 @@ npm run verify
   - `POST /v1/external-codex/handoff`
 - If `externalRelay.authTokenEnvVar` is set, requests must include `Authorization: Bearer <token>`.
 - `approval_request` events are relayed into CodeFox approval flow; external clients must poll approval status and must not bypass `/approve`/`/deny`.
+- One active external lease is allowed per CodeFox session id; clients must revoke before rebinding.
 
 ## Troubleshooting
 

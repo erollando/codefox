@@ -254,16 +254,42 @@ export class CodeFoxController {
     }
 
     const unresolvedCapabilities: string[] = [];
+    const unrunnableCapabilities: string[] = [];
+    const sessionMode = this.deps.sessions.getOrCreate(chatId).mode;
     for (const work of handoff.remainingWork) {
       if (!work.requestedCapabilityRef) {
         continue;
       }
-      if (!this.capabilityRegistry.resolveAction(work.requestedCapabilityRef)) {
+      const action = this.capabilityRegistry.resolveAction(work.requestedCapabilityRef);
+      if (!action) {
         unresolvedCapabilities.push(work.requestedCapabilityRef);
+        continue;
+      }
+      if (
+        !this.capabilityRegistry.isActionRunnableInMode(action, sessionMode) ||
+        action.approvalLevel === "local-presence-required"
+      ) {
+        unrunnableCapabilities.push(work.requestedCapabilityRef);
       }
     }
     if (unresolvedCapabilities.length > 0) {
       const reason = `Unknown requested capability refs: ${[...new Set(unresolvedCapabilities)].join(", ")}`;
+      await this.deps.audit.log({
+        type: "external_handoff_ingest_rejected",
+        chatId,
+        leaseId,
+        handoffId: handoff.handoffId,
+        reason
+      });
+      return {
+        accepted: false,
+        reason
+      };
+    }
+    if (unrunnableCapabilities.length > 0) {
+      const reason = `Requested capability refs not runnable in mode ${sessionMode}: ${[
+        ...new Set(unrunnableCapabilities)
+      ].join(", ")}`;
       await this.deps.audit.log({
         type: "external_handoff_ingest_rejected",
         chatId,

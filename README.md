@@ -284,6 +284,7 @@ External relay HTTP transport (optional):
 
 When enabled, routes are derived from active CodeFox sessions (`chat:<id>/repo:<name>/mode:<mode>`). The relay remains transport-agnostic; this HTTP server is a thin adapter boundary suitable for future VS Code plugin/skill clients.
 `approval_request` events are converted into CodeFox pending approvals and must be resolved by `/approve` or `/deny` inside CodeFox channels.
+Only one active lease is allowed per external session id; clients must call revoke before re-binding.
 
 ## Validate
 

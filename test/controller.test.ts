@@ -610,6 +610,47 @@ describe("CodeFoxController", () => {
     expect(statusMessage).toContain("remaining: 1/1");
   });
 
+  it("rejects external handoff when requested capability is not runnable in current mode", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+
+    const handoff: ExternalCodexHandoffBundle = {
+      schemaVersion: "v1",
+      leaseId: "lease_2",
+      handoffId: "handoff_2",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:00:00.000Z",
+      taskId: "TASK-200",
+      specRevisionRef: "v1",
+      completedWork: [],
+      remainingWork: [
+        {
+          id: "rw-risk",
+          summary: "Run high-risk local admin change",
+          requestedCapabilityRef: "ops.local_admin_change"
+        }
+      ]
+    };
+
+    const ingest = await controller.ingestExternalHandoff(100, "lease_2", handoff);
+    expect(ingest.accepted).toBe(false);
+    expect(ingest.reason).toContain("not runnable in mode active");
+  });
+
   it("blocks /run in active mode when no approved spec exists", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],

@@ -65,6 +65,7 @@ export type ExternalBindDecision =
       reasonCode:
         | "invalid_client_id"
         | "invalid_session_id"
+        | "session_already_bound"
         | "unsupported_schema_version"
         | "unsupported_capability_class"
         | "invalid_requested_lease_seconds";
@@ -234,6 +235,14 @@ export class ExternalCodexIntegration {
     if (!request.session.sessionId || request.session.sessionId.trim().length === 0) {
       return this.rejectBind("invalid_session_id", "Session id is required.");
     }
+    const sessionId = request.session.sessionId.trim();
+    const existingLease = this.findActiveLeaseBySessionId(sessionId);
+    if (existingLease) {
+      return this.rejectBind(
+        "session_already_bound",
+        `Session '${sessionId}' already has active lease '${existingLease.leaseId}'. Revoke first.`
+      );
+    }
     if (request.requestedSchemaVersion !== this.manifest.schemaVersion) {
       return this.rejectBind(
         "unsupported_schema_version",
@@ -261,7 +270,7 @@ export class ExternalCodexIntegration {
       leaseId: `lease_${randomHex(8)}`,
       clientId: request.clientId.trim(),
       session: {
-        sessionId: request.session.sessionId.trim()
+        sessionId
       },
       schemaVersion: this.manifest.schemaVersion,
       capabilityClasses: [...request.requestedCapabilityClasses],
@@ -517,6 +526,24 @@ export class ExternalCodexIntegration {
   private isExpired(lease: ExternalBindingLease): boolean {
     const expiresAtMs = Date.parse(lease.expiresAt);
     return !Number.isFinite(expiresAtMs) || expiresAtMs <= this.now().getTime();
+  }
+
+  private findActiveLeaseBySessionId(sessionId: string): ExternalBindingLease | undefined {
+    for (const [leaseId, record] of this.leases.entries()) {
+      if (this.isExpired(record.lease)) {
+        this.leases.delete(leaseId);
+        this.emitAudit({
+          type: "external_lease_expired",
+          leaseId,
+          clientId: record.lease.clientId
+        });
+        continue;
+      }
+      if (record.lease.session.sessionId === sessionId) {
+        return cloneLease(record.lease);
+      }
+    }
+    return undefined;
   }
 
   private emitAudit(event: ExternalIntegrationAuditEvent): void {

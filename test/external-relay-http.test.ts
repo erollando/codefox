@@ -56,6 +56,21 @@ describe("ExternalRelayHttpServer", () => {
     const leaseId = bindBody.lease?.leaseId;
     expect(leaseId).toBeDefined();
 
+    const secondBindResponse = await fetch(`${base}/v1/external-codex/bind`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        clientId: "vscode-codex-2",
+        session: { sessionId: "chat:100/repo:payments-api/mode:active" },
+        requestedSchemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
+        requestedCapabilityClasses: ["progress"]
+      })
+    });
+    expect(secondBindResponse.status).toBe(400);
+    const secondBindBody = (await secondBindResponse.json()) as { ok: boolean; reasonCode?: string };
+    expect(secondBindBody.ok).toBe(false);
+    expect(secondBindBody.reasonCode).toBe("session_already_bound");
+
     const eventResponse = await fetch(`${base}/v1/external-codex/event`, {
       method: "POST",
       headers: { "content-type": "application/json" },
