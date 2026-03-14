@@ -131,6 +131,7 @@ Notes:
 
 - Plain text (non-slash) input is treated as `/run <text>`.
 - While a run is active, plain text is treated as steer guidance (same behavior as `/steer <text>`).
+- While a run is being prepared, plain text follow-ups are queued and auto-applied when the run starts.
 - Untyped `/run` is allowed in every mode; `/act` remains available when you want explicit typed capability routing.
 - Run start/progress replies are concise by default; use `/details` for technical context.
 
