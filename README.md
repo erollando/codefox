@@ -2,17 +2,21 @@
 
 **Secure remote developer delegation.**
 
-CodeFox lets you start work at your desk, continue from your phone, and keep policy, approvals, and audit under your control.
+CodeFox is a control plane for Codex work: you can start locally, continue remotely, and keep approvals, policy, and audit in one place.
+
+## What You Get
+
+- One shared session state across Telegram, local UI, and local REPL.
+- Structured, approval-aware execution instead of ad-hoc remote control.
+- Seamless switch between desk and phone without losing context.
 
 ## Who This Is For
 
-- **Solo developer**: keep coding moving when away from your desk.
-- **Tech lead**: delegate execution while keeping review/approval checkpoints.
-- **On-call engineer**: run bounded checks and triage safely from mobile.
+- **Solo developer**: keep work moving when away from desk.
+- **Tech lead**: delegate execution with explicit checkpoints.
+- **On-call engineer**: run triage flows safely from mobile.
 
-## 60-Second Quickstart
-
-### Goal 1: Run work from Telegram
+## Quickstart
 
 ```bash
 npm install
@@ -31,44 +35,71 @@ Then in Telegram:
 run full checks and summarize failures
 ```
 
-What happens:
-- CodeFox routes your request to Codex under the selected mode.
-- You get concise progress/completion updates.
-- Use `/details` for full technical context.
-- Stop an active run with `/abort`.
-- Close the current Codex session context with `/close`.
+## Interaction Surfaces
 
-### Goal 2: Handoff desk work to phone
+### Telegram
+Use Telegram for fast control and notifications:
 
-Prerequisite: set `"externalRelay": { "enabled": true, ... }` in `config/codefox.config.json` (and set relay token env var if configured).
+- start requests
+- approve/deny
+- continue handoff work
+- get concise run updates
 
-At your desk (same machine where CodeFox is running):
-
-```bash
-npm run handoff:cli
-```
-
-Then in Telegram:
+Useful commands:
 
 ```text
-/handoff show
+/status
+/details
+/approve
+/deny
 /continue
+/abort
 ```
 
-What happens:
-- CodeFox binds to the active external route, ingests handoff state, and continues remaining work.
-- If multiple items exist, CodeFox defaults safely and lets you choose by id or index (`/continue 2`).
-- If `handoff:cli` auto-starts CodeFox, it runs in background; for live logs, start `npm run dev` in another terminal.
+### Local Web UI
 
-### Goal 3: Use local chat-like CLI
+```bash
+npm run ui
+```
+
+Open: `http://127.0.0.1:8789`
+
+What it does:
+
+- shows active sessions, specs, handoffs, and live transcript
+- provides compact quick-action buttons
+- sends plain text or slash commands
+- keeps top controls fixed and scrolls transcript area
+
+Runtime behavior:
+
+- if CodeFox is not running, UI auto-starts it in background
+- default bind is local-only (`127.0.0.1`)
+
+Phone access (trusted LAN):
+
+```bash
+npm run ui -- --host 0.0.0.0 --port 8789
+```
+
+Open from phone: `http://<laptop-lan-ip>:8789`
+
+Mobile mode:
+
+- automatic on small screens
+- force with `?mobile=1`
+
+Important: laptop UI and phone UI show the same CodeFox data and session state, so switching between local and remote work stays consistent.
+
+### Local REPL
 
 ```bash
 npm run cli
 ```
 
-If CodeFox runtime is not running yet, the CLI auto-starts it in background.
+If CodeFox is not running, REPL auto-starts it in background.
 
-Inside REPL:
+Example:
 
 ```text
 status
@@ -77,84 +108,47 @@ what changed in the last run?
 :continue rw-1
 ```
 
-### Goal 4: Use local web UI
+### External Handoff (Desk -> Remote)
+
+Prerequisite: `externalRelay.enabled=true` in `config/codefox.config.json`.
+
+At desk:
 
 ```bash
-npm run ui
+npm run handoff:cli
 ```
 
-Open `http://127.0.0.1:8789` in your browser.
-If CodeFox runtime is not running yet, UI auto-starts it in background.
+Then from Telegram/UI:
 
-What you can do in UI:
-- see active sessions (repo, mode, active request)
-- view live transcript (incoming commands + CodeFox replies)
-- use quick action buttons (`/status`, `/continue`, `/approve`, `/abort`, ...)
-- send plain text or slash commands without Telegram
-- use compact mobile layout on small screens (or force with `?mobile=1`)
-- open the same UI from phone (trusted LAN) to continue away from your desk
-
-UI behavior:
-- by default, UI binds to `127.0.0.1` (local machine only)
-- header/actions/composer stay fixed; transcript is the primary scroll area
-- top quick-actions are the main action surface (message-level duplicate buttons are intentionally hidden)
-- laptop UI and mobile UI read the same CodeFox state, so both surfaces show the same sessions, handoffs, and transcript context
-
-Optional LAN access (trusted network only):
-
-```bash
-npm run ui -- --host 0.0.0.0 --port 8789
+```text
+/handoff show
+/continue
 ```
 
-Read-only dashboard view is still available:
-
-```bash
-npm run dashboard
-```
-
-One-shot snapshot:
-
-```bash
-npm run local:cli -- dashboard
-```
-
-Stop background dev instance:
+## Operational Helpers
 
 ```bash
 npm run dev:stop
+npm run dashboard
+npm run local:cli -- dashboard
 ```
 
 ## Trust Boundary
 
-CodeFox is the authority. External workers are executors.
+CodeFox is the authority for policy, approvals, communication, and audit. External workers execute within that boundary.
 
 ![CodeFox Trust Boundary](./docs/assets/trust-boundary.svg)
 
-## Common Use Cases
-
-1. **Desk-to-pocket continuation**
-- You are mid-feature in an external Codex client, leave your desk, and continue from Telegram with `/handoff` + `/continue`.
-
-2. **Approval-gated risky step**
-- Worker asks for approval before a mutating action; you decide with `/approve` or `/deny`.
-
-3. **Fast incident triage**
-- From phone, run bounded checks, gather logs, and post Jira updates without opening a laptop session.
-
 ## Current Limits
 
-- Capability packs exist as policy contracts; only `jira` is currently marked as native-backed (`implemented`), while other packs are `planned`.
-- Changelog-driven capability tracking is currently manual.
-- Behavior can still depend on installed Codex CLI/runtime version.
+- Capability packs exist as policy contracts; only `jira` is currently marked as native-backed (`implemented`).
+- Changelog-driven capability tracking is still manual.
+- Runtime behavior can depend on installed Codex CLI version.
 
-## Documentation By Goal
+## Documentation
 
-- **Start/operate/troubleshoot**: [Manual](./docs/MANUAL.md)
-- **Desk-to-pocket walkthrough**: [Demo: Remote Handoff](./docs/DEMO_REMOTE_HANDOFF.md)
-- **One-page end-user story**: [Demo: One-Page Story](./docs/DEMO_ONE_PAGE_STORY.md)
-- **Example transcript output**: [demo-outputs/remote-handoff-transcript.txt](./docs/demo-outputs/remote-handoff-transcript.txt)
-- **Capability backend status + promotion checklist**: [Capability Backends](./docs/CAPABILITY_BACKENDS.md)
-
-## Product Statement
-
-CodeFox converts messy human requests into structured, reviewable execution and runs them through policy-bounded workers with full approval and audit control.
+- Start/operate/troubleshoot: [Manual](./docs/MANUAL.md)
+- Desk-to-pocket walkthrough: [Demo: Remote Handoff](./docs/DEMO_REMOTE_HANDOFF.md)
+- End-user narrative: [Demo: One-Page Story](./docs/DEMO_ONE_PAGE_STORY.md)
+- Example transcript: [demo-outputs/remote-handoff-transcript.txt](./docs/demo-outputs/remote-handoff-transcript.txt)
+- Capability backend status: [Capability Backends](./docs/CAPABILITY_BACKENDS.md)
