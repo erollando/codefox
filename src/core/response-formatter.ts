@@ -45,6 +45,7 @@ export function formatHelp(): string {
     "/steer <instruction>",
     "/close",
     "/status",
+    "/handoff [status|show|continue [work-id]|clear]",
     "/audit <view_id>",
     "/abort"
   ].join("\n");

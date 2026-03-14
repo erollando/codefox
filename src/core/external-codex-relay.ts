@@ -25,6 +25,11 @@ export interface ExternalCodexRelayOptions {
     summary: string;
     requestedCapabilityRef?: string;
   }) => Promise<void>;
+  onHandoffReceived?: (event: {
+    leaseId: string;
+    chatId: number;
+    handoff: ExternalCodexHandoffBundle;
+  }) => Promise<void>;
 }
 
 export interface ExternalRouteEntry {
@@ -219,6 +224,13 @@ export class ExternalCodexRelay {
     });
 
     await this.options.notify(route.chatId, formatHandoffRelayMessage(decision.lease.session.sessionId, handoff));
+    if (this.options.onHandoffReceived) {
+      await this.options.onHandoffReceived({
+        leaseId: handoff.leaseId,
+        chatId: route.chatId,
+        handoff
+      });
+    }
     return { decision, relayed: true };
   }
 

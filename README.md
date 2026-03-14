@@ -77,6 +77,7 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 - `/steer <instruction>`
 - `/close`
 - `/status`
+- `/handoff [status|show|continue [work-id]|clear]`
 - `/audit <view_id>`
 - `/abort`
 
@@ -100,6 +101,12 @@ Spec workflow:
 - `/spec approve force` is only a bypass path for `observe` mode.
 - In `observe` mode, `/run` remains allowed without a spec.
 - `/spec show` renders the current spec text for review and auditability.
+
+External handoff continuation:
+
+- External clients can submit typed handoff bundles (`/v1/external-codex/handoff`) after execution phase completion.
+- CodeFox validates the handoff spec revision reference before storing continuation context.
+- Use `/handoff show` to inspect remaining work and `/handoff continue [work-id]` to continue from phone/Telegram.
 
 Image/document prompts:
 

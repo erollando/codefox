@@ -31,6 +31,7 @@ import {
 import type { SessionManager } from "./session-manager.js";
 import { makeRequestId, makeViewId } from "./ids.js";
 import { AGENT_TEMPLATE_NAMES, PLAYBOOK_FILE_NAMES, applyAgentTemplate, applyPlaybookDocs } from "./agent-files.js";
+import type { ExternalCodexHandoffBundle } from "./external-codex-integration.js";
 import {
   addClarification,
   approveCurrentRevision,
@@ -91,6 +92,13 @@ interface CapabilityAdmissionDecision {
   reason: string;
 }
 
+interface ExternalHandoffState {
+  leaseId: string;
+  bundle: ExternalCodexHandoffBundle;
+  receivedAt: string;
+  continuedWorkIds: string[];
+}
+
 const SHUTDOWN_ABORT_TIMEOUT_MS = 5000;
 const SHUTDOWN_ABORT_POLL_INTERVAL_MS = 50;
 const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
@@ -135,6 +143,7 @@ export class CodeFoxController {
   private readonly pendingSteers = new Map<number, PendingSteer[]>();
   private readonly attachmentContext = new Map<number, TaskAttachment[]>();
   private readonly specDrafts = new Map<number, SpecWorkflowState>();
+  private readonly externalHandoffs = new Map<number, ExternalHandoffState>();
   private readonly specPolicy: SpecPolicyEngine;
   private readonly capabilityRegistry: CapabilityRegistry;
 
@@ -199,6 +208,75 @@ export class CodeFoxController {
     return {
       abortedRequestIds,
       pendingRequestIds
+    };
+  }
+
+  async ingestExternalHandoff(chatId: number, leaseId: string, handoff: ExternalCodexHandoffBundle): Promise<{
+    accepted: boolean;
+    reason?: string;
+  }> {
+    const specValidation = this.validateHandoffSpecRef(chatId, handoff.specRevisionRef);
+    if (!specValidation.accepted) {
+      await this.deps.audit.log({
+        type: "external_handoff_ingest_rejected",
+        chatId,
+        leaseId,
+        handoffId: handoff.handoffId,
+        reason: specValidation.reason
+      });
+      return specValidation;
+    }
+
+    const unresolvedCapabilities: string[] = [];
+    for (const work of handoff.remainingWork) {
+      if (!work.requestedCapabilityRef) {
+        continue;
+      }
+      if (!this.capabilityRegistry.resolveAction(work.requestedCapabilityRef)) {
+        unresolvedCapabilities.push(work.requestedCapabilityRef);
+      }
+    }
+    if (unresolvedCapabilities.length > 0) {
+      const reason = `Unknown requested capability refs: ${[...new Set(unresolvedCapabilities)].join(", ")}`;
+      await this.deps.audit.log({
+        type: "external_handoff_ingest_rejected",
+        chatId,
+        leaseId,
+        handoffId: handoff.handoffId,
+        reason
+      });
+      return {
+        accepted: false,
+        reason
+      };
+    }
+
+    this.externalHandoffs.set(chatId, {
+      leaseId,
+      bundle: cloneExternalHandoffBundle(handoff),
+      receivedAt: new Date().toISOString(),
+      continuedWorkIds: []
+    });
+    await this.deps.audit.log({
+      type: "external_handoff_ingested",
+      chatId,
+      leaseId,
+      handoffId: handoff.handoffId,
+      taskId: handoff.taskId,
+      specRevisionRef: handoff.specRevisionRef,
+      remainingWorkCount: handoff.remainingWork.length
+    });
+    await this.deps.telegram.sendMessage(
+      chatId,
+      [
+        `External handoff ${handoff.handoffId} is ready for continuation.`,
+        `task: ${handoff.taskId}`,
+        `remaining work: ${handoff.remainingWork.length}`,
+        "Use /handoff show, then /handoff continue [work-id]."
+      ].join("\n")
+    );
+    return {
+      accepted: true
     };
   }
 
@@ -444,6 +522,10 @@ export class CodeFoxController {
           return;
         }
         await this.deps.telegram.sendMessage(chatId, formatPendingApproval(pending));
+        return;
+      }
+      case "handoff": {
+        await this.handleHandoffCommand(chatId, userId, command);
         return;
       }
       case "approve": {
@@ -958,6 +1040,130 @@ export class CodeFoxController {
     this.deps.approvals.delete(chatId);
     await this.deps.audit.log({ type: "approval_denied", chatId, userId, requestId: pending.id });
     await this.deps.telegram.sendMessage(chatId, `Denied request ${pending.id}.`);
+  }
+
+  private async handleHandoffCommand(
+    chatId: number,
+    userId: number,
+    command: Extract<ParsedCommand, { type: "handoff" }>
+  ): Promise<void> {
+    const state = this.externalHandoffs.get(chatId);
+    if (command.action === "clear") {
+      if (!state) {
+        await this.deps.telegram.sendMessage(chatId, "No external handoff is currently stored.");
+        return;
+      }
+      this.externalHandoffs.delete(chatId);
+      await this.deps.audit.log({
+        type: "external_handoff_cleared",
+        chatId,
+        userId,
+        handoffId: state.bundle.handoffId
+      });
+      await this.deps.telegram.sendMessage(chatId, `Cleared external handoff ${state.bundle.handoffId}.`);
+      return;
+    }
+
+    if (!state) {
+      await this.deps.telegram.sendMessage(chatId, "No external handoff available.");
+      return;
+    }
+
+    if (command.action === "status") {
+      await this.deps.telegram.sendMessage(chatId, formatExternalHandoffStatus(state));
+      return;
+    }
+
+    if (command.action === "show") {
+      await this.deps.telegram.sendMessage(chatId, formatExternalHandoffDetail(state));
+      return;
+    }
+
+    const session = this.deps.sessions.getOrCreate(chatId);
+    if (!session.selectedRepo) {
+      await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+      return;
+    }
+    const specValidation = this.validateHandoffSpecRef(chatId, state.bundle.specRevisionRef);
+    if (!specValidation.accepted) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Cannot continue handoff ${state.bundle.handoffId}: ${specValidation.reason}`
+      );
+      return;
+    }
+    if (session.activeRequestId) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Request ${session.activeRequestId} is already running. Use /status or /abort first.`
+      );
+      return;
+    }
+
+    const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
+    if (outstanding.length === 0) {
+      await this.deps.telegram.sendMessage(chatId, "All handoff work items are already continued.");
+      return;
+    }
+
+    const nextWork = command.workId
+      ? outstanding.find((work) => work.id === command.workId)
+      : outstanding[0];
+    if (!nextWork) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Work item '${command.workId}' is not available. Use /handoff show for valid ids.`
+      );
+      return;
+    }
+
+    const capabilityAction = nextWork.requestedCapabilityRef
+      ? this.capabilityRegistry.resolveAction(nextWork.requestedCapabilityRef)
+      : undefined;
+    if (nextWork.requestedCapabilityRef && !capabilityAction) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Unknown capability action '${nextWork.requestedCapabilityRef}' for handoff item '${nextWork.id}'.`
+      );
+      await this.deps.audit.log({
+        type: "external_handoff_continue_blocked",
+        chatId,
+        userId,
+        handoffId: state.bundle.handoffId,
+        workId: nextWork.id,
+        reasonCode: "unknown_capability_action",
+        capabilityRef: nextWork.requestedCapabilityRef
+      });
+      return;
+    }
+
+    this.externalHandoffs.set(chatId, {
+      ...state,
+      continuedWorkIds: [...state.continuedWorkIds, nextWork.id]
+    });
+    await this.deps.audit.log({
+      type: "external_handoff_continue_requested",
+      chatId,
+      userId,
+      handoffId: state.bundle.handoffId,
+      workId: nextWork.id,
+      capabilityRef: nextWork.requestedCapabilityRef
+    });
+
+    this.runDetached(
+      chatId,
+      this.executeOrEnqueue({
+        runKind: "run",
+        instruction: nextWork.summary,
+        repoName: session.selectedRepo,
+        mode: session.mode,
+        userId,
+        chatId,
+        attachments: [],
+        capabilityAction
+      }),
+      "handoff_continue_execute_or_enqueue"
+    );
   }
 
   private async handleAbort(chatId: number, userId: number): Promise<void> {
@@ -1962,6 +2168,43 @@ export class CodeFoxController {
     return undefined;
   }
 
+  private validateHandoffSpecRef(chatId: number, specRevisionRef: string): { accepted: boolean; reason?: string } {
+    const match = /^v(\d+)$/i.exec(specRevisionRef.trim());
+    if (!match) {
+      return {
+        accepted: false,
+        reason: `Invalid specRevisionRef '${specRevisionRef}'.`
+      };
+    }
+
+    const workflow = this.specDrafts.get(chatId);
+    if (!workflow) {
+      return {
+        accepted: false,
+        reason: "No local spec workflow exists for this chat."
+      };
+    }
+    const currentRevision = getCurrentRevision(workflow);
+    if (currentRevision.status !== "approved") {
+      return {
+        accepted: false,
+        reason: `Current spec v${currentRevision.version} is not approved.`
+      };
+    }
+
+    const expectedVersion = Number(match[1]);
+    if (currentRevision.version !== expectedVersion) {
+      return {
+        accepted: false,
+        reason: `Spec version mismatch (handoff=${specRevisionRef}, current=v${currentRevision.version}).`
+      };
+    }
+
+    return {
+      accepted: true
+    };
+  }
+
   private decideCapabilityAdmission(mode: PolicyMode, capabilityAction?: CapabilityActionSpec): CapabilityAdmissionDecision {
     if (!capabilityAction) {
       if (mode === "observe") {
@@ -2075,6 +2318,48 @@ function addAuditRef(message: string, viewId: string): string {
   return `${message}\naudit ref: ${viewId}`;
 }
 
+function formatExternalHandoffStatus(state: ExternalHandoffState): string {
+  const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
+  const nextWork = outstanding[0];
+  return [
+    "External handoff status:",
+    `handoff id: ${state.bundle.handoffId}`,
+    `task id: ${state.bundle.taskId}`,
+    `spec ref: ${state.bundle.specRevisionRef}`,
+    `received at: ${state.receivedAt}`,
+    `remaining: ${outstanding.length}/${state.bundle.remainingWork.length}`,
+    `next work: ${nextWork ? `${nextWork.id} - ${nextWork.summary}` : "none"}`
+  ].join("\n");
+}
+
+function formatExternalHandoffDetail(state: ExternalHandoffState): string {
+  const lines = [
+    "External handoff detail:",
+    `handoff id: ${state.bundle.handoffId}`,
+    `task id: ${state.bundle.taskId}`,
+    `spec ref: ${state.bundle.specRevisionRef}`,
+    `completed work count: ${state.bundle.completedWork.length}`,
+    "remaining work:"
+  ];
+
+  for (const work of state.bundle.remainingWork) {
+    const status = state.continuedWorkIds.includes(work.id) ? "continued" : "pending";
+    lines.push(
+      `- ${work.id} [${status}] ${work.summary}${
+        work.requestedCapabilityRef ? ` (capability=${work.requestedCapabilityRef})` : ""
+      }`
+    );
+  }
+
+  if (state.bundle.unresolvedRisks && state.bundle.unresolvedRisks.length > 0) {
+    lines.push(`unresolved risks: ${state.bundle.unresolvedRisks.join(" | ")}`);
+  }
+  if (state.bundle.unresolvedQuestions && state.bundle.unresolvedQuestions.length > 0) {
+    lines.push(`unresolved questions: ${state.bundle.unresolvedQuestions.join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
 export function createControllerFromAdapters(params: {
   telegram: TelegramAdapter;
   access: AccessControl;
@@ -2143,5 +2428,16 @@ function cloneSpecWorkflow(workflow: SpecWorkflowState): SpecWorkflowState {
         DONE_WHEN: [...revision.sections.DONE_WHEN]
       }
     }))
+  };
+}
+
+function cloneExternalHandoffBundle(handoff: ExternalCodexHandoffBundle): ExternalCodexHandoffBundle {
+  return {
+    ...handoff,
+    completedWork: [...handoff.completedWork],
+    remainingWork: handoff.remainingWork.map((work) => ({ ...work })),
+    evidenceRefs: handoff.evidenceRefs ? [...handoff.evidenceRefs] : undefined,
+    unresolvedQuestions: handoff.unresolvedQuestions ? [...handoff.unresolvedQuestions] : undefined,
+    unresolvedRisks: handoff.unresolvedRisks ? [...handoff.unresolvedRisks] : undefined
   };
 }

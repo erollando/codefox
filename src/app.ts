@@ -120,6 +120,15 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         approvalKey: event.approvalKey,
         requestedCapabilityRef: event.requestedCapabilityRef
       });
+    },
+    onHandoffReceived: async (event) => {
+      const ingest = await controller.ingestExternalHandoff(event.chatId, event.leaseId, event.handoff);
+      if (!ingest.accepted) {
+        await telegram.sendMessage(
+          event.chatId,
+          `External handoff ${event.handoff.handoffId} rejected: ${ingest.reason ?? "validation failed"}.`
+        );
+      }
     }
   });
   const externalRelayAuthToken = config.externalRelay.authTokenEnvVar
