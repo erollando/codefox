@@ -70,7 +70,7 @@ what changed in the last run?
 :continue rw-1
 ```
 
-Stop background dev instance (no `ps` needed):
+Stop background dev instance:
 
 ```bash
 npm run dev:stop
