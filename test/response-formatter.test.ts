@@ -14,7 +14,7 @@ describe("response formatter", () => {
       "active"
     );
 
-    expect(message).toContain("Run completed.");
+    expect(message).toContain("Completed: done");
     expect(message).not.toContain("output:");
     expect(message).not.toContain("very noisy transcript");
   });
@@ -55,8 +55,8 @@ describe("response formatter", () => {
       "active"
     );
 
-    expect(aborted).toContain("Run aborted.");
-    expect(timedOut).toContain("Run timed out.");
+    expect(aborted).toContain("Aborted:");
+    expect(timedOut).toContain("Timed out:");
   });
 
   it("redacts sensitive tokens in summary and output", () => {

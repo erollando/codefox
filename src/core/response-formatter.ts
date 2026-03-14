@@ -196,52 +196,18 @@ export function formatTaskStart(
   requestId: string,
   runKind: RunKind,
   resumed: boolean,
-  resumeThreadId?: string
+  _resumeThreadId?: string
 ): string {
-  const sessionLabel = resumed
-    ? resumeThreadId
-      ? `resumed (${resumeThreadId})`
-      : "resumed"
-    : "new";
-  return [
-    `Started request ${requestId}`,
-    `repo: ${repo}`,
-    `mode: ${mode}`,
-    `type: ${runKind}`,
-    `session: ${sessionLabel}`
-  ].join("\n");
+  const continuationSuffix = resumed ? " Continuing previous Codex context." : "";
+  return `Running ${requestId} in ${repo} (${mode}, ${runKind}).${continuationSuffix}`;
 }
 
 export function formatTaskResult(result: TaskResult, repo: string, mode: PolicyMode): string {
   const safeSummary = redactSensitive(result.summary);
   const safeOutputTail = result.outputTail ? redactSensitive(result.outputTail) : undefined;
 
-  const lines = [
-    result.ok
-      ? "Run completed."
-      : result.aborted
-        ? "Run aborted."
-        : result.timedOut
-          ? "Run timed out."
-          : "Run failed.",
-    `repo: ${repo}`,
-    `mode: ${mode}`,
-    `summary: ${safeSummary}`
-  ];
-
-  if (result.reasoningEffort) {
-    lines.push(`reasoning: ${result.reasoningEffort}`);
-  }
-  if (typeof result.tokenUsage?.total === "number") {
-    lines.push(`tokens used: ${formatTokenCount(result.tokenUsage.total)}`);
-  }
-  if (typeof result.tokenUsage?.remaining === "number") {
-    lines.push(`tokens remaining: ${formatTokenCount(result.tokenUsage.remaining)}`);
-  }
-
-  if (result.threadId) {
-    lines.push(`codex session: ${result.threadId}`);
-  }
+  const state = result.ok ? "Completed" : result.aborted ? "Aborted" : result.timedOut ? "Timed out" : "Failed";
+  const lines = [`${state}: ${safeSummary}`];
 
   // Avoid flooding Telegram with Codex banners/transcript on successful runs.
   if (!result.ok && safeOutputTail) {

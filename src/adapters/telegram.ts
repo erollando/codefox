@@ -52,10 +52,14 @@ export interface DownloadedTelegramFile {
   mimeType?: string;
 }
 
+export interface TelegramSendOptions {
+  commandButtons?: string[];
+}
+
 export interface TelegramAdapter {
   start(onUpdate: (update: TelegramUpdate) => Promise<void>): Promise<void>;
   stop(): void;
-  sendMessage(chatId: number, text: string): Promise<void>;
+  sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<void>;
   downloadFile(fileId: string, metadata?: { originalName?: string; mimeType?: string }): Promise<DownloadedTelegramFile>;
 }
 
@@ -113,12 +117,15 @@ export class TelegramPollingAdapter implements TelegramAdapter {
     this.running = false;
   }
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
+  async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<void> {
     const parts = splitMessage(text, TELEGRAM_MESSAGE_LIMIT);
     if (parts.length === 1) {
       await this.request("sendMessage", {
         chat_id: chatId,
-        text: parts[0]
+        text: parts[0],
+        ...(options?.commandButtons && options.commandButtons.length > 0
+          ? { reply_markup: buildCommandKeyboard(options.commandButtons) }
+          : {})
       });
       return;
     }
@@ -242,4 +249,19 @@ function splitMessage(text: string, maxLength: number): string[] {
 function sanitizeFileName(name: string): string {
   const normalized = name.replace(/[^\w.\-]+/g, "_");
   return normalized.length > 0 ? normalized : "file.bin";
+}
+
+function buildCommandKeyboard(commands: string[]): Record<string, unknown> {
+  const buttons = [...new Set(commands.map((entry) => entry.trim()).filter(Boolean))];
+  const rows: Array<Array<{ text: string }>> = [];
+  for (let index = 0; index < buttons.length; index += 2) {
+    const first = buttons[index];
+    const second = buttons[index + 1];
+    rows.push(second ? [{ text: first }, { text: second }] : [{ text: first }]);
+  }
+  return {
+    keyboard: rows,
+    one_time_keyboard: true,
+    resize_keyboard: true
+  };
 }

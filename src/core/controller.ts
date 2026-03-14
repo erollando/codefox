@@ -2,7 +2,13 @@ import { spawn } from "node:child_process";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { CodexCliAdapter, RunningTask } from "../adapters/codex.js";
-import type { TelegramAdapter, TelegramDocument, TelegramPhotoSize, TelegramUpdate } from "../adapters/telegram.js";
+import type {
+  TelegramAdapter,
+  TelegramDocument,
+  TelegramPhotoSize,
+  TelegramSendOptions,
+  TelegramUpdate
+} from "../adapters/telegram.js";
 import type { AccessControl } from "./auth.js";
 import type { AuditEventInput, AuditLogger } from "./audit-logger.js";
 import { CapabilityRegistry, toCapabilityRef, type CapabilityActionSpec } from "./capability-registry.js";
@@ -57,7 +63,7 @@ import type {
 } from "../types/domain.js";
 
 interface MessageSink {
-  sendMessage(chatId: number, text: string): Promise<void>;
+  sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<void>;
   downloadFile?(
     fileId: string,
     metadata?: { originalName?: string; mimeType?: string }
@@ -93,6 +99,8 @@ interface CapabilityAdmissionDecision {
   reasonCode: string;
   reason: string;
 }
+
+type AdmissionSource = "run" | "act" | "handoff_continue" | "steer";
 
 interface ExternalHandoffState {
   leaseId: string;
@@ -143,6 +151,7 @@ export interface ControllerDeps {
 export class CodeFoxController {
   private readonly activeAborts = new Map<string, () => void>();
   private readonly executionAdmissionLock = new Set<number>();
+  private readonly executionAdmissionSource = new Map<number, AdmissionSource>();
   private readonly pendingSteers = new Map<number, PendingSteer[]>();
   private readonly attachmentContext = new Map<number, TaskAttachment[]>();
   private readonly specDrafts = new Map<number, SpecWorkflowState>();
@@ -320,14 +329,18 @@ export class CodeFoxController {
       specRevisionRef: handoff.specRevisionRef,
       remainingWorkCount: handoff.remainingWork.length
     });
+    const handoffState = this.externalHandoffs.get(chatId);
+    const commandButtons = handoffState ? buildHandoffCommandButtons(handoffState) : [];
+    const nextWork = handoff.remainingWork[0];
     await this.deps.telegram.sendMessage(
       chatId,
       [
-        `External handoff ${handoff.handoffId} is ready for continuation.`,
+        `Handoff ${handoff.handoffId} is ready.`,
         `task: ${handoff.taskId}`,
-        `remaining work: ${handoff.remainingWork.length}`,
-        "Use /handoff show, then /handoff continue [work-id]."
-      ].join("\n")
+        `remaining: ${handoff.remainingWork.length}`,
+        `next: ${nextWork ? `${nextWork.id} - ${nextWork.summary}` : "none"}`
+      ].join("\n"),
+      commandButtons.length > 0 ? { commandButtons } : undefined
     );
     return {
       accepted: true
@@ -690,6 +703,7 @@ export class CodeFoxController {
           chatId,
           this.executeOrEnqueue({
             runKind: "run",
+            admissionSource: "act",
             instruction: command.instruction,
             repoName: session.selectedRepo,
             mode: session.mode,
@@ -717,6 +731,7 @@ export class CodeFoxController {
           chatId,
           this.executeOrEnqueue({
             runKind: "run",
+            admissionSource: "run",
             instruction: command.instruction,
             repoName: session.selectedRepo,
             mode: session.mode,
@@ -743,7 +758,7 @@ export class CodeFoxController {
   private async handleRepoSelect(chatId: number, userId: number, repoName: string): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     if (this.executionAdmissionLock.has(chatId)) {
-      await this.deps.telegram.sendMessage(chatId, "Another request is currently being scheduled for this chat.");
+      await this.deps.telegram.sendMessage(chatId, this.formatAdmissionBusyMessage(chatId));
       return;
     }
     if (session.activeRequestId) {
@@ -1080,6 +1095,7 @@ export class CodeFoxController {
       chatId,
       this.executeOrEnqueue({
         runKind: "run",
+        admissionSource: "act",
         instruction: pending.instruction,
         repoName: pending.repoName,
         mode: pending.mode,
@@ -1176,12 +1192,16 @@ export class CodeFoxController {
     }
 
     if (command.action === "status") {
-      await this.deps.telegram.sendMessage(chatId, formatExternalHandoffStatus(state));
+      await this.deps.telegram.sendMessage(chatId, formatExternalHandoffStatus(state), {
+        commandButtons: buildHandoffCommandButtons(state)
+      });
       return;
     }
 
     if (command.action === "show") {
-      await this.deps.telegram.sendMessage(chatId, formatExternalHandoffDetail(state));
+      await this.deps.telegram.sendMessage(chatId, formatExternalHandoffDetail(state), {
+        commandButtons: buildHandoffCommandButtons(state)
+      });
       return;
     }
 
@@ -1261,6 +1281,7 @@ export class CodeFoxController {
       chatId,
       this.executeOrEnqueue({
         runKind: "run",
+        admissionSource: "handoff_continue",
         instruction: nextWork.summary,
         repoName: session.selectedRepo,
         mode: session.mode,
@@ -1788,6 +1809,7 @@ export class CodeFoxController {
 
   private async executeOrEnqueue(params: {
     runKind: RunKind;
+    admissionSource: AdmissionSource;
     instruction: string;
     repoName: string;
     mode: PolicyMode;
@@ -1800,10 +1822,11 @@ export class CodeFoxController {
   }): Promise<void> {
     const { runKind, instruction, repoName, mode, chatId, userId } = params;
     if (this.executionAdmissionLock.has(chatId)) {
-      await this.deps.telegram.sendMessage(chatId, "Another request is currently being scheduled for this chat.");
+      await this.deps.telegram.sendMessage(chatId, this.formatAdmissionBusyMessage(chatId));
       return;
     }
     this.executionAdmissionLock.add(chatId);
+    this.executionAdmissionSource.set(chatId, params.admissionSource);
 
     try {
       const session = this.deps.sessions.getOrCreate(chatId);
@@ -1835,7 +1858,7 @@ export class CodeFoxController {
             capabilityPack: params.capabilityAction?.pack,
             capabilityAction: params.capabilityAction?.action
           });
-          await this.deps.telegram.sendMessage(chatId, `Capability policy blocked run: ${capabilityDecision.reason}.`);
+          await this.deps.telegram.sendMessage(chatId, `Capability policy blocked run: ${trimTerminalPunctuation(capabilityDecision.reason)}.`);
           return;
         }
 
@@ -1986,6 +2009,7 @@ export class CodeFoxController {
       });
     } finally {
       this.executionAdmissionLock.delete(chatId);
+      this.executionAdmissionSource.delete(chatId);
     }
   }
 
@@ -2220,6 +2244,7 @@ export class CodeFoxController {
 
     await this.executeOrEnqueue({
       runKind: "steer",
+      admissionSource: "steer",
       instruction: mergedInstruction,
       repoName: session.selectedRepo,
       mode: session.mode,
@@ -2249,6 +2274,14 @@ export class CodeFoxController {
         console.error(`Failed to send detached error message: ${String(sendError)}`);
       }
     });
+  }
+
+  private formatAdmissionBusyMessage(chatId: number): string {
+    const source = this.executionAdmissionSource.get(chatId);
+    if (source === "handoff_continue") {
+      return "Handoff continuation is being scheduled for this chat. Wait for that update, then send the next request.";
+    }
+    return "Another request is currently being scheduled for this chat.";
   }
 
   private getSpecRunGateMessage(chatId: number, mode: PolicyMode): string | undefined {
@@ -2326,7 +2359,7 @@ export class CodeFoxController {
         allowed: false,
         requiresApproval: false,
         reasonCode: "capability_required",
-        reason: "Select a typed action with /act <pack.action> <instruction>."
+        reason: "Select a typed action with /act <pack.action> <instruction> or switch to /observe for untyped questions."
       };
     }
 
@@ -2425,24 +2458,24 @@ function addAuditRef(message: string, viewId: string): string {
   return `${message}\naudit ref: ${viewId}`;
 }
 
+function trimTerminalPunctuation(input: string): string {
+  return input.trim().replace(/[.!\s]+$/g, "");
+}
+
 function formatExternalHandoffStatus(state: ExternalHandoffState): string {
   const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
   const nextWork = outstanding[0];
   return [
-    "External handoff status:",
-    `handoff id: ${state.bundle.handoffId}`,
+    `Handoff ${state.bundle.handoffId}`,
     `task id: ${state.bundle.taskId}`,
-    `spec ref: ${state.bundle.specRevisionRef}`,
-    `received at: ${state.receivedAt}`,
     `remaining: ${outstanding.length}/${state.bundle.remainingWork.length}`,
-    `next work: ${nextWork ? `${nextWork.id} - ${nextWork.summary}` : "none"}`
+    `next: ${nextWork ? `${nextWork.id} - ${nextWork.summary}` : "none"}`
   ].join("\n");
 }
 
 function formatExternalHandoffDetail(state: ExternalHandoffState): string {
   const lines = [
-    "External handoff detail:",
-    `handoff id: ${state.bundle.handoffId}`,
+    `Handoff detail: ${state.bundle.handoffId}`,
     `task id: ${state.bundle.taskId}`,
     `spec ref: ${state.bundle.specRevisionRef}`,
     `completed work count: ${state.bundle.completedWork.length}`,
@@ -2465,6 +2498,18 @@ function formatExternalHandoffDetail(state: ExternalHandoffState): string {
     lines.push(`unresolved questions: ${state.bundle.unresolvedQuestions.join(" | ")}`);
   }
   return lines.join("\n");
+}
+
+function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
+  const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
+  const nextWork = outstanding[0];
+  const commands = ["/handoff show"];
+  if (nextWork) {
+    commands.push(`/handoff continue ${nextWork.id}`);
+  } else {
+    commands.push("/handoff status");
+  }
+  return commands;
 }
 
 export function createControllerFromAdapters(params: {

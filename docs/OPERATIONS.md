@@ -96,14 +96,16 @@ npm run verify
 - Image/document prompts are supported: upload attachment(s) and then send `/run ...`, or include a caption on upload.
 - Attachment context is consumed by the next `/run`, `/act`, or `/steer` and then cleared.
 - `/repo bootstrap` and `/repo template` apply downstream `AGENTS.md` templates intended for normal git tracking.
+- Telegram run updates are concise by default (summary-first). Use `/status` when you need full session metadata.
 
 ## External Relay (Optional)
 
 - Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
 - For an operator-facing handoff bridge without manual API calls, use:
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
-  - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`.
+  - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--start-if-missing`, `--no-start-if-missing`.
   - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-selects routed session, auto-generates task id, and auto-derives remaining summary when omitted).
+  - If relay is unreachable, handoff CLI prompts to start CodeFox automatically on interactive terminals.
   - If the target chat has no local spec workflow yet, CodeFox auto-bootstraps and approves one at ingest time.
 - Endpoints:
   - `GET /health`

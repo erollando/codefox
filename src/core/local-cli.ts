@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { loadConfig, resolveConfigPath } from "./config.js";
 import { buildExternalSessionId } from "./external-session-route.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
@@ -30,6 +31,7 @@ export interface LocalCliParsedArgs {
   relayHost?: string;
   relayPort?: number;
   leaseSeconds?: number;
+  startIfMissingRelay?: boolean;
 }
 
 interface RelayRoutesResponse {
@@ -228,6 +230,7 @@ interface HandoffParsedArgs {
   relayHost?: string;
   relayPort?: number;
   leaseSeconds?: number;
+  startIfMissingRelay?: boolean;
 }
 
 function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffParsedArgs; error?: string } {
@@ -259,6 +262,7 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
   let relayHost: string | undefined;
   let relayPort: number | undefined;
   let leaseSeconds: number | undefined;
+  let startIfMissingRelay: boolean | undefined;
 
   for (let index = startIndex; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -428,6 +432,14 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
       leaseSeconds = parsed;
       continue;
     }
+    if (token === "--start-if-missing") {
+      startIfMissingRelay = true;
+      continue;
+    }
+    if (token === "--no-start-if-missing") {
+      startIfMissingRelay = false;
+      continue;
+    }
 
     return {
       ok: false,
@@ -451,7 +463,8 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
       sessionId: sessionId?.trim(),
       relayHost: relayHost?.trim(),
       relayPort,
-      leaseSeconds
+      leaseSeconds,
+      startIfMissingRelay
     }
   };
 }
@@ -474,7 +487,7 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
   const config = await loadConfig(resolvedConfigPath);
 
   if (args.command === "handoff") {
-    return runLocalHandoff(args, config, output);
+    return runLocalHandoff(args, config, output, resolvedConfigPath);
   }
 
   if (args.command === "send") {
@@ -534,7 +547,12 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
 
 type LoadedConfig = Awaited<ReturnType<typeof loadConfig>>;
 
-async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, output: LocalCliOutput): Promise<number> {
+async function runLocalHandoff(
+  args: LocalCliParsedArgs,
+  config: LoadedConfig,
+  output: LocalCliOutput,
+  resolvedConfigPath: string
+): Promise<number> {
   if (!config.externalRelay.enabled) {
     output.error("externalRelay is disabled in config. Enable externalRelay.enabled to use handoff command.");
     return 1;
@@ -560,12 +578,30 @@ async function runLocalHandoff(args: LocalCliParsedArgs, config: LoadedConfig, o
     approvalTtlHours: config.state.approvalTtlHours
   }).state;
 
-  const routesResponse = await requestRelayJson<RelayRoutesResponse>({
+  let routesResponse = await requestRelayJson<RelayRoutesResponse>({
     baseUrl: relayBaseUrl,
     path: "/v1/external-codex/routes",
     method: "GET",
     authToken
   });
+  if (routesResponse.status === 0) {
+    const shouldStart = await shouldStartMissingRelay(args, relayBaseUrl, resolvedConfigPath, output);
+    if (shouldStart) {
+      output.log(`Starting CodeFox with config ${resolvedConfigPath}...`);
+      startCodeFoxProcess(resolvedConfigPath);
+      const ready = await waitForRelayReady(relayBaseUrl, authToken, 10000);
+      if (!ready) {
+        output.error(`Started CodeFox, but external relay is still unreachable at ${relayBaseUrl}.`);
+        return 1;
+      }
+      routesResponse = await requestRelayJson<RelayRoutesResponse>({
+        baseUrl: relayBaseUrl,
+        path: "/v1/external-codex/routes",
+        method: "GET",
+        authToken
+      });
+    }
+  }
   if (!routesResponse.ok || !routesResponse.body?.ok) {
     if (routesResponse.status === 0) {
       output.error(
@@ -1021,6 +1057,64 @@ async function requestRelayJson<T>(options: {
   }
 }
 
+async function shouldStartMissingRelay(
+  args: LocalCliParsedArgs,
+  relayBaseUrl: string,
+  resolvedConfigPath: string,
+  output: LocalCliOutput
+): Promise<boolean> {
+  if (typeof args.startIfMissingRelay === "boolean") {
+    return args.startIfMissingRelay;
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return false;
+  }
+  const { createInterface } = await import("node:readline/promises");
+  const prompt = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  try {
+    const answer = await prompt.question(
+      `CodeFox relay is unreachable at ${relayBaseUrl}. Start CodeFox now with config ${resolvedConfigPath}? [y/N] `
+    );
+    return /^y(es)?$/i.test(answer.trim());
+  } catch (error) {
+    output.error(`Could not read relay start confirmation: ${String(error)}`);
+    return false;
+  } finally {
+    prompt.close();
+  }
+}
+
+function startCodeFoxProcess(resolvedConfigPath: string): void {
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const child = spawn(npmCommand, ["run", "dev", "--", resolvedConfigPath], {
+    cwd: process.cwd(),
+    detached: true,
+    stdio: "ignore",
+    env: process.env
+  });
+  child.unref();
+}
+
+async function waitForRelayReady(baseUrl: string, authToken: string | undefined, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    const health = await requestRelayJson<{ ok?: boolean }>({
+      baseUrl,
+      path: "/health",
+      method: "GET",
+      authToken
+    });
+    if (health.ok && health.body?.ok === true) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return false;
+}
+
 function renderHelp(): string {
   return [
     "CodeFox local CLI",
@@ -1033,7 +1127,7 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
     "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
-    "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>]",
+    "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>] [--start-if-missing|--no-start-if-missing]",
     "  npm run local:cli -- help"
   ].join("\n");
 }

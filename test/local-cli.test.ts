@@ -42,7 +42,8 @@ describe("local CLI", () => {
       "--completed",
       "Implemented endpoint",
       "--risk",
-      "Regression may fail"
+      "Regression may fail",
+      "--start-if-missing"
     ]);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || !parsed.args) {
@@ -54,6 +55,7 @@ describe("local CLI", () => {
     expect(parsed.args.remainingSummary).toBe("Run regression suite");
     expect(parsed.args.completedWork).toEqual(["Implemented endpoint"]);
     expect(parsed.args.unresolvedRisks).toEqual(["Regression may fail"]);
+    expect(parsed.args.startIfMissingRelay).toBe(true);
   });
 
   it("parses handoff command without chatId and taskId", () => {

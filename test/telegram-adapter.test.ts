@@ -82,6 +82,29 @@ describe("TelegramPollingAdapter", () => {
     expect(payload.text).toBe("hello");
   });
 
+  it("attaches one-tap command keyboard when command buttons are provided", async () => {
+    const fetchMock = vi.fn(async () => {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: true })
+      } as Response;
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new TelegramPollingAdapter("token", 1, 1, false);
+    await adapter.sendMessage(100, "handoff ready", {
+      commandButtons: ["/handoff show", "/handoff continue rw-1"]
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const payload = JSON.parse(String(init.body));
+    expect(payload.reply_markup.keyboard).toEqual([
+      [{ text: "/handoff show" }, { text: "/handoff continue rw-1" }]
+    ]);
+    expect(payload.reply_markup.one_time_keyboard).toBe(true);
+  });
+
   it("splits long outgoing messages into multiple Telegram messages", async () => {
     const fetchMock = vi.fn(async () => {
       return {

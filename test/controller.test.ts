@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RunningTask } from "../src/adapters/codex.js";
+import type { TelegramSendOptions } from "../src/adapters/telegram.js";
 import type { ExternalHandoffStateSnapshot, TaskContext, TaskResult } from "../src/types/domain.js";
 import type { SpecWorkflowState } from "../src/core/spec-workflow.js";
 import type { ExternalCodexHandoffBundle } from "../src/core/external-codex-integration.js";
@@ -17,13 +18,14 @@ import { SessionManager } from "../src/core/session-manager.js";
 interface SentMessage {
   chatId: number;
   text: string;
+  options?: TelegramSendOptions;
 }
 
 class FakeTelegram {
   readonly sent: SentMessage[] = [];
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
-    this.sent.push({ chatId, text });
+  async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<void> {
+    this.sent.push({ chatId, text, options });
   }
 }
 
@@ -315,8 +317,8 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0].context.runKind).toBe("run");
     expect(fakeCodex.calls[0].context.mode).toBe("active");
     expect(fakeCodex.calls[0].context.capability?.ref).toBe("repo.run_checks");
-    expect(telegram.sent.some((item) => item.text.includes("Started request"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Run completed."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Running ") && item.text.includes("(active, run)."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Completed:"))).toBe(true);
     expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_1");
     expect(
       audit.events.some(
@@ -559,8 +561,11 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls.length).toBe(1);
     expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
     expect(fakeCodex.calls[0]?.context.capability?.ref).toBe("repo.run_checks");
-    expect(telegram.sent.some((item) => item.text.includes("External handoff status:"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Handoff handoff_1"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("rw-1 [continued]"))).toBe(true);
+    expect(
+      telegram.sent.some((item) => item.options?.commandButtons?.includes("/handoff continue rw-1") === true)
+    ).toBe(true);
   });
 
   it("auto-bootstraps missing spec workflow during external handoff ingest", async () => {
@@ -655,8 +660,7 @@ describe("CodeFoxController", () => {
 
     await controller.handleUpdate(makeUpdate("/handoff status"));
     const statusMessage = telegram.sent.at(-1)?.text ?? "";
-    expect(statusMessage).toContain("External handoff status:");
-    expect(statusMessage).toContain("handoff id: handoff_1");
+    expect(statusMessage).toContain("Handoff handoff_1");
     expect(statusMessage).toContain("remaining: 1/1");
   });
 
@@ -1215,7 +1219,7 @@ describe("CodeFoxController", () => {
       )
     ).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("Abort signal sent"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Run aborted."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Aborted:"))).toBe(true);
   });
 
   it("aborts in-flight runs on controller shutdown", async () => {

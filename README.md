@@ -189,6 +189,7 @@ Stage 2: continuation handoff
 - After external execution, client submits a typed handoff bundle.
 - CodeFox validates spec revision linkage before storing continuation state.
 - User continues via `/handoff show` and `/handoff continue [work-id]`.
+- Telegram handoff messages include one-tap command buttons for show/continue.
 
 External relay HTTP adapter (optional):
 
@@ -218,6 +219,7 @@ npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoi
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
 `--remaining` is optional and auto-derived from available context (active request id, Codex thread id) when omitted.
+If relay is unreachable, `handoff:cli` can start CodeFox and retry (`--start-if-missing` / `--no-start-if-missing`; interactive prompt by default on TTY).
 If no local spec exists for the chat yet, CodeFox auto-bootstraps and approves one during handoff ingest.
 
 ## Configuration
