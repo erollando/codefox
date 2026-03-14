@@ -265,6 +265,7 @@ npm run demo:remote-handoff
 ```
 
 See [Demo: Desk-to-Pocket Continuation](./docs/DEMO_REMOTE_HANDOFF.md).
+Short narrative version: [One-Page Story](./docs/DEMO_ONE_PAGE_STORY.md).
 
 Local CLI (read model for sessions/specs/approvals):
 

@@ -57,15 +57,17 @@ Captured run output:
 - user runs `/handoff continue rw-1`
 - CodeFox executes typed remaining work (`repo.run_checks`)
 
-## Why this demo is strong
+## What this lets you do
 
-- It proves channel separation:
-  - external client reports
-  - CodeFox owns user interaction + approval.
-- It proves policy boundary:
-  - continuation goes through normal capability admission.
-- It proves traceability:
-  - audit shows relay, approval, handoff ingest, continuation, and run completion.
+- Start work at your desk and continue from your phone without losing context.
+- Keep full control of risky actions: nothing sensitive proceeds without your approval.
+- See clear progress updates while work is running in another client.
+- Receive a clean handoff with what is done, what is left, and what needs a decision.
+- Continue the remaining work in one command (`/handoff continue ...`) instead of restarting from scratch.
+- Keep a trace of who approved what and when.
+
+If you want a shorter storytelling version for presentations, see:
+- [One-Page Story](./DEMO_ONE_PAGE_STORY.md)
 
 ## Optional next demo variant
 
@@ -73,4 +75,4 @@ Use the same flow but intentionally send:
 - duplicate `bind` for same session id (should return `session_already_bound`)
 - handoff item requiring non-runnable capability in current mode (should be rejected at ingest)
 
-This demonstrates safety guardrails, not just happy-path automation.
+This shows real guardrails, not only happy-path automation.
