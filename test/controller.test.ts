@@ -328,9 +328,12 @@ describe("CodeFoxController", () => {
     const detail = telegram.sent.at(-1)?.text ?? "";
 
     expect(overview).toContain("Capabilities (mode: active):");
-    expect(overview).toContain("- repo:");
+    expect(overview).toContain("- repo: actions=");
+    expect(overview).toContain("backend=planned");
+    expect(overview).toContain("backend=implemented");
     expect(overview).toContain("Use /capabilities <pack> for action details.");
-    expect(detail).toContain("Capabilities pack 'repo' (mode: active):");
+    expect(detail).toContain("Capabilities pack 'repo' (mode: active, backend: planned):");
+    expect(detail).toContain("backend detail: policy/contract surface");
     expect(detail).toContain("- run_checks:");
 
     const viewedEvents = audit.events.filter((event) => event.type === "capabilities_viewed");

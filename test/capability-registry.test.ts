@@ -16,6 +16,9 @@ describe("CapabilityRegistry", () => {
     expect(runChecks?.inputSchema.length).toBeGreaterThan(0);
     expect(runChecks?.auditPayloadFields.length).toBeGreaterThan(0);
     expect(registry.resolveAction("repo.unknown")).toBeUndefined();
+    expect(registry.getPackBackendStatus("jira")).toBe("implemented");
+    expect(registry.getPackBackendStatus("repo")).toBe("planned");
+    expect(packs.find((pack) => pack.pack === "jira")?.backendStatus).toBe("implemented");
   });
 
   it("applies mode runnability rules", () => {

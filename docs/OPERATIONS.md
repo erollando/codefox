@@ -90,7 +90,7 @@ npm run verify
 - `/repo info [name]` to inspect mapped repo path
 - `/mode <observe|active|full-access>` to set execution policy mode
 - `/policy [observe|active|full-access]` to inspect effective policy and spec rules
-- `/capabilities [pack]` to inspect typed action contracts
+- `/capabilities [pack]` to inspect typed action contracts and backend maturity (`implemented` vs `planned`)
 - `/act <pack.action> <instruction>` to execute typed capability actions
 - `/audit <view_id>` to inspect policy/status view audit records
 - Optional AGENTS guard: when enabled, `/run` in non-observe mode requires `AGENTS.md` in repo root.
