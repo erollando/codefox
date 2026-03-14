@@ -11,25 +11,17 @@ Then you leave your desk.
 
 With CodeFox, you do not lose the session.
 
-When to start:
+Handoff steps:
 
-- Start CodeFox at the beginning of work.
-- Start CodeFox before leaving, then bind external client and hand off.
+1. Start CodeFox (`npm run dev`).
+2. In Telegram, set the target route (`/repo ...`, `/mode ...`) and approve the spec (`/spec ...`).
+3. External VS Code client binds to that session route (`POST /v1/external-codex/bind`) and reports events.
+4. During work, CodeFox asks for approvals; you approve from phone (`/approve`) when needed.
+5. External client sends handoff bundle (`POST /v1/external-codex/handoff`).
+6. CodeFox confirms handoff is ready.
+7. On phone, run `/handoff show`, then `/handoff continue rw-1`.
 
-What happens:
-
-1. Your external client reports structured progress into CodeFox.
-2. When a sensitive action is needed, CodeFox asks you for approval.
-3. You approve from your phone (`/approve`).
-4. External execution finishes and sends a handoff bundle.
-5. CodeFox shows what is done and what is left (`/handoff show`).
-6. You continue the remaining step remotely (`/handoff continue rw-1`).
-
-The handoff itself:
-
-1. In VS Code, external Codex sends a typed handoff bundle to CodeFox.
-2. CodeFox confirms handoff is ready.
-3. You switch to phone and continue from `/handoff show`.
+You can start CodeFox from the beginning, or start it before handoff.
 
 Command + reply transcript:
 

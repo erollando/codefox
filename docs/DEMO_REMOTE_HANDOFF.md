@@ -11,15 +11,19 @@ Story:
 Goal:
 - Show CodeFox as authority for approvals, policy, and audit while enabling seamless continuation.
 
-## When to start CodeFox
+## Handoff steps (desk -> phone)
 
-Options:
-- Start CodeFox from the beginning of the task.
-- Start CodeFox later, but before handoff. In this case you still need an active CodeFox session and an external lease bind.
+1. Start CodeFox (`npm run dev`).
+2. In Telegram, open the target session route by setting repo and mode (example: `/repo payments-api`, `/mode active`).
+3. Prepare/approve the spec in CodeFox (`/spec draft ...`, `/spec clarify ...`, `/spec approve`).
+4. External client binds to that active session route with a lease (`POST /v1/external-codex/bind`), usually done by the plugin/skill.
+5. External client reports progress/approval/completion (`POST /v1/external-codex/event`).
+6. At handoff time, external client sends the typed handoff bundle (`POST /v1/external-codex/handoff`).
+7. CodeFox confirms handoff readiness in the chat; user continues from phone with `/handoff show` and `/handoff continue <work-id>`.
 
-Why:
-- The external client can hand off only to an existing CodeFox session route (`chat/repo/mode`).
-- If you start late, you can still continue, but you lose earlier progress history inside CodeFox.
+If CodeFox is started late:
+- It still works if steps 2-4 happen before step 6.
+- Earlier desk-side progress is not present in CodeFox history.
 
 ## Real execution (runnable now)
 
@@ -72,16 +76,6 @@ Transcript legend:
 - user checks `/handoff show`
 - user runs `/handoff continue rw-1`
 - CodeFox executes typed remaining work (`repo.run_checks`)
-
-## The handoff moment (desk -> phone)
-
-This is the explicit transition:
-
-1. In VS Code, external Codex finishes its desk phase and sends a typed handoff bundle to CodeFox.
-2. CodeFox acknowledges handoff readiness in the user channel.
-3. User leaves desk and opens phone.
-4. User runs `/handoff show` to inspect remaining work.
-5. User runs `/handoff continue <work-id>` to resume under CodeFox policy.
 
 ## Command + reply sample
 
