@@ -3,6 +3,7 @@ import type { AgentTemplateName, CodexReasoningEffort, PolicyMode } from "../typ
 export type ParsedCommand =
   | { type: "help" }
   | { type: "repos" }
+  | { type: "spec"; action: "template" | "draft" | "show" | "status" | "approve" | "clear"; intent?: string; force?: boolean }
   | { type: "repo"; repoName: string }
   | { type: "repo_add"; repoName: string; repoPath: string }
   | { type: "repo_init"; repoName: string; basePath?: string }
@@ -64,6 +65,11 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "help" };
     case "/repos":
       return { type: "repos" };
+    case "/spec":
+      if (!arg) {
+        return { type: "unknown", raw: text };
+      }
+      return parseSpecCommand(arg, text);
     case "/repo":
       if (!arg) {
         return { type: "unknown", raw: text };
@@ -106,6 +112,53 @@ export function parseCommand(text: string): ParsedCommand {
     default:
       return { type: "unknown", raw: text };
   }
+}
+
+function parseSpecCommand(arg: string, raw: string): ParsedCommand {
+  const [subCommand, ...rest] = arg.split(/\s+/).filter(Boolean);
+  const normalized = subCommand?.toLowerCase();
+
+  if (normalized === "template") {
+    return rest.length === 0 ? { type: "spec", action: "template" } : { type: "unknown", raw };
+  }
+
+  if (normalized === "draft") {
+    if (rest.length < 1) {
+      return { type: "unknown", raw };
+    }
+    return {
+      type: "spec",
+      action: "draft",
+      intent: rest.join(" ")
+    };
+  }
+
+  if (normalized === "show") {
+    return rest.length === 0 ? { type: "spec", action: "show" } : { type: "unknown", raw };
+  }
+
+  if (normalized === "status") {
+    return rest.length === 0 ? { type: "spec", action: "status" } : { type: "unknown", raw };
+  }
+
+  if (normalized === "approve") {
+    if (rest.length === 0) {
+      return { type: "spec", action: "approve", force: false };
+    }
+    if (rest.length === 1) {
+      const forceArg = rest[0]?.toLowerCase();
+      if (forceArg === "force" || forceArg === "--force") {
+        return { type: "spec", action: "approve", force: true };
+      }
+    }
+    return { type: "unknown", raw };
+  }
+
+  if (normalized === "clear") {
+    return rest.length === 0 ? { type: "spec", action: "clear" } : { type: "unknown", raw };
+  }
+
+  return { type: "unknown", raw };
 }
 
 function parseRepoCommand(arg: string, raw: string): ParsedCommand {

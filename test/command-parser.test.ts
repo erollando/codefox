@@ -5,6 +5,37 @@ describe("parseCommand", () => {
   it("parses slash commands", () => {
     expect(parseCommand("/help")).toEqual({ type: "help" });
     expect(parseCommand("/help@codefox_bot")).toEqual({ type: "help" });
+    expect(parseCommand("/spec template")).toEqual({
+      type: "spec",
+      action: "template"
+    });
+    expect(parseCommand("/spec draft add invoice csv export")).toEqual({
+      type: "spec",
+      action: "draft",
+      intent: "add invoice csv export"
+    });
+    expect(parseCommand("/spec show")).toEqual({
+      type: "spec",
+      action: "show"
+    });
+    expect(parseCommand("/spec status")).toEqual({
+      type: "spec",
+      action: "status"
+    });
+    expect(parseCommand("/spec approve")).toEqual({
+      type: "spec",
+      action: "approve",
+      force: false
+    });
+    expect(parseCommand("/spec approve force")).toEqual({
+      type: "spec",
+      action: "approve",
+      force: true
+    });
+    expect(parseCommand("/spec clear")).toEqual({
+      type: "spec",
+      action: "clear"
+    });
     expect(parseCommand("/repo payments-api")).toEqual({
       type: "repo",
       repoName: "payments-api"
@@ -112,6 +143,10 @@ describe("parseCommand", () => {
 
   it("returns unknown for malformed inputs", () => {
     expect(parseCommand("/mode invalid").type).toBe("unknown");
+    expect(parseCommand("/spec").type).toBe("unknown");
+    expect(parseCommand("/spec draft").type).toBe("unknown");
+    expect(parseCommand("/spec approve now").type).toBe("unknown");
+    expect(parseCommand("/spec clear now").type).toBe("unknown");
     expect(parseCommand("/repo").type).toBe("unknown");
     expect(parseCommand("/repo add only-name").type).toBe("unknown");
     expect(parseCommand("/repo init").type).toBe("unknown");

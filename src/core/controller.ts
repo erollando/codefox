@@ -5,7 +5,7 @@ import type { CodexCliAdapter, RunningTask } from "../adapters/codex.js";
 import type { TelegramAdapter, TelegramDocument, TelegramPhotoSize, TelegramUpdate } from "../adapters/telegram.js";
 import type { AccessControl } from "./auth.js";
 import type { AuditEventInput, AuditLogger } from "./audit-logger.js";
-import { parseCommand } from "./command-parser.js";
+import { parseCommand, type ParsedCommand } from "./command-parser.js";
 import type { ApprovalStore } from "./approval-store.js";
 import type { PolicyEngine } from "./policy.js";
 import type { RepoRegistry } from "./repo-registry.js";
@@ -26,6 +26,14 @@ import {
 import type { SessionManager } from "./session-manager.js";
 import { makeRequestId } from "./ids.js";
 import { AGENT_TEMPLATE_NAMES, PLAYBOOK_FILE_NAMES, applyAgentTemplate, applyPlaybookDocs } from "./agent-files.js";
+import {
+  approveSpecDraft,
+  buildSpecTemplate,
+  createSpecDraft,
+  listMissingRequiredSections,
+  renderSpecDraft,
+  type SpecDraft
+} from "./spec-workflow.js";
 import type {
   AgentTemplateName,
   CodexReasoningEffort,
@@ -98,6 +106,7 @@ export class CodeFoxController {
   private readonly executionAdmissionLock = new Set<number>();
   private readonly pendingSteers = new Map<number, PendingSteer[]>();
   private readonly attachmentContext = new Map<number, TaskAttachment[]>();
+  private readonly specDrafts = new Map<number, SpecDraft>();
 
   constructor(private readonly deps: ControllerDeps) {}
 
@@ -208,6 +217,10 @@ export class CodeFoxController {
       }
       case "repos": {
         await this.deps.telegram.sendMessage(chatId, formatRepos(this.deps.repos.list().map((repo) => repo.name)));
+        return;
+      }
+      case "spec": {
+        await this.handleSpecCommand(chatId, userId, command);
         return;
       }
       case "repo": {
@@ -331,6 +344,14 @@ export class CodeFoxController {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
         }
+        const spec = this.specDrafts.get(chatId);
+        if (spec && spec.status !== "approved") {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Spec v${spec.version} is ${spec.status}. Use /spec approve before /run, or /spec clear to discard it.`
+          );
+          return;
+        }
         const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
         this.runDetached(
           chatId,
@@ -393,6 +414,119 @@ export class CodeFoxController {
       await this.deps.audit.log({ type: "repo_selected", chatId, userId, repo: repoName });
     } catch (error) {
       await this.deps.telegram.sendMessage(chatId, formatError(String(error)));
+    }
+  }
+
+  private async handleSpecCommand(
+    chatId: number,
+    userId: number,
+    command: Extract<ParsedCommand, { type: "spec" }>
+  ): Promise<void> {
+    if (command.action === "template") {
+      await this.deps.telegram.sendMessage(chatId, buildSpecTemplate());
+      return;
+    }
+
+    if (command.action === "draft") {
+      const previous = this.specDrafts.get(chatId);
+      const draft = createSpecDraft(command.intent ?? "", previous?.version ?? 0);
+      this.specDrafts.set(chatId, draft);
+      const missing = listMissingRequiredSections(draft);
+
+      await this.deps.audit.log({
+        type: "spec_draft_created",
+        chatId,
+        userId,
+        version: draft.version,
+        missingRequiredSections: missing
+      });
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          `Spec draft v${draft.version} created.`,
+          `status: ${draft.status}`,
+          `missing required sections: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+          "Use /spec show to review.",
+          "Use /spec approve to allow /run."
+        ].join("\n")
+      );
+      return;
+    }
+
+    if (command.action === "show") {
+      const draft = this.specDrafts.get(chatId);
+      if (!draft) {
+        await this.deps.telegram.sendMessage(chatId, "No spec draft. Use /spec draft <intent> first.");
+        return;
+      }
+      await this.deps.telegram.sendMessage(chatId, renderSpecDraft(draft));
+      return;
+    }
+
+    if (command.action === "status") {
+      const draft = this.specDrafts.get(chatId);
+      if (!draft) {
+        await this.deps.telegram.sendMessage(chatId, "Spec status: none. Use /spec draft <intent>.");
+        return;
+      }
+      const missing = listMissingRequiredSections(draft);
+      await this.deps.telegram.sendMessage(
+        chatId,
+        [
+          `Spec status: v${draft.version} (${draft.status})`,
+          `missing required sections: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
+          `updated: ${draft.updatedAt}`
+        ].join("\n")
+      );
+      return;
+    }
+
+    if (command.action === "approve") {
+      const draft = this.specDrafts.get(chatId);
+      if (!draft) {
+        await this.deps.telegram.sendMessage(chatId, "No spec draft to approve. Use /spec draft <intent> first.");
+        return;
+      }
+
+      const missing = listMissingRequiredSections(draft);
+      if (missing.length > 0 && !command.force) {
+        await this.deps.telegram.sendMessage(
+          chatId,
+          `Spec v${draft.version} has missing required sections (${missing.join(", ")}). Use /spec approve force to override.`
+        );
+        return;
+      }
+
+      const approved = approveSpecDraft(draft);
+      this.specDrafts.set(chatId, approved);
+      await this.deps.audit.log({
+        type: "spec_approved",
+        chatId,
+        userId,
+        version: approved.version,
+        forced: Boolean(command.force),
+        missingRequiredSections: missing
+      });
+      await this.deps.telegram.sendMessage(chatId, `Spec v${approved.version} approved. /run is now allowed.`);
+      return;
+    }
+
+    if (command.action === "clear") {
+      const existing = this.specDrafts.get(chatId);
+      if (!existing) {
+        await this.deps.telegram.sendMessage(chatId, "No spec draft to clear.");
+        return;
+      }
+      this.specDrafts.delete(chatId);
+      await this.deps.audit.log({
+        type: "spec_cleared",
+        chatId,
+        userId,
+        version: existing.version,
+        previousStatus: existing.status
+      });
+      await this.deps.telegram.sendMessage(chatId, `Spec v${existing.version} cleared.`);
+      return;
     }
   }
 

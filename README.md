@@ -1,6 +1,6 @@
 # CodeFox
 
-CodeFox is a thin Telegram control plane for Codex.
+Codefox is a secure remote developer delegation system that converts messy human requests into reviewed formal specs, then executes them through policy-bounded local and cloud workers.
 
 It authenticates Telegram users/chats, maps requests to approved repositories, applies policy constraints, invokes Codex, and returns concise Telegram-friendly results.
 
@@ -49,6 +49,12 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 
 - `/help`
 - `/repos`
+- `/spec template`
+- `/spec draft <intent>`
+- `/spec show`
+- `/spec status`
+- `/spec approve [force]`
+- `/spec clear`
 - `/repo <name>`
 - `/repo add <name> <absolute-path>`
 - `/repo init <name> [base-path]`
@@ -68,6 +74,12 @@ CodeFox keeps a Codex session thread per chat and reuses it until one of these e
 - `/abort`
 
 Plain text (non-slash) input is treated as `/run <text>`.
+
+Spec workflow:
+
+- `/spec draft ...` creates a structured execution spec draft for the current chat.
+- If a draft exists and is not approved, `/run` is blocked until `/spec approve` (or `/spec clear`).
+- `/spec show` renders the current spec text for review and auditability.
 
 Image/document prompts:
 

@@ -211,6 +211,65 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0].context.reasoningEffortOverride).toBeUndefined();
   });
 
+  it("supports spec draft lifecycle and gates /run until approval", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/spec draft add invoice csv export"));
+    await controller.handleUpdate(makeUpdate("/run implement export endpoint"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(0);
+    expect(telegram.sent.some((item) => item.text.includes("Spec draft v1 created."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Use /spec show to review."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec v1 is draft"))).toBe(true);
+
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/run implement export endpoint"));
+    await flushAsyncWork();
+
+    expect(telegram.sent.some((item) => item.text.includes("Spec v1 approved. /run is now allowed."))).toBe(true);
+    expect(fakeCodex.calls.length).toBe(1);
+  });
+
+  it("supports spec show/status/clear commands", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/spec status"));
+    await controller.handleUpdate(makeUpdate("/spec template"));
+    await controller.handleUpdate(makeUpdate("/spec draft tighten repo safety checks"));
+    await controller.handleUpdate(makeUpdate("/spec show"));
+    await controller.handleUpdate(makeUpdate("/spec status"));
+    await controller.handleUpdate(makeUpdate("/spec clear"));
+    await controller.handleUpdate(makeUpdate("/spec show"));
+
+    expect(telegram.sent.some((item) => item.text.includes("Spec status: none"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("REQUEST:"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("SPEC v1 (draft)"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec status: v1 (draft)"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Spec v1 cleared."))).toBe(true);
+    expect(telegram.sent.filter((item) => item.text.includes("No spec draft. Use /spec draft")).length).toBe(1);
+  });
+
   it("uses uploaded attachment context for the next run only", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
