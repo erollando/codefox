@@ -103,6 +103,10 @@ describe("TelegramPollingAdapter", () => {
     expect(String(firstPayload.text)).toContain("[1/3]");
     expect(String(secondPayload.text)).toContain("[2/3]");
     expect(String(thirdPayload.text)).toContain("[3/3]");
+
+    const stripPrefix = (value: string): string => value.replace(/^\[\d+\/\d+\]\n/, "");
+    const reassembled = [firstPayload.text, secondPayload.text, thirdPayload.text].map(String).map(stripPrefix).join("");
+    expect(reassembled).toBe("x".repeat(9000));
   });
 
   it("discards backlog updates on startup when enabled", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatTaskResult } from "../src/core/response-formatter.js";
+import { formatSessionStatus, formatTaskResult } from "../src/core/response-formatter.js";
 
 describe("response formatter", () => {
   it("does not include raw output tail on successful runs", () => {
@@ -72,5 +72,22 @@ describe("response formatter", () => {
     expect(message).toContain("[REDACTED]");
     expect(message).not.toContain("abc123");
     expect(message).not.toContain("secret-token");
+  });
+
+  it("shows available tokens in status when remaining budget is known", () => {
+    const status = formatSessionStatus(
+      {
+        chatId: 100,
+        mode: "active",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        lastRunAt: "2026-01-01T02:03:04.000Z",
+        lastTokenUsage: { remaining: 123456 }
+      },
+      120,
+      "high"
+    );
+
+    expect(status).toContain("available tokens: 123,456");
+    expect(status).toContain("available tokens as of: 2026-01-01T02:03:04.000Z");
   });
 });

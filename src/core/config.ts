@@ -21,6 +21,7 @@ const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
 ] as const;
 const DEFAULT_CODEX_BLOCKED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"] as const;
 const DEFAULT_CODEX_SESSION_IDLE_MINUTES = 120;
+const DEFAULT_AUDIT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const CODEX_REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
 function isMode(value: string): value is PolicyMode {
@@ -341,7 +342,8 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
       codexSessionIdleMinutes
     },
     audit: {
-      logFilePath: resolveFromBase(baseDir, mustString(audit.logFilePath, "audit.logFilePath"))
+      logFilePath: resolveFromBase(baseDir, mustString(audit.logFilePath, "audit.logFilePath")),
+      maxFileBytes: parseOptionalPositiveInteger(audit.maxFileBytes, "audit.maxFileBytes") ?? DEFAULT_AUDIT_MAX_FILE_BYTES
     }
   };
 }
@@ -352,6 +354,15 @@ function parseOptionalPositiveNumber(value: unknown, key: string): number | unde
   }
   const num = mustNumber(value, key);
   assertPositiveNumber(num, key);
+  return num;
+}
+
+function parseOptionalPositiveInteger(value: unknown, key: string): number | undefined {
+  if (typeof value === "undefined") {
+    return undefined;
+  }
+  const num = mustNumber(value, key);
+  assertPositiveInteger(num, key);
   return num;
 }
 

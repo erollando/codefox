@@ -73,21 +73,24 @@ export function formatSessionStatus(
     : codexDefaultReasoningEffort
       ? "config default"
       : "no default";
-  const lastTokensUsed = session.lastTokenUsage?.total;
   const lastTokensRemaining = session.lastTokenUsage?.remaining;
-
-  return [
+  const lines = [
     "Status:",
     `repo: ${session.selectedRepo ?? "(not selected)"}`,
     `mode: ${session.mode}`,
     `reasoning (next run): ${effectiveReasoning} (${reasoningSource})`,
     `active request: ${session.activeRequestId ?? "none"}`,
-    `codex session: ${codexSession}`,
-    `last run: ${session.lastRunAt ?? "none"}`,
-    `last reasoning: ${session.lastReasoningEffort ?? "unknown"}`,
-    `last tokens used: ${typeof lastTokensUsed === "number" ? formatTokenCount(lastTokensUsed) : "unknown"}`,
-    `last tokens remaining: ${typeof lastTokensRemaining === "number" ? formatTokenCount(lastTokensRemaining) : "unavailable"}`
-  ].join("\n");
+    `codex session: ${codexSession}`
+  ];
+
+  if (typeof lastTokensRemaining === "number") {
+    lines.push(`available tokens: ${formatTokenCount(lastTokensRemaining)}`);
+    if (session.lastRunAt) {
+      lines.push(`available tokens as of: ${session.lastRunAt}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 export function formatTaskStart(
@@ -95,14 +98,20 @@ export function formatTaskStart(
   mode: PolicyMode,
   requestId: string,
   runKind: RunKind,
-  resumed: boolean
+  resumed: boolean,
+  resumeThreadId?: string
 ): string {
+  const sessionLabel = resumed
+    ? resumeThreadId
+      ? `resumed (${resumeThreadId})`
+      : "resumed"
+    : "new";
   return [
     `Started request ${requestId}`,
     `repo: ${repo}`,
     `mode: ${mode}`,
     `type: ${runKind}`,
-    `session: ${resumed ? "resumed" : "new"}`
+    `session: ${sessionLabel}`
   ].join("\n");
 }
 

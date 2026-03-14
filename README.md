@@ -13,7 +13,8 @@ It authenticates Telegram users/chats, maps requests to approved repositories, a
   - repo root safety
   - policy modes (`observe`, `active`, `full-access`)
 - Codex adapter: CLI invocation with `runArgTemplate`, mode sandbox mapping, and thread-resume support.
-- Audit logging: structured JSON lines with redacted previews for request/progress text.
+- Audit logging: structured JSON lines with redacted previews for request/progress text (including tagged `[stdout]`/`[stderr]` Codex progress lines).
+- Startup records detected Codex CLI version in audit logs and emits a non-blocking compatibility warning when outside tested range.
 
 ## Session model
 
@@ -137,13 +138,15 @@ Copy the sample config to `config/codefox.config.json`:
     "approvalTtlHours": 72,
     "codexSessionIdleMinutes": 120
   },
-  "audit": { "logFilePath": "./logs/audit.log" }
+  "audit": { "logFilePath": "./logs/audit.log", "maxFileBytes": 5242880 }
 }
 ```
 
 `state.filePath` persists chat sessions (and any legacy pending approval records) across service restarts.
+Any stale `activeRequestId` values from a previous process are cleared on startup.
 If set, `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
 `state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.
+`audit.maxFileBytes` bounds the audit log file size (default 5 MiB) by truncating when the limit is reached.
 `/repo init <name>` creates `<defaultParentPath>/<name>`, runs `git init`, registers it, and auto-selects it for the chat.
 `telegram.discardBacklogOnStart` drops offline backlog updates on startup (recommended for safety).
 
@@ -158,7 +161,7 @@ Jira MCP bridge example (`jira-mcp-bridge` repo at `/home/enrico/git/jira-mcp-br
 
 ```json
 "configOverrides": [
-  "mcp_servers={ \"jira-mcp-bridge\" = { command = \"bash\", args = [\"-lc\", \"cd /home/enrico/git/jira-mcp-bridge && exec /home/enrico/git/jira-mcp-bridge/.venv/bin/python -m server\"], env = { ACLI_PATH = \"acli\" } } }"
+  "mcp_servers={ \"jira-mcp-bridge\" = { command = \"bash\", args = [\"-lc\", \"cd /home/enrico/git/jira-mcp-bridge && exec ./scripts/start-server.sh\"], env = { ACLI_PATH = \"acli\" } } }"
 ]
 ```
 

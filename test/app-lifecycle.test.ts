@@ -182,4 +182,81 @@ describe("createApp lifecycle", () => {
     const logs = await readFile(logPath, "utf8");
     expect(logs).toContain('"type":"state_pruned"');
   });
+
+  it("clears stale activeRequestId values on startup", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-test-"));
+    const logPath = path.join(tmpDir, "audit.log");
+    const statePath = path.join(tmpDir, "state.json");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+
+    await writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          sessions: [
+            {
+              chatId: 100,
+              mode: "observe",
+              selectedRepo: "payments-api",
+              activeRequestId: "req_stale_1",
+              codexThreadId: "thread_old",
+              updatedAt: "2026-01-01T11:30:00.000Z"
+            }
+          ],
+          approvals: []
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        telegram: {
+          allowedUserIds: [1],
+          allowedChatIds: [100],
+          pollingTimeoutSeconds: 1,
+          pollIntervalMs: 1
+        },
+        repos: [{ name: "payments-api", rootPath: tmpDir }],
+        codex: {
+          command: "codex",
+          baseArgs: [],
+          runArgTemplate: ["{instruction}"],
+          repoArgTemplate: [],
+          timeoutMs: 1000,
+          preflightEnabled: false
+        },
+        policy: { defaultMode: "observe" },
+        state: { filePath: statePath, codexSessionIdleMinutes: 120 },
+        audit: { logFilePath: logPath }
+      }),
+      "utf8"
+    );
+
+    const fetchMock = vi.fn(async () => {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: [] })
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const app = await createApp(configPath);
+    const startPromise = app.start();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await app.stop();
+    await Promise.race([startPromise, new Promise((resolve) => setTimeout(resolve, 250))]);
+
+    const savedState = JSON.parse(await readFile(statePath, "utf8")) as {
+      sessions: Array<{ activeRequestId?: string }>;
+    };
+    expect(savedState.sessions).toHaveLength(1);
+    expect(savedState.sessions[0].activeRequestId).toBeUndefined();
+
+    const logs = await readFile(logPath, "utf8");
+    expect(logs).toContain('"type":"state_active_requests_cleared"');
+  });
 });

@@ -356,6 +356,47 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("Run aborted."))).toBe(true);
   });
 
+  it("aborts in-flight runs on controller shutdown", async () => {
+    let resolveTask: ((result: TaskResult) => void) | undefined;
+    let aborted = false;
+
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {
+            aborted = true;
+            resolveTask?.({
+              ok: false,
+              summary: "Run aborted by user.",
+              aborted: true,
+              exitCode: 143
+            });
+          },
+          result: new Promise<TaskResult>((resolve) => {
+            resolveTask = resolve;
+          })
+        };
+      }
+    };
+
+    const { controller, sessions } = makeController(fakeCodex);
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/run long operation"));
+    await flushAsyncWork();
+
+    const shutdown = await controller.shutdown();
+    await flushAsyncWork();
+
+    expect(aborted).toBe(true);
+    expect(shutdown.abortedRequestIds.length).toBe(1);
+    expect(shutdown.pendingRequestIds).toEqual([]);
+    expect(sessions.getOrCreate(100).activeRequestId).toBeUndefined();
+  });
+
   it("supports /steer by aborting and resuming on the current session", async () => {
     let resolveTask: ((result: TaskResult) => void) | undefined;
     let callCount = 0;

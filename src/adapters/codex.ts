@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
-import type { CodexConfig, TaskContext, TaskResult } from "../types/domain.js";
+import type { CodexConfig, TaskContext, TaskResult, TaskTokenUsage } from "../types/domain.js";
 
 export interface RunningTask {
   result: Promise<TaskResult>;
@@ -35,12 +35,26 @@ const RESUME_REJECTION_PATTERNS = [
   /resume rejected/i,
   /thread .* expired/i
 ] as const;
+const MIN_TESTED_CODEX_VERSION: [number, number, number] = [0, 111, 0];
+const MAX_TESTED_CODEX_VERSION: [number, number, number] = [1, 0, 0];
 
 export class CodexCliAdapter {
+  private preflightVersionRaw?: string;
+  private preflightVersion?: [number, number, number];
+  private compatibilityWarning?: string;
+
   constructor(
     private readonly config: CodexConfig,
     private readonly runner: ProcessRunner = defaultRunner
   ) {}
+
+  getRuntimeInfo(): { codexVersionRaw?: string; codexVersion?: string; codexVersionWarning?: string } {
+    return {
+      codexVersionRaw: this.preflightVersionRaw,
+      codexVersion: this.preflightVersion ? this.preflightVersion.join(".") : undefined,
+      codexVersionWarning: this.compatibilityWarning
+    };
+  }
 
   async ensureAvailable(): Promise<void> {
     if (!this.config.preflightEnabled) {
@@ -73,7 +87,11 @@ export class CodexCliAdapter {
         stdout += chunk.toString();
       });
       child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
+        const text = chunk.toString();
+        stderr += text;
+        if (process.stderr.writable) {
+          process.stderr.write(text);
+        }
       });
       child.on("error", (error) => {
         if (settled) {
@@ -89,6 +107,13 @@ export class CodexCliAdapter {
         }
         settled = true;
         clearTimeout(timeout);
+        const rawVersion = [stdout, stderr].join("\n").trim();
+        this.preflightVersionRaw = rawVersion || undefined;
+        this.preflightVersion = extractSemver(rawVersion);
+        this.compatibilityWarning = buildCodexCompatibilityWarning(this.preflightVersionRaw, this.preflightVersion);
+        if (this.compatibilityWarning) {
+          console.warn(`Codex compatibility warning: ${this.compatibilityWarning}`);
+        }
         if (code === 0) {
           resolve();
           return;
@@ -138,7 +163,7 @@ export class CodexCliAdapter {
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString();
       stdout += text;
-      stdoutRemainder = emitLines(text, stdoutRemainder, onProgress);
+      stdoutRemainder = emitLines(text, stdoutRemainder, onProgress, "stdout");
       detectedThreadId = detectThreadId(text) ?? detectedThreadId;
       if (context.resumeThreadId && isResumeRejected(text)) {
         resumeRejected = true;
@@ -148,7 +173,10 @@ export class CodexCliAdapter {
     child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
       stderr += text;
-      stderrRemainder = emitLines(text, stderrRemainder, onProgress);
+      if (process.stderr.writable) {
+        process.stderr.write(text);
+      }
+      stderrRemainder = emitLines(text, stderrRemainder, onProgress, "stderr");
       detectedThreadId = detectThreadId(text) ?? detectedThreadId;
       if (context.resumeThreadId && isResumeRejected(text)) {
         resumeRejected = true;
@@ -169,9 +197,10 @@ export class CodexCliAdapter {
 
       child.on("close", (exitCode) => {
         clearTimeout(timeout);
-        flushRemainder(stdoutRemainder, onProgress);
-        flushRemainder(stderrRemainder, onProgress);
+        flushRemainder(stdoutRemainder, onProgress, "stdout");
+        flushRemainder(stderrRemainder, onProgress, "stderr");
         const combined = [stdout, stderr].join("\n").trim();
+        const tokenUsage = extractTokenUsage(combined);
         const combinedResumeRejected = context.resumeThreadId ? resumeRejected || isResumeRejected(combined) : false;
         const isOk = exitCode === 0 && !timedOut && !aborted;
         resolveOnce(resolve, {
@@ -182,7 +211,8 @@ export class CodexCliAdapter {
           timedOut,
           aborted,
           threadId: detectedThreadId ?? context.resumeThreadId,
-          resumeRejected: combinedResumeRejected
+          resumeRejected: combinedResumeRejected,
+          tokenUsage
         });
       });
     });
@@ -322,7 +352,12 @@ function isBlockedEnvVar(name: string, patterns: string[]): boolean {
   return false;
 }
 
-function emitLines(text: string, previousRemainder: string, onProgress?: (line: string) => void | Promise<void>): string {
+function emitLines(
+  text: string,
+  previousRemainder: string,
+  onProgress?: (line: string) => void | Promise<void>,
+  source?: "stdout" | "stderr"
+): string {
   if (!onProgress) {
     return "";
   }
@@ -332,7 +367,7 @@ function emitLines(text: string, previousRemainder: string, onProgress?: (line: 
   const remainder = lines.pop() ?? "";
 
   for (const line of lines) {
-    const trimmed = line.trim().slice(0, 500);
+    const trimmed = formatProgressLine(line, source);
     if (trimmed) {
       const maybePromise = onProgress(trimmed);
       if (maybePromise && typeof (maybePromise as Promise<void>).catch === "function") {
@@ -344,11 +379,15 @@ function emitLines(text: string, previousRemainder: string, onProgress?: (line: 
   return remainder;
 }
 
-function flushRemainder(remainder: string, onProgress?: (line: string) => void | Promise<void>): void {
+function flushRemainder(
+  remainder: string,
+  onProgress?: (line: string) => void | Promise<void>,
+  source?: "stdout" | "stderr"
+): void {
   if (!onProgress) {
     return;
   }
-  const trimmed = remainder.trim().slice(0, 500);
+  const trimmed = formatProgressLine(remainder, source);
   if (!trimmed) {
     return;
   }
@@ -356,6 +395,17 @@ function flushRemainder(remainder: string, onProgress?: (line: string) => void |
   if (maybePromise && typeof (maybePromise as Promise<void>).catch === "function") {
     void (maybePromise as Promise<void>).catch(() => {});
   }
+}
+
+function formatProgressLine(line: string, source?: "stdout" | "stderr"): string {
+  const trimmed = line.trim().slice(0, 500);
+  if (!trimmed) {
+    return "";
+  }
+  if (!source) {
+    return trimmed;
+  }
+  return `[${source}] ${trimmed}`;
 }
 
 function summarizeOutput(exitCode: number, output: string, timedOut: boolean, aborted: boolean, timeoutMs: number): string {
@@ -469,12 +519,12 @@ function extractAssistantSummary(output: string): string | undefined {
 
   const jsonSummary = extractJsonAgentMessage(normalized);
   if (jsonSummary) {
-    return jsonSummary.slice(0, 400);
+    return jsonSummary;
   }
 
   const codexSummary = extractPlainCodexMessage(normalized);
   if (codexSummary) {
-    return codexSummary.slice(0, 400);
+    return codexSummary;
   }
 
   return undefined;
@@ -543,4 +593,111 @@ function extractPlainCodexMessage(text: string): string | undefined {
 
   flushCurrent();
   return last;
+}
+
+function extractTokenUsage(output: string): TaskTokenUsage | undefined {
+  const usage: TaskTokenUsage = {};
+
+  usage.total = extractByPatterns(output, [
+    /tokens?\s+used\s*(?::|=)?\s*([0-9][0-9,._]*)/gi,
+    /"tokens_used"\s*:\s*([0-9]+)/gi,
+    /"total_tokens"\s*:\s*([0-9]+)/gi
+  ]);
+  usage.remaining = extractByPatterns(output, [
+    /tokens?\s+remaining\s*(?::|=)?\s*([0-9][0-9,._]*)/gi,
+    /remaining\s+tokens?\s*(?::|=)?\s*([0-9][0-9,._]*)/gi,
+    /"tokens_remaining"\s*:\s*([0-9]+)/gi,
+    /"remaining_tokens"\s*:\s*([0-9]+)/gi
+  ]);
+  usage.input = extractByPatterns(output, [
+    /input\s+tokens?\s*(?::|=)?\s*([0-9][0-9,._]*)/gi,
+    /"input_tokens"\s*:\s*([0-9]+)/gi
+  ]);
+  usage.output = extractByPatterns(output, [
+    /output\s+tokens?\s*(?::|=)?\s*([0-9][0-9,._]*)/gi,
+    /"output_tokens"\s*:\s*([0-9]+)/gi
+  ]);
+  usage.reasoning = extractByPatterns(output, [
+    /reasoning\s+tokens?\s*(?::|=)?\s*([0-9][0-9,._]*)/gi,
+    /"reasoning_tokens"\s*:\s*([0-9]+)/gi
+  ]);
+  usage.cachedInput = extractByPatterns(output, [
+    /cached\s+input\s+tokens?\s*(?::|=)?\s*([0-9][0-9,._]*)/gi,
+    /"cached_input_tokens"\s*:\s*([0-9]+)/gi
+  ]);
+
+  if (
+    typeof usage.total === "undefined" &&
+    typeof usage.remaining === "undefined" &&
+    typeof usage.input === "undefined" &&
+    typeof usage.output === "undefined" &&
+    typeof usage.reasoning === "undefined" &&
+    typeof usage.cachedInput === "undefined"
+  ) {
+    return undefined;
+  }
+
+  return usage;
+}
+
+function extractByPatterns(output: string, patterns: RegExp[]): number | undefined {
+  for (const pattern of patterns) {
+    const match = matchLast(output, pattern);
+    if (!match) {
+      continue;
+    }
+    const parsed = parseTokenNumber(match);
+    if (typeof parsed === "number") {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function parseTokenNumber(value: string): number | undefined {
+  const digits = value.replace(/[^\d]/g, "");
+  if (!digits) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(digits, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function extractSemver(text: string): [number, number, number] | undefined {
+  const match = text.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return undefined;
+  }
+  return [Number.parseInt(match[1], 10), Number.parseInt(match[2], 10), Number.parseInt(match[3], 10)];
+}
+
+function buildCodexCompatibilityWarning(
+  rawVersion: string | undefined,
+  version: [number, number, number] | undefined
+): string | undefined {
+  if (!version || !rawVersion) {
+    return undefined;
+  }
+  if (compareVersionTuple(version, MIN_TESTED_CODEX_VERSION) < 0) {
+    return `version ${rawVersion} is older than tested range ${MIN_TESTED_CODEX_VERSION.join(".")}+`;
+  }
+  if (compareVersionTuple(version, MAX_TESTED_CODEX_VERSION) >= 0) {
+    return `version ${rawVersion} is newer than tested range <${MAX_TESTED_CODEX_VERSION.join(".")}`;
+  }
+  return undefined;
+}
+
+function compareVersionTuple(left: [number, number, number], right: [number, number, number]): number {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] < right[index]) {
+      return -1;
+    }
+    if (left[index] > right[index]) {
+      return 1;
+    }
+  }
+  return 0;
 }

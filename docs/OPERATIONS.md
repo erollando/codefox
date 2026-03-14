@@ -31,7 +31,7 @@ npm start -- ./config/codefox.config.json
 ## Stop
 
 - Send `SIGINT` (`Ctrl+C`) or `SIGTERM`.
-- CodeFox performs graceful stop by ending polling and writing `service_stop` audit event.
+- CodeFox aborts in-flight Codex runs, waits briefly for shutdown, ends polling, then writes `service_stop`.
 - On startup, pending Telegram backlog can be discarded when `telegram.discardBacklogOnStart=true`.
 
 ## Verification
@@ -45,15 +45,20 @@ npm run verify
 ## Logs
 
 - Audit logs are JSON lines at `audit.logFilePath` in config.
+- Codex progress events include stream tags (`[stdout]`/`[stderr]`) in `codex_progress` line previews.
+- Audit log size is bounded by `audit.maxFileBytes` (default 5 MiB); file is truncated when the limit is exceeded.
+- Startup logs include detected Codex CLI version; if version is outside tested range, `codex_version_compatibility_warning` is emitted.
 - Each request and lifecycle action is logged with event type and timestamp.
 - Request/progress payloads are stored as redacted previews to reduce secret leakage risk.
 - If startup TTL pruning removes stale records, a `state_pruned` event is written.
+- If stale `activeRequestId` values are found on startup, they are cleared and logged as `state_active_requests_cleared`.
 - To mirror audit events to stdout, set `CODEFOX_AUDIT_STDOUT=1`.
 
 ## Persistent State
 
 - Session state (and any legacy approval records) are stored in `state.filePath` (default `./.codefox/state.json`).
 - This allows `/repo`, `/mode`, and Codex session thread state to survive restarts.
+- In-progress request IDs are not resumed after restart; stale ones are cleared at startup.
 - Optional `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
 - `state.codexSessionIdleMinutes` closes stale Codex thread sessions after idle timeout.
 - If state file is missing/corrupt, CodeFox starts with empty in-memory state.

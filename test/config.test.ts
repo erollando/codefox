@@ -61,6 +61,7 @@ describe("config validation", () => {
     expect(validated.state.codexSessionIdleMinutes).toBe(120);
     expect(validated.state.sessionTtlHours).toBeUndefined();
     expect(validated.state.approvalTtlHours).toBeUndefined();
+    expect(validated.audit.maxFileBytes).toBe(5 * 1024 * 1024);
   });
 
   it("accepts full-access as policy.defaultMode", () => {
@@ -126,6 +127,16 @@ describe("config validation", () => {
       codexSessionIdleMinutes: 0
     };
     expect(() => validateConfig(config)).toThrowError(/state\.codexSessionIdleMinutes/);
+  });
+
+  it("parses optional audit.maxFileBytes and rejects non-positive values", () => {
+    const config = makeValidConfig();
+    (config.audit as Record<string, unknown>).maxFileBytes = 1024;
+    const validated = validateConfig(config);
+    expect(validated.audit.maxFileBytes).toBe(1024);
+
+    (config.audit as Record<string, unknown>).maxFileBytes = 0;
+    expect(() => validateConfig(config)).toThrowError(/audit\.maxFileBytes/);
   });
 
   it("rejects overlapping repository roots", () => {

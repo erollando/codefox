@@ -65,6 +65,7 @@ export interface SafetyConfig {
 
 export interface AuditConfig {
   logFilePath: string;
+  maxFileBytes: number;
 }
 
 export interface RepoInitConfig {

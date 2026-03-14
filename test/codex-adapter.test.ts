@@ -175,6 +175,7 @@ describe("CodexCliAdapter", () => {
         queueMicrotask(() => {
           child.stdout.emitData("hel");
           child.stdout.emitData("lo\nwor");
+          child.stderr.emitData("err one\n");
           child.stdout.emitData("ld\n");
           child.emit("close", 0);
         });
@@ -212,7 +213,7 @@ describe("CodexCliAdapter", () => {
     });
     await running.result;
 
-    expect(seen).toEqual(["hello", "world"]);
+    expect(seen).toEqual(["[stdout] hello", "[stderr] err one", "[stdout] world"]);
   });
 
   it("filters blocked env vars before spawning codex", async () => {
@@ -311,6 +312,69 @@ describe("CodexCliAdapter", () => {
     );
 
     await expect(adapter.ensureAvailable()).rejects.toThrowError(/Failed to start Codex command/);
+  });
+
+  it("captures codex version metadata from preflight output", async () => {
+    const runner: ProcessRunner = {
+      spawn() {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("codex-cli 0.111.0\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: [],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: true,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    await adapter.ensureAvailable();
+    expect(adapter.getRuntimeInfo().codexVersion).toBe("0.111.0");
+    expect(adapter.getRuntimeInfo().codexVersionWarning).toBeUndefined();
+  });
+
+  it("warns when codex version is outside tested range", async () => {
+    const runner: ProcessRunner = {
+      spawn() {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("codex-cli 2.0.0\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: [],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: true,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    await adapter.ensureAvailable();
+    expect(adapter.getRuntimeInfo().codexVersionWarning).toContain("newer than tested range");
   });
 
   it("injects read-only sandbox for observe mode when sandbox flags are absent", async () => {
@@ -528,6 +592,7 @@ describe("CodexCliAdapter", () => {
 
     const result = await adapter.startTask("/tmp/payments-api", context).result;
     expect(result.summary).toBe("Yes, this is the answer.");
+    expect(result.tokenUsage?.total).toBe(2092);
   });
 
   it("uses the latest codex message block instead of early planning/tool chatter", async () => {
@@ -581,6 +646,100 @@ describe("CodexCliAdapter", () => {
     expect(result.summary).toContain("Committed: d0807dc");
     expect(result.summary).not.toContain("I'm going to check");
     expect(result.summary).not.toContain("git status");
+    expect(result.tokenUsage?.total).toBe(123);
+  });
+
+  it("captures tokens remaining from plain text output", async () => {
+    const runner: ProcessRunner = {
+      spawn() {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("codex\n");
+          child.stdout.emitData("Done.\n");
+          child.stdout.emitData("tokens used\n");
+          child.stdout.emitData("1,111\n");
+          child.stdout.emitData("tokens remaining\n");
+          child.stdout.emitData("98,765\n");
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "status",
+      requestId: "tok001",
+      runKind: "run"
+    };
+
+    const result = await adapter.startTask("/tmp/payments-api", context).result;
+    expect(result.tokenUsage).toMatchObject({
+      total: 1111,
+      remaining: 98765
+    });
+  });
+
+  it("does not truncate long assistant summary text", async () => {
+    const longAnswer = `A${"x".repeat(900)}B`;
+    const runner: ProcessRunner = {
+      spawn() {
+        const child = new FakeChild();
+        queueMicrotask(() => {
+          child.stdout.emitData("codex\n");
+          child.stdout.emitData(`${longAnswer}\n`);
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      }
+    };
+
+    const adapter = new CodexCliAdapter(
+      {
+        command: "codex",
+        baseArgs: ["exec"],
+        runArgTemplate: ["{instruction}"],
+        repoArgTemplate: [],
+        timeoutMs: 5000,
+        blockedEnvVars: [],
+        preflightEnabled: false,
+        preflightArgs: ["--version"],
+        preflightTimeoutMs: 1000
+      },
+      runner
+    );
+
+    const context: TaskContext = {
+      chatId: 100,
+      userId: 1,
+      repoName: "payments-api",
+      mode: "active",
+      instruction: "status",
+      requestId: "sum003",
+      runKind: "run"
+    };
+
+    const result = await adapter.startTask("/tmp/payments-api", context).result;
+    expect(result.summary).toBe(longAnswer);
+    expect(result.summary.length).toBeGreaterThan(400);
   });
 
   it("prepends codex global runtime flags from config", async () => {

@@ -228,8 +228,8 @@ function splitMessage(text: string, maxLength: number): string[] {
     const candidate = remaining.slice(0, maxLength);
     const breakIndex = candidate.lastIndexOf("\n");
     const splitAt = breakIndex >= Math.floor(maxLength * 0.5) ? breakIndex + 1 : maxLength;
-    parts.push(remaining.slice(0, splitAt).trimEnd());
-    remaining = remaining.slice(splitAt).trimStart();
+    parts.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
   }
 
   if (remaining.length > 0) {

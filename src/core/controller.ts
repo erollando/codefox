@@ -67,6 +67,14 @@ interface IncomingAttachment {
   mimeType?: string;
 }
 
+const SHUTDOWN_ABORT_TIMEOUT_MS = 5000;
+const SHUTDOWN_ABORT_POLL_INTERVAL_MS = 50;
+
+export interface ControllerShutdownResult {
+  abortedRequestIds: string[];
+  pendingRequestIds: string[];
+}
+
 export interface ControllerDeps {
   telegram: MessageSink;
   access: AccessControl;
@@ -92,6 +100,50 @@ export class CodeFoxController {
   private readonly attachmentContext = new Map<number, TaskAttachment[]>();
 
   constructor(private readonly deps: ControllerDeps) {}
+
+  async shutdown(): Promise<ControllerShutdownResult> {
+    const active = [...this.activeAborts.entries()];
+    if (active.length === 0) {
+      return {
+        abortedRequestIds: [],
+        pendingRequestIds: []
+      };
+    }
+
+    const startedAtMs = Date.now();
+    const abortedRequestIds: string[] = [];
+
+    for (const [requestId, abort] of active) {
+      try {
+        abort();
+        abortedRequestIds.push(requestId);
+      } catch (error) {
+        await this.deps.audit.log({
+          type: "shutdown_abort_error",
+          requestId,
+          error: String(error)
+        });
+      }
+    }
+
+    const deadlineMs = Date.now() + SHUTDOWN_ABORT_TIMEOUT_MS;
+    while (this.activeAborts.size > 0 && Date.now() < deadlineMs) {
+      await sleep(SHUTDOWN_ABORT_POLL_INTERVAL_MS);
+    }
+
+    const pendingRequestIds = [...this.activeAborts.keys()];
+    await this.deps.audit.log({
+      type: "shutdown_active_requests",
+      abortedRequestIds,
+      pendingRequestIds,
+      waitMs: Date.now() - startedAtMs
+    });
+
+    return {
+      abortedRequestIds,
+      pendingRequestIds
+    };
+  }
 
   async handleUpdate(update: TelegramUpdate): Promise<void> {
     const message = update.message;
@@ -1143,7 +1195,10 @@ export class CodeFoxController {
       };
 
       this.deps.sessions.setActiveRequest(chatId, requestId);
-      await this.deps.telegram.sendMessage(chatId, formatTaskStart(repoName, mode, requestId, runKind, Boolean(resumeThreadId)));
+      await this.deps.telegram.sendMessage(
+        chatId,
+        formatTaskStart(repoName, mode, requestId, runKind, Boolean(resumeThreadId), resumeThreadId)
+      );
 
       await this.deps.audit.log({
         type: "codex_start",
@@ -1364,6 +1419,10 @@ function buildSteerInstruction(instructions: string[]): string {
     "Merge all guidance items below and continue from the current session state.",
     ...cleaned.map((entry, index) => `${index + 1}. ${entry}`)
   ].join("\n");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isImageMimeType(mimeType: string | undefined): boolean {

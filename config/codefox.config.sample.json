@@ -52,6 +52,7 @@
     "codexSessionIdleMinutes": 120
   },
   "audit": {
-    "logFilePath": "./logs/audit.log"
+    "logFilePath": "./logs/audit.log",
+    "maxFileBytes": 5242880
   }
 }

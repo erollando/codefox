@@ -28,7 +28,11 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
   );
   const access = new AccessControl(config.telegram.allowedUserIds, config.telegram.allowedChatIds);
   const repos = new RepoRegistry(config.repos);
-  const audit = new AuditLogger(config.audit.logFilePath, process.env.CODEFOX_AUDIT_STDOUT === "1");
+  const audit = new AuditLogger(
+    config.audit.logFilePath,
+    process.env.CODEFOX_AUDIT_STDOUT === "1",
+    config.audit.maxFileBytes
+  );
   const stateStore = new JsonStateStore(config.state.filePath);
   const loadedState = await stateStore.load();
   const pruned = pruneStateByTtl(loadedState, {
@@ -36,8 +40,17 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     approvalTtlHours: config.state.approvalTtlHours
   });
   const initialState = pruned.state;
+  const recoveredActiveRequests = initialState.sessions
+    .filter((session) => typeof session.activeRequestId === "string" && session.activeRequestId.length > 0)
+    .map((session) => ({ chatId: session.chatId, requestId: session.activeRequestId as string }));
 
-  if (pruned.removedSessions > 0 || pruned.removedApprovals > 0) {
+  if (recoveredActiveRequests.length > 0) {
+    for (const session of initialState.sessions) {
+      session.activeRequestId = undefined;
+    }
+  }
+
+  if (pruned.removedSessions > 0 || pruned.removedApprovals > 0 || recoveredActiveRequests.length > 0) {
     await stateStore.save(initialState);
   }
 
@@ -56,6 +69,7 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
   approvals = new ApprovalStore(initialState.approvals, persistState);
   const codex = new CodexCliAdapter(config.codex);
   await codex.ensureAvailable();
+  const codexRuntimeInfo = codex.getRuntimeInfo();
   const instructionPolicy = new InstructionPolicy(config.safety.instructionPolicy);
 
   const controller = createControllerFromAdapters({
@@ -95,12 +109,31 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         });
       }
 
+      if (recoveredActiveRequests.length > 0) {
+        await audit.log({
+          type: "state_active_requests_cleared",
+          clearedCount: recoveredActiveRequests.length,
+          clearedRequests: recoveredActiveRequests
+        });
+      }
+
       await audit.log({
         type: "service_start",
         repos: config.repos.map((repo) => repo.name),
         defaultMode: config.policy.defaultMode,
-        codexSessionIdleMinutes: config.state.codexSessionIdleMinutes
+        codexSessionIdleMinutes: config.state.codexSessionIdleMinutes,
+        codexVersionRaw: codexRuntimeInfo.codexVersionRaw,
+        codexVersion: codexRuntimeInfo.codexVersion
       });
+
+      if (codexRuntimeInfo.codexVersionWarning) {
+        await audit.log({
+          type: "codex_version_compatibility_warning",
+          warning: codexRuntimeInfo.codexVersionWarning,
+          codexVersionRaw: codexRuntimeInfo.codexVersionRaw,
+          codexVersion: codexRuntimeInfo.codexVersion
+        });
+      }
 
       await telegram.start((update) => controller.handleUpdate(update));
     },
@@ -109,10 +142,13 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         return;
       }
       stopped = true;
+      const shutdown = await controller.shutdown();
       telegram.stop();
       await stateStore.flush();
       await audit.log({
-        type: "service_stop"
+        type: "service_stop",
+        abortedActiveRequests: shutdown.abortedRequestIds,
+        pendingActiveRequestsAfterStop: shutdown.pendingRequestIds
       });
     }
   };
