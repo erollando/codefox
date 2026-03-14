@@ -2465,7 +2465,17 @@ export class CodeFoxController {
         capabilityAction: capabilityAction?.action
       });
 
-      await this.deps.telegram.sendMessage(chatId, formatTaskResult(result, repoName, mode));
+      const completionButtons = ["/details", "/status"];
+      if (this.externalHandoffs.has(chatId)) {
+        completionButtons.push("/handoff status");
+      }
+      await this.deps.telegram.sendMessage(
+        chatId,
+        formatTaskResult(result, repoName, mode, {
+          instructionPreview: toAuditPreview(instruction, 240)
+        }),
+        { commandButtons: completionButtons }
+      );
       resultSent = true;
 
       if (result.resumeRejected) {

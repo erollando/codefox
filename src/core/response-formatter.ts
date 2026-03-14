@@ -208,18 +208,30 @@ export function formatTaskStart(
   return `Working on your request in ${repo} (${mode}).${continuationSuffix}`;
 }
 
-export function formatTaskResult(result: TaskResult, repo: string, mode: PolicyMode): string {
+export function formatTaskResult(
+  result: TaskResult,
+  repo: string,
+  mode: PolicyMode,
+  context?: { instructionPreview?: string }
+): string {
   const safeSummary = redactSensitive(result.summary);
   const safeOutputTail = result.outputTail ? redactSensitive(result.outputTail) : undefined;
+  const safeInstructionPreview = context?.instructionPreview
+    ? redactSensitive(context.instructionPreview).trim()
+    : "";
 
   const state = result.ok ? "Completed" : result.aborted ? "Aborted" : result.timedOut ? "Timed out" : "Failed";
   const lines = [`${state}: ${safeSummary}`];
+  if (safeInstructionPreview) {
+    lines.push(`request: ${truncateForTelegram(safeInstructionPreview, 240)}`);
+  }
 
   // Avoid flooding Telegram with Codex banners/transcript on successful runs.
   if (!result.ok && safeOutputTail) {
     lines.push(`output:\n${safeOutputTail}`);
   }
 
+  lines.push("Next: use /details for full context.");
   return lines.join("\n");
 }
 
