@@ -116,8 +116,10 @@ npm run verify
   - shows active sessions/spec/approvals/handoff summary
   - shows mirrored transcript (incoming commands + CodeFox replies)
   - provides quick command buttons and free-text input
+  - auto-starts CodeFox runtime in background if missing
 - Local dashboard watch remains available: `npm run dashboard`.
 - Primary local interface is the chat REPL: `npm run cli -- --config <path> [chatId]`.
+  - auto-starts CodeFox runtime in background if missing
 - One-shot dashboard snapshot: `npm run local:cli -- --config <path> dashboard`.
 - Compatibility alias: `npm run chat:cli -- --config <path> [chatId]`.
 - REPL local shortcuts:

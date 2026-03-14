@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig, resolveConfigPath } from "./config.js";
+import { ensureCodeFoxRunning } from "./dev-runtime.js";
 import { buildExternalSessionId } from "./external-session-route.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
 import { JsonStateStore, pruneStateByTtl } from "./state-store.js";
@@ -648,7 +649,7 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
   }
 
   if (args.command === "chat") {
-    return runLocalChat(args, config, output);
+    return runLocalChat(args, config, output, resolvedConfigPath);
   }
 
   if (args.command === "dashboard") {
@@ -1072,10 +1073,29 @@ async function runLocalHandoff(
   return 0;
 }
 
-async function runLocalChat(args: LocalCliParsedArgs, config: LoadedConfig, output: LocalCliOutput): Promise<number> {
+async function runLocalChat(
+  args: LocalCliParsedArgs,
+  config: LoadedConfig,
+  output: LocalCliOutput,
+  resolvedConfigPath: string
+): Promise<number> {
   const effectiveUserId = args.userId ?? config.telegram.allowedUserIds[0];
   if (!effectiveUserId) {
     output.error("No allowed user id configured. Use --user <id> or set telegram.allowedUserIds.");
+    return 1;
+  }
+
+  try {
+    const ensured = await ensureCodeFoxRunning({
+      resolvedConfigPath,
+      stateFilePath: config.state.filePath
+    });
+    if (ensured.started) {
+      output.log(`CodeFox was not running. Started background service (pid ${ensured.pid}).`);
+      output.log(`Stop it with: npm run dev:stop -- --config ${resolvedConfigPath}`);
+    }
+  } catch (error) {
+    output.error(`Failed to auto-start CodeFox runtime: ${String(error)}`);
     return 1;
   }
 

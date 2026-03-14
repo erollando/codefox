@@ -66,6 +66,8 @@ What happens:
 npm run cli
 ```
 
+If CodeFox runtime is not running yet, the CLI auto-starts it in background.
+
 Inside REPL:
 
 ```text
@@ -82,6 +84,7 @@ npm run ui
 ```
 
 Open `http://127.0.0.1:8789` in your browser.
+If CodeFox runtime is not running yet, UI auto-starts it in background.
 
 What you can do in UI:
 - see active sessions (repo, mode, active request)

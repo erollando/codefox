@@ -5,6 +5,7 @@ import { JsonStateStore, pruneStateByTtl } from "./core/state-store.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./core/local-command-queue.js";
 import { LocalChatLog, defaultLocalChatLogPath } from "./core/local-chat-log.js";
 import { getCurrentRevision } from "./core/spec-workflow.js";
+import { ensureCodeFoxRunning } from "./core/dev-runtime.js";
 
 interface UiArgs {
   configPath?: string;
@@ -72,6 +73,20 @@ if (!args.ok) {
     console.error("No allowed user id configured. Set telegram.allowedUserIds or pass --user <id>.");
     process.exitCode = 1;
   } else {
+    try {
+      const ensured = await ensureCodeFoxRunning({
+        resolvedConfigPath: configPath,
+        stateFilePath: config.state.filePath
+      });
+      if (ensured.started) {
+        console.log(`CodeFox was not running. Started background service (pid ${ensured.pid}).`);
+      }
+    } catch (error) {
+      console.error(`Failed to auto-start CodeFox runtime: ${String(error)}`);
+      process.exitCode = 1;
+      process.exit();
+    }
+
     const server = http.createServer(async (request, response) => {
       try {
         const method = request.method ?? "GET";
@@ -416,7 +431,7 @@ const UI_HTML = `<!doctype html>
     }
     .session-item.active { border-color: var(--brand); background: var(--brand-soft); }
     .tiny { color: var(--muted); font-size: 12px; }
-    .main { display: grid; grid-template-rows: auto auto 1fr auto; min-height: calc(100vh - 32px); }
+    .main { display: grid; grid-template-rows: auto auto auto 1fr auto; min-height: calc(100vh - 32px); }
     .header, .context, .composer { padding: 12px; border-bottom: 1px solid var(--line); }
     .context { display: flex; gap: 8px; flex-wrap: wrap; }
     .pill {
@@ -432,6 +447,7 @@ const UI_HTML = `<!doctype html>
       gap: 8px;
       padding: 8px 12px;
       border-bottom: 1px solid var(--line);
+      align-items: flex-start;
     }
     .quick button, .msg-buttons button, .composer button {
       border: 1px solid var(--line);
