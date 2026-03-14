@@ -295,15 +295,15 @@ async function buildUiState(input: {
 
 function buildQuickCommands(activeRequest: boolean, hasApproval: boolean, hasOutstandingHandoff: boolean): string[] {
   if (hasApproval) {
-    return ["/approve", "/deny", "/pending", "/status"];
+    return ["/approve", "/deny", "/pending", "/status", "/service stop"];
   }
   if (activeRequest) {
-    return ["/abort", "/status", "/details"];
+    return ["/abort", "/status", "/details", "/service stop"];
   }
   if (hasOutstandingHandoff) {
-    return ["/continue", "/handoff show", "/status"];
+    return ["/continue", "/handoff show", "/status", "/service stop"];
   }
-  return ["/status", "/details", "/pending", "/handoff show"];
+  return ["/status", "/details", "/pending", "/handoff show", "/service stop"];
 }
 
 function resolveDefaultChatId(
