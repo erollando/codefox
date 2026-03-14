@@ -129,7 +129,6 @@ Notes:
 
 - Plain text (non-slash) input is treated as `/run <text>`.
 - While a run is active, plain text is treated as steer guidance (same behavior as `/steer <text>`).
-- Natural handoff continuation phrases like `continue handoff` or `resume from desk` map to `/handoff continue` when a handoff is available.
 - Untyped `/run` is allowed in every mode; `/act` remains available when you want explicit typed capability routing.
 - Run start/progress replies are concise by default; use `/details` for technical context.
 

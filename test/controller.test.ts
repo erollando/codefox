@@ -700,45 +700,6 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("auto-registered"))).toBe(true);
   });
 
-  it("maps natural handoff continuation phrases to /handoff continue", async () => {
-    const fakeCodex: FakeCodex = {
-      calls: [],
-      startTask(repoPath, context) {
-        fakeCodex.calls.push({ repoPath, context });
-        return {
-          abort: () => {},
-          result: Promise.resolve({ ok: true, summary: "done" })
-        };
-      }
-    };
-
-    const { controller } = makeController(fakeCodex);
-    await controller.handleUpdate(makeUpdate("/repo payments-api"));
-    await controller.handleUpdate(makeUpdate("/mode active"));
-    await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
-    await controller.handleUpdate(makeUpdate("/spec approve"));
-
-    const handoff: ExternalCodexHandoffBundle = {
-      schemaVersion: "v1",
-      leaseId: "lease_natural",
-      handoffId: "handoff_natural",
-      clientId: "vscode-codex",
-      createdAt: "2026-03-14T12:00:00.000Z",
-      taskId: "TASK-NATURAL",
-      specRevisionRef: "v1",
-      completedWork: [],
-      remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
-    };
-    const ingest = await controller.ingestExternalHandoff(100, "lease_natural", handoff);
-    expect(ingest.accepted).toBe(true);
-
-    await controller.handleUpdate(makeUpdate("continue handoff"));
-    await flushAsyncWork();
-
-    expect(fakeCodex.calls.length).toBe(1);
-    expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
-  });
-
   it("auto-bootstraps missing spec workflow during external handoff ingest", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],

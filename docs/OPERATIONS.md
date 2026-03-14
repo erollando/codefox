@@ -72,7 +72,6 @@ npm run verify
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
 - Plain text while a run is active is treated as steer guidance automatically.
-- Natural phrases like `continue handoff` and `resume from desk` auto-map to handoff continuation when available.
 - Run updates are concise by default; ask `/details` when you need full technical context.
 - `/close` to close stored Codex session thread explicitly
 - `/abort` to stop active Codex execution

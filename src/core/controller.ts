@@ -759,17 +759,6 @@ export class CodeFoxController {
           await this.handleSteer(chatId, userId, command.instruction, attachments);
           return;
         }
-        if (!isExplicitRunCommand && isHandoffContinuationIntent(text)) {
-          if (!this.externalHandoffs.has(chatId)) {
-            await this.deps.telegram.sendMessage(
-              chatId,
-              "No external handoff is available for this chat.\nNext: run `npm run handoff:cli` from your desk session, then retry."
-            );
-            return;
-          }
-          await this.handleHandoffCommand(chatId, userId, { type: "handoff", action: "continue" });
-          return;
-        }
         if (!session.selectedRepo) {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
@@ -2628,18 +2617,6 @@ function addAuditRef(message: string, viewId: string): string {
 
 function trimTerminalPunctuation(input: string): string {
   return input.trim().replace(/[.!\s]+$/g, "");
-}
-
-function isHandoffContinuationIntent(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized || normalized.startsWith("/")) {
-    return false;
-  }
-  return (
-    /^(continue|resume)\s+(handoff|desk session|from desk)\b/.test(normalized) ||
-    /^(continue|resume)\s+my\s+(handoff|desk session)\b/.test(normalized) ||
-    /^(continue|resume)\s+the\s+(handoff|desk session)\b/.test(normalized)
-  );
 }
 
 function formatExternalHandoffStatus(state: ExternalHandoffState): string {
