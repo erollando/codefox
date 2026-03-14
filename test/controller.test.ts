@@ -593,6 +593,63 @@ describe("CodeFoxController", () => {
     ).toBe(true);
   });
 
+  it("returns actionable guidance when /continue is requested without a handoff", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/continue"));
+
+    const message = telegram.sent.at(-1)?.text ?? "";
+    expect(message).toContain("No external handoff available.");
+    expect(message).toContain("npm run handoff:cli");
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status"]);
+  });
+
+  it("returns actionable guidance for invalid handoff work id", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+
+    const handoff: ExternalCodexHandoffBundle = {
+      schemaVersion: "v1",
+      leaseId: "lease_invalid_work",
+      handoffId: "handoff_invalid_work",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:00:00.000Z",
+      taskId: "TASK-INVALID-WORK",
+      specRevisionRef: "v1",
+      completedWork: [],
+      remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
+    };
+    const ingest = await controller.ingestExternalHandoff(100, "lease_invalid_work", handoff);
+    expect(ingest.accepted).toBe(true);
+
+    await controller.handleUpdate(makeUpdate("/continue rw-unknown"));
+    const message = telegram.sent.at(-1)?.text ?? "";
+    expect(message).toContain("is not available");
+    expect(message).toContain("/handoff show");
+  });
+
   it("aligns continuation repo with handoff source session repo", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],

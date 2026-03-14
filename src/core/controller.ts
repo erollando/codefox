@@ -1208,7 +1208,10 @@ export class CodeFoxController {
     const state = this.externalHandoffs.get(chatId);
     if (command.action === "clear") {
       if (!state) {
-        await this.deps.telegram.sendMessage(chatId, "No external handoff is currently stored.");
+        await this.deps.telegram.sendMessage(
+          chatId,
+          "No external handoff is currently stored.\nNext: use /status to check the current session."
+        );
         return;
       }
       this.externalHandoffs.delete(chatId);
@@ -1224,7 +1227,11 @@ export class CodeFoxController {
     }
 
     if (!state) {
-      await this.deps.telegram.sendMessage(chatId, "No external handoff available.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No external handoff available.\nNext: run `npm run handoff:cli` from your desk session, then use /handoff status.",
+        { commandButtons: ["/status"] }
+      );
       return;
     }
 
@@ -1255,7 +1262,10 @@ export class CodeFoxController {
           if (!registeredPath) {
             await this.deps.telegram.sendMessage(
               chatId,
-              `Cannot continue handoff ${state.bundle.handoffId}: source repo '${state.sourceRepoName}' could not be auto-registered from '${state.sourceRepoPath}'. Use /repo add ${state.sourceRepoName} <absolute-path>.`
+              [
+                `Cannot continue handoff ${state.bundle.handoffId}: source repo '${state.sourceRepoName}' could not be auto-registered from '${state.sourceRepoPath}'.`,
+                `Next: use /repo add ${state.sourceRepoName} <absolute-path>, then /continue.`
+              ].join("\n")
             );
             return;
           }
@@ -1271,7 +1281,10 @@ export class CodeFoxController {
         } else {
           await this.deps.telegram.sendMessage(
             chatId,
-            `Cannot continue handoff ${state.bundle.handoffId}: source repo '${state.sourceRepoName}' is not registered. Use /repo add ${state.sourceRepoName} <absolute-path>.`
+            [
+              `Cannot continue handoff ${state.bundle.handoffId}: source repo '${state.sourceRepoName}' is not registered.`,
+              `Next: use /repo add ${state.sourceRepoName} <absolute-path>, then /continue.`
+            ].join("\n")
           );
           return;
         }
@@ -1291,28 +1304,36 @@ export class CodeFoxController {
       );
     }
     if (!session.selectedRepo) {
-      await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+      await this.deps.telegram.sendMessage(chatId, "No repo selected.\nNext: use /repo <name>, then /continue.");
       return;
     }
     const specValidation = this.validateHandoffSpecRef(chatId, state.bundle.specRevisionRef);
     if (!specValidation.accepted) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Cannot continue handoff ${state.bundle.handoffId}: ${specValidation.reason}`
+        [
+          `Cannot continue handoff ${state.bundle.handoffId}: ${specValidation.reason}`,
+          "Next: use /spec status and /spec approve (or /spec draft if needed), then /continue."
+        ].join("\n")
       );
       return;
     }
     if (session.activeRequestId) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Request ${session.activeRequestId} is already running. Use /status or /abort first.`
+        `Request ${session.activeRequestId} is already running.\nNext: use /status, or /abort before /continue.`,
+        { commandButtons: ["/status", "/abort"] }
       );
       return;
     }
 
     const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
     if (outstanding.length === 0) {
-      await this.deps.telegram.sendMessage(chatId, "All handoff work items are already continued.");
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "All handoff work items are already continued.\nNext: use /handoff status, or start a new /run.",
+        { commandButtons: ["/handoff status", "/status"] }
+      );
       return;
     }
 
@@ -1322,7 +1343,7 @@ export class CodeFoxController {
     if (!nextWork) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Work item '${command.workId}' is not available. Use /handoff show for valid ids.`
+        `Work item '${command.workId}' is not available.\nNext: use /handoff show to list valid work ids.`
       );
       return;
     }
@@ -1333,7 +1354,10 @@ export class CodeFoxController {
     if (nextWork.requestedCapabilityRef && !capabilityAction) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Unknown capability action '${nextWork.requestedCapabilityRef}' for handoff item '${nextWork.id}'.`
+        [
+          `Unknown capability action '${nextWork.requestedCapabilityRef}' for handoff item '${nextWork.id}'.`,
+          "Next: use /handoff show and continue another item, or retry with /continue."
+        ].join("\n")
       );
       await this.deps.audit.log({
         type: "external_handoff_continue_blocked",
