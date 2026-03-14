@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="520" viewBox="0 0 1100 520" role="img" aria-labelledby="title desc">
+  <title id="title">CodeFox Trust Boundary</title>
+  <desc id="desc">Diagram showing CodeFox as authority for policy, approvals, communication, and audit, with external workers limited to leased reporting and handoff.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #0f172a; stroke-width: 2; rx: 14; }
+      .codefox { fill: #e2f2ff; stroke: #0369a1; stroke-width: 2.5; rx: 14; }
+      .worker { fill: #fef3c7; stroke: #b45309; stroke-width: 2; rx: 14; }
+      .local { fill: #dcfce7; stroke: #166534; stroke-width: 2; rx: 14; }
+      .text { font: 16px sans-serif; fill: #0f172a; }
+      .small { font: 14px sans-serif; fill: #334155; }
+      .title { font: 20px sans-serif; font-weight: 700; fill: #0f172a; }
+      .arrow { stroke: #334155; stroke-width: 2.2; fill: none; marker-end: url(#arrowhead); }
+      .dashed { stroke-dasharray: 8 6; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#334155" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1100" height="520" />
+  <text class="title" x="32" y="44">Trust Boundary: CodeFox Authority vs External Worker</text>
+
+  <rect class="panel" x="30" y="70" width="280" height="170" />
+  <text class="text" x="52" y="102">User Channels</text>
+  <text class="small" x="52" y="132">- Telegram</text>
+  <text class="small" x="52" y="156">- Local REPL / mobile UI</text>
+  <text class="small" x="52" y="180">- Voice/forms (future)</text>
+  <text class="small" x="52" y="212">Users do not talk to workers directly.</text>
+
+  <rect class="codefox" x="350" y="70" width="420" height="350" />
+  <text class="text" x="375" y="104">CodeFox Control Plane (Authority)</text>
+  <text class="small" x="375" y="136">- Policy and mode enforcement</text>
+  <text class="small" x="375" y="160">- Approvals and checkpoints</text>
+  <text class="small" x="375" y="184">- Session/routing lifecycle</text>
+  <text class="small" x="375" y="208">- User communication</text>
+  <text class="small" x="375" y="232">- Audit trail and traceability</text>
+  <text class="small" x="375" y="256">- Handoff ingest + continuation</text>
+
+  <rect class="local" x="375" y="286" width="370" height="110" />
+  <text class="text" x="392" y="318">Typed Capability Execution</text>
+  <text class="small" x="392" y="344">Laptop/local routines run via policy-checked packets</text>
+  <text class="small" x="392" y="368">No arbitrary raw remote shell by default</text>
+
+  <rect class="worker" x="820" y="90" width="250" height="160" />
+  <text class="text" x="842" y="122">External Worker</text>
+  <text class="small" x="842" y="152">- Codex client/plugin/skill</text>
+  <text class="small" x="842" y="176">- Leased bind</text>
+  <text class="small" x="842" y="200">- Typed events + handoff bundle</text>
+  <text class="small" x="842" y="224">No direct channel ownership</text>
+
+  <path class="arrow" d="M310 155 L350 155" />
+  <text class="small" x="318" y="145">requests</text>
+
+  <path class="arrow" d="M770 140 L820 140" />
+  <text class="small" x="705" y="128">leased bind/events</text>
+
+  <path class="arrow" d="M820 196 L770 196" />
+  <text class="small" x="700" y="214">progress/blocker/completion</text>
+
+  <path class="arrow dashed" d="M770 335 L980 335 L980 250" />
+  <text class="small" x="786" y="324">typed action packets only</text>
+
+  <text class="small" x="32" y="490">Rule: laptop/execution endpoints accept only typed, policy-checked packets derived from approved spec.</text>
+</svg>

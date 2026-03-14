@@ -1,382 +1,106 @@
 # CodeFox
 
-CodeFox is a secure remote delegation layer for developer work.
-You describe what you need in plain language, CodeFox turns it into a reviewable spec, enforces policy and approvals, and executes through Codex and typed local/cloud capabilities.
+**Secure remote developer delegation.**
 
-The practical outcome: you can start from your desk, continue from your phone, and keep control of risk-sensitive actions.
+CodeFox lets you start work at your desk, continue from your phone, and keep policy, approvals, and audit under your control.
 
-## What You Can Do Today
+## Who This Is For
 
-- Start work from Telegram with short natural requests.
-- Convert requests into structured specs that are diffable and approvable.
-- Run policy-bounded capability actions (`repo`, `jira`, `docs`, `ops`, `mail`, `calendar`).
-- Receive structured progress and approval checkpoints during execution.
-- Continue long-running work remotely via external Codex handoff into CodeFox.
+- **Solo developer**: keep coding moving when away from your desk.
+- **Tech lead**: delegate execution while keeping review/approval checkpoints.
+- **On-call engineer**: run bounded checks and triage safely from mobile.
 
-## Setup
-One-time: configure your codefox.config.json ...
-Optionally link to mcp like jira
-...
+## 60-Second Quickstart
 
-
-## Start Here
+### Goal 1: Run work from Telegram
 
 ```bash
 npm install
 cp config/codefox.config.sample.json config/codefox.config.json
 cp .env.example .env
-# edit config and .env
-npm run dev
-```
-
-Optional explicit config path:
-
-```bash
 npm run dev -- ./config/codefox.config.json
 ```
 
-## Run A Concrete Demo
+Then in Telegram:
 
-Desk-to-pocket continuation demo (external Codex -> CodeFox handoff):
-
-```bash
-npm run demo:remote-handoff
+```text
+/repo <your-repo>
+/mode active
+/spec draft investigate failing CI on branch feature/foo
+/spec approve
+run full checks and summarize failures
 ```
 
-- Full walkthrough: [Demo: Desk-to-Pocket Continuation](./docs/DEMO_REMOTE_HANDOFF.md)
-- One-page version: [One-Page Story](./docs/DEMO_ONE_PAGE_STORY.md)
-- Sample output: [remote-handoff-transcript.txt](./docs/demo-outputs/remote-handoff-transcript.txt)
+What happens:
+- CodeFox routes your request to Codex under the selected mode.
+- You get concise progress/completion updates.
+- Use `/details` for full technical context.
 
-## Documentation Map
+### Goal 2: Handoff desk work to phone
 
-- Operations and troubleshooting: [docs/OPERATIONS.md](./docs/OPERATIONS.md)
-- Demo walkthroughs: [`docs/DEMO_REMOTE_HANDOFF.md`](./docs/DEMO_REMOTE_HANDOFF.md), [`docs/DEMO_ONE_PAGE_STORY.md`](./docs/DEMO_ONE_PAGE_STORY.md)
-- Agent templates for downstream repos: [templates/agents/README.md](./templates/agents/README.md)
+At your desk (same machine where CodeFox is running):
 
-## Core Product Flow
+```bash
+npm run handoff:cli -- --config ./config/codefox.config.json
+```
 
-1. User sends messy intent.
-2. CodeFox compiles it into a structured draft/spec.
-3. User reviews, clarifies, approves checkpoints.
-4. Worker executes under policy constraints.
-5. CodeFox reports progress, blockers, approvals, and completion.
-6. If needed, remaining work is packaged and continued remotely.
+Then in Telegram:
 
-## Key Principles
+```text
+/handoff show
+/continue
+```
 
-- CodeFox is the authority for policy, approvals, user communication, and audit.
-- External workers do not own Telegram/user channels.
-- External workers do not get arbitrary laptop control.
-- The laptop executes only typed, policy-checked actions.
+What happens:
+- CodeFox binds to the active external route, ingests handoff state, and continues remaining work.
+- If multiple items exist, CodeFox defaults safely and lets you choose by id or index (`/continue 2`).
 
-## What CodeFox Is Not
-
-- Not a remote desktop replacement.
-- Not a second coding agent that bypasses Codex.
-- Not a free-form laptop control channel.
-
-## Commands (Telegram)
-
-Main commands:
-
-- `/help`
-- `/repos`
-- `/repo <name>`
-- `/mode <observe|active|full-access>`
-- `/observe | /active | /full-access`
-- `/run <instruction>`
-- `/act <pack.action> <instruction>`
-- `/steer <instruction>`
-- `/status`
-- `/details`
-- `/continue [work-id|index]`
-- `/resume [work-id|index]`
-- `/abort`
-- `/close`
-
-Spec workflow:
-
-- `/spec template`
-- `/spec draft <intent>`
-- `/spec clarify <note>`
-- `/spec show`
-- `/spec status`
-- `/spec diff`
-- `/spec approve [force]`
-- `/spec clear`
-
-Capabilities and policy:
-
-- `/capabilities [mail|calendar|repo|jira|ops|docs]`
-- `/policy [observe|active|full-access]`
-- `/reasoning <minimal|low|medium|high|xhigh|default>` (alias: `/effort`)
-
-Repo management:
-
-- `/repo add <name> <absolute-path>`
-- `/repo init <name> [base-path]`
-- `/repo bootstrap <name> <python|java|nodejs> [base-path]`
-- `/repo template <name> <python|java|nodejs>`
-- `/repo playbook <name> [overwrite]`
-- `/repo guide [name]`
-- `/repo remove <name>`
-- `/repo info [name]`
-
-Handoff and audit:
-
-- `/continue [work-id|index]` (shortcut for `/handoff continue [work-id|index]`)
-- `/resume [work-id|index]` (alias of `/continue`)
-- `/handoff [status|show|continue [work-id]|clear]`
-- `/audit <view_id>`
-
-Notes:
-
-- Plain text (non-slash) input is treated as `/run <text>`.
-- If no repo is selected, CodeFox auto-selects a default repo (single configured repo, otherwise most recent context) and reports the choice.
-- While a run is active, plain text is treated as steer guidance (same behavior as `/steer <text>`).
-- While a run is being prepared, plain text follow-ups are queued and auto-applied when the run starts.
-- Untyped `/run` is allowed in every mode; `/act` remains available when you want explicit typed capability routing.
-- Run start/progress replies are concise by default; use `/details` for technical context.
-
-## Session Model
-
-CodeFox keeps one Codex session thread per chat and reuses it until:
-
-- `/close`
-- repo change
-- mode change
-- idle timeout (`state.codexSessionIdleMinutes`)
-- resume rejection from Codex
-
-`/steer` during an active run uses deterministic fallback:
-
-1. interrupt active run
-2. merge pending steer messages
-3. resume the same Codex session thread
-
-## Safety Model
-
-- Unknown users/chats are denied.
-- Modes map to capability boundaries:
-  - `observe` -> read-only
-  - `active` -> workspace-write
-  - `full-access` -> danger-full-access
-- Task execution is constrained to configured repo roots.
-- Instruction policy can block risky patterns, forbidden paths, and non-allowlisted download domains.
-- Forbidden path policy is injected into Codex run guidance.
-- Codex subprocess env can be filtered via `codex.blockedEnvVars`.
-- Task summaries/output are redacted before Telegram and audit rendering.
-- Long Telegram responses are split into ordered message parts.
-
-Default forbidden paths if not configured:
-
-- `.env`
-- `.env.*`
-- `*.pem`
-- `*.key`
-- `.aws/**`
-- `.ssh/**`
-- `credentials/**`
-- `secrets/**`
-
-## External Codex Integration
-
-CodeFox supports transport-agnostic external Codex integration in two stages:
-
-Stage 1: attached reporting
-
-- External Codex binds with a lease to an active CodeFox session.
-- It emits typed events:
-  - `progress`
-  - `blocker`
-  - `approval_request`
-  - `completion`
-- CodeFox relays user communication, enforces approvals, and stores audit history.
-
-Stage 2: continuation handoff
-
-- After external execution, client submits a typed handoff bundle.
-- CodeFox validates spec revision linkage before storing continuation state.
-- User continues via `/handoff show` and `/handoff continue [work-id]`.
-- User can use `/continue [work-id|index]` (or `/resume ...`) as shorter continuation commands.
-- Telegram handoff messages include one-tap command buttons for show/continue.
-
-External relay HTTP adapter (optional):
-
-- `GET /health`
-- `GET /v1/external-codex/routes`
-- `GET /v1/external-codex/approval?leaseId=<id>&approvalKey=<key>`
-- `POST /v1/external-codex/bind`
-- `POST /v1/external-codex/heartbeat`
-- `POST /v1/external-codex/revoke`
-- `POST /v1/external-codex/event`
-- `POST /v1/external-codex/handoff`
-
-Only one active lease is allowed per external session id; clients must revoke before re-binding.
-`GET /health` is intentionally unauthenticated for simple local liveness checks.
-
-## Local CLI (Primary: Chat Shell)
+### Goal 3: Use local chat-like CLI
 
 ```bash
 npm run cli -- --config ./config/codefox.config.json
-# optional: start directly on a specific chat
-npm run cli -- --config ./config/codefox.config.json 100
-
-# one-shot operational utilities (advanced)
-npm run local:cli -- sessions
-npm run local:cli -- approvals
-npm run local:cli -- specs
-npm run local:cli -- session 100
-npm run local:cli -- send 100 "/status"
-npm run local:cli -- approve 100
-npm run local:cli -- deny 100
-npm run local:cli -- status 100
-npm run local:cli -- handoff-status 100
-npm run local:cli -- handoff-show 100
-npm run local:cli -- continue 100 rw-1
-npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoint implemented"
 ```
 
-`npm run cli` starts the persistent local REPL (compat alias: `npm run chat:cli`) so you can work in a chat-like loop without repeating `chatId`.
-Inside the REPL, `:help` shows local shortcuts (`:status`, `:details`, `:approve`, `:deny`, `:handoff`, `:continue [workId]`, `:chat [chatId]`, `:exit`).
-Any non-shortcut line is queued as-is (plain text or Telegram slash command).
-`send` writes a command envelope into `<state-dir>/local-command-queue/inbox`.
-When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
-`approve`, `deny`, `status`, `handoff-status`, `handoff-show`, and `continue` are shortcut local CLI commands that enqueue `/approve`, `/deny`, `/status`, `/handoff status`, `/handoff show`, and `/continue [work-id]` into the same controller path; when `chatId` is omitted, CodeFox auto-selects the default/single/most-recent chat.
-`handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
-When multiple active routes exist, `handoff:cli` shows them clearly and lets you choose; Enter keeps the most recently used route.
-When `chatId` is provided but local session state is missing/stale, `handoff:cli` can still resolve via active relay routes.
-`--remaining` is optional and auto-derived from available context (active request id, Codex thread id) when omitted.
-Use `--repo-path <absolute-path>` only when you want to override automatic source repo path detection.
-Handoff bundles include source repo metadata; on `/handoff continue`, CodeFox auto-aligns to the source repo and can auto-register it when the bundle includes a valid local path.
-If relay is unreachable, `handoff:cli` can start CodeFox and retry (`--start-if-missing` / `--no-start-if-missing`; interactive prompt by default on TTY).
-If `handoff:cli` auto-starts CodeFox in background, it prints the process PID, a direct stop command, and writes a PID file (`<state-dir>/codefox.dev.pid`).
-If no local spec exists for the chat yet, CodeFox auto-bootstraps and approves one during handoff ingest.
+Inside REPL:
 
-## Configuration
-
-Copy the sample config to `config/codefox.config.json`:
-
-```json
-{
-  "telegram": {
-    "allowedUserIds": [123456789],
-    "allowedChatIds": [123456789],
-    "pollingTimeoutSeconds": 30,
-    "pollIntervalMs": 1000,
-    "discardBacklogOnStart": true
-  },
-  "repos": [],
-  "_note_repos": "Optional: keep repos empty and use /repo init <name> [base-path], or replace with your real repo mappings.",
-  "codex": {
-    "command": "codex",
-    "baseArgs": ["exec"],
-    "model": "gpt-5.3-codex",
-    "reasoningEffort": "default",
-    "configOverrides": [],
-    "runArgTemplate": ["{instruction}"],
-    "repoArgTemplate": [],
-    "timeoutMs": 1800000,
-    "blockedEnvVars": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"],
-    "preflightEnabled": true,
-    "preflightArgs": ["--version"],
-    "preflightTimeoutMs": 5000
-  },
-  "policy": {
-    "defaultMode": "observe",
-    "specPolicy": {
-      "active": {
-        "requiredSectionsForApproval": ["CONSTRAINTS", "DONE_WHEN"],
-        "allowForceApproval": false
-      },
-      "full-access": {
-        "requiredSectionsForApproval": ["CONSTRAINTS", "DONE_WHEN"],
-        "allowForceApproval": false
-      }
-    }
-  },
-  "repoInit": {
-    "defaultParentPath": "/home/<your-user>/git"
-  },
-  "safety": {
-    "requireAgentsForRuns": false,
-    "instructionPolicy": {
-      "blockedPatterns": [],
-      "allowedDownloadDomains": [],
-      "forbiddenPathPatterns": [
-        ".env",
-        ".env.*",
-        "*.pem",
-        "*.key",
-        ".aws/**",
-        ".ssh/**",
-        "credentials/**",
-        "secrets/**"
-      ]
-    }
-  },
-  "state": {
-    "filePath": "./.codefox/state.json",
-    "sessionTtlHours": 168,
-    "approvalTtlHours": 72,
-    "codexSessionIdleMinutes": 120
-  },
-  "audit": { "logFilePath": "./logs/audit.log", "maxFileBytes": 5242880 },
-  "externalRelay": {
-    "enabled": false,
-    "host": "127.0.0.1",
-    "port": 8787,
-    "authTokenEnvVar": "CODEFOX_EXTERNAL_RELAY_TOKEN"
-  }
-}
+```text
+status
+what changed in the last run?
+:handoff
+:continue rw-1
 ```
 
-State and runtime notes:
+## Trust Boundary
 
-- `state.filePath` persists sessions, approvals, specs, and external handoff continuation state.
-- Stale `activeRequestId` values are cleared on startup.
-- `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records on startup.
-- `state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.
-- `audit.maxFileBytes` truncates the audit log at the configured limit (default 5 MiB).
-- `policy.specPolicy` overrides mode-specific spec requirements.
-- If `externalRelay.authTokenEnvVar` is set, startup fails unless env var exists, and clients must send `Authorization: Bearer <token>`.
-- `telegram.discardBacklogOnStart` drops offline backlog updates on startup.
+CodeFox is the authority. External workers are executors.
 
-Codex runtime options you can set in `codex`:
+![CodeFox Trust Boundary](./docs/assets/trust-boundary.svg)
 
-- `model` -> `--model`
-- `reasoningEffort` -> `-c model_reasoning_effort="..."` (`minimal|low|medium|high|xhigh`)
-- `profile` -> `--profile` (optional)
-- `configOverrides` -> additional `-c key=value`
+## Common Use Cases
 
-Jira MCP bridge example (`jira-mcp-bridge` at `/home/enrico/git/jira-mcp-bridge`):
+1. **Desk-to-pocket continuation**
+- You are mid-feature in an external Codex client, leave your desk, and continue from Telegram with `/handoff` + `/continue`.
 
-```json
-"configOverrides": [
-  "mcp_servers={ \"jira-mcp-bridge\" = { command = \"bash\", args = [\"-lc\", \"cd /home/enrico/git/jira-mcp-bridge && exec ./scripts/start-server.sh\"], env = { ACLI_PATH = \"acli\" } } }"
-]
-```
+2. **Approval-gated risky step**
+- Worker asks for approval before a mutating action; you decide with `/approve` or `/deny`.
 
-After updating config, restart CodeFox so new Codex runs load the MCP server.
+3. **Fast incident triage**
+- From phone, run bounded checks, gather logs, and post Jira updates without opening a laptop session.
 
-## Environment Variables
+## Current Limits
 
-CodeFox auto-loads `.env` from project root.
+- Local UI is deferred; Telegram + local REPL are the active interfaces.
+- Capability packs exist as policy contracts, but backend maturity differs by pack.
+- Changelog-driven capability tracking is currently manual.
+- Behavior can still depend on installed Codex CLI/runtime version.
 
-- `TELEGRAM_BOT_TOKEN`: required Telegram bot token
-- `CODEFOX_CONFIG`: optional config path (default `./config/codefox.config.json`)
-- `CODEFOX_AUDIT_STDOUT`: set to `1` to mirror audit events to stdout
-- `CODEFOX_ENV_FILE`: optional alternate env file path (default `.env`)
-- `CODEFOX_EXTERNAL_RELAY_TOKEN`: optional bearer token when `externalRelay.authTokenEnvVar` is configured
+## Documentation By Goal
 
-Existing shell environment variables take precedence over `.env` values.
+- **Start/operate/troubleshoot**: [Manual](./docs/MANUAL.md)
+- **Desk-to-pocket walkthrough**: [Demo: Remote Handoff](./docs/DEMO_REMOTE_HANDOFF.md)
+- **One-page end-user story**: [Demo: One-Page Story](./docs/DEMO_ONE_PAGE_STORY.md)
+- **Example transcript output**: [demo-outputs/remote-handoff-transcript.txt](./docs/demo-outputs/remote-handoff-transcript.txt)
 
-For Codex CLI, keep `codex.baseArgs` as `["exec"]` for non-interactive runs.
+## Product Statement
 
-## Validate
-
-```bash
-npm run build
-npm test
-npm run verify
-```
+CodeFox converts messy human requests into structured, reviewable execution and runs them through policy-bounded workers with full approval and audit control.
