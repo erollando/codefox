@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig, resolveConfigPath } from "./config.js";
 import { buildExternalSessionId } from "./external-session-route.js";
@@ -30,7 +30,8 @@ export interface LocalCliParsedArgs {
     | "continue"
     | "status"
     | "handoff-status"
-    | "handoff-show";
+    | "handoff-show"
+    | "stop";
   chatId?: number;
   userId?: number;
   text?: string;
@@ -140,7 +141,7 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
     };
   }
 
-  if (command === "sessions" || command === "approvals" || command === "specs") {
+  if (command === "sessions" || command === "approvals" || command === "specs" || command === "stop") {
     return {
       ok: true,
       args: {
@@ -627,6 +628,10 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
 
   if (args.command === "handoff") {
     return runLocalHandoff(args, config, output, resolvedConfigPath);
+  }
+
+  if (args.command === "stop") {
+    return stopCodeFoxProcess(config.state.filePath, output);
   }
 
   if (args.command === "chat") {
@@ -1714,6 +1719,114 @@ async function persistRelayPid(pidFilePath: string, pid: number): Promise<void> 
   }
 }
 
+async function stopCodeFoxProcess(stateFilePath: string, output: LocalCliOutput): Promise<number> {
+  const pidFilePath = relayPidFilePath(stateFilePath);
+  const pid = await readRelayPid(pidFilePath);
+  if (!pid) {
+    output.error(`No background CodeFox PID found at ${pidFilePath}.`);
+    output.log("If CodeFox was started manually, stop it in that terminal.");
+    return 1;
+  }
+
+  const alive = isProcessAlive(pid);
+  if (!alive) {
+    await removePidFile(pidFilePath);
+    output.log(`Removed stale pid file ${pidFilePath} (pid ${pid} was not running).`);
+    return 0;
+  }
+
+  const looksSafeToStop = await isLikelyCodeFoxProcess(pid);
+  if (!looksSafeToStop) {
+    output.error(`Refusing to stop pid ${pid}: process does not look like CodeFox.`);
+    output.error(`Inspect pid ${pid} manually, then remove stale file ${pidFilePath} if needed.`);
+    return 1;
+  }
+
+  try {
+    process.kill(pid);
+  } catch (error) {
+    output.error(`Failed to stop CodeFox pid ${pid}: ${String(error)}.`);
+    return 1;
+  }
+
+  const stoppedGracefully = await waitForProcessExit(pid, 5000);
+  if (!stoppedGracefully) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      output.error(`CodeFox pid ${pid} did not stop gracefully and SIGKILL failed: ${String(error)}.`);
+      return 1;
+    }
+    const stoppedAfterKill = await waitForProcessExit(pid, 2000);
+    if (!stoppedAfterKill) {
+      output.error(`CodeFox pid ${pid} is still running after SIGKILL.`);
+      return 1;
+    }
+  }
+
+  await removePidFile(pidFilePath);
+  output.log(`Stopped background CodeFox process pid ${pid}.`);
+  return 0;
+}
+
+async function readRelayPid(pidFilePath: string): Promise<number | undefined> {
+  try {
+    const raw = await readFile(pidFilePath, "utf8");
+    const parsed = Number(raw.trim());
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isProcessAlive(pid);
+}
+
+async function isLikelyCodeFoxProcess(pid: number): Promise<boolean> {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8");
+    const normalized = cmdline.replace(/\u0000/g, " ");
+    return normalized.includes("codefox") && (normalized.includes("src/index.ts") || normalized.includes("dist/index.js"));
+  } catch {
+    return true;
+  }
+}
+
+async function removePidFile(pidFilePath: string): Promise<void> {
+  try {
+    await unlink(pidFilePath);
+  } catch {
+    // Non-fatal cleanup.
+  }
+}
+
 async function waitForRelayReady(baseUrl: string, authToken: string | undefined, timeoutMs: number): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt <= timeoutMs) {
@@ -1753,6 +1866,7 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] [--user <id>] handoff-show [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] continue [chatId] [workId]",
     "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
+    "  npm run local:cli -- [--config <path>] stop",
     "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
     "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>] [--repo-path <path>]",

@@ -31,6 +31,7 @@ npm start -- ./config/codefox.config.json
 ## Stop
 
 - Send `SIGINT` (`Ctrl+C`) or `SIGTERM`.
+- For auto-started/background dev process: `npm run dev:stop -- --config <path>` (or `npm run local:cli -- --config <path> stop`).
 - CodeFox aborts in-flight Codex runs, waits briefly for shutdown, ends polling, then writes `service_stop`.
 - On startup, pending Telegram backlog can be discarded when `telegram.discardBacklogOnStart=true`.
 
@@ -128,6 +129,7 @@ npm run verify
   - `npm run local:cli -- [--config <path>] handoff-status [chatId]`
   - `npm run local:cli -- [--config <path>] handoff-show [chatId]`
   - `npm run local:cli -- [--config <path>] continue [chatId] [workId]`
+  - `npm run local:cli -- [--config <path>] stop` (stop background dev process from PID file)
   - These enqueue `/approve`, `/deny`, `/status`, `/handoff status`, `/handoff show`, and `/continue [workId]` via the same local command queue/controller path.
   - If `chatId` is omitted, CodeFox auto-selects single/default/most-recent chat context.
 - For an operator-facing handoff bridge without manual API calls, use:
