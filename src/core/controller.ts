@@ -151,6 +151,7 @@ export interface ControllerDeps {
     chatId: number;
     userId: number;
   }) => Promise<boolean>;
+  requestServiceStop?: (input: { chatId: number; userId: number }) => Promise<boolean>;
 }
 
 export class CodeFoxController {
@@ -657,6 +658,8 @@ export class CodeFoxController {
       }
       case "status": {
         const currentSession = this.deps.sessions.getOrCreate(chatId);
+        const handoffState = this.externalHandoffs.get(chatId);
+        const pending = this.deps.approvals.get(chatId);
         const viewId = makeViewId();
         await this.deps.audit.log({
           type: "status_viewed",
@@ -678,7 +681,10 @@ export class CodeFoxController {
               this.specPolicy.forMode(currentSession.mode)
             ),
             viewId
-          )
+          ),
+          {
+            commandButtons: buildPrimaryCommandButtons(currentSession.activeRequestId, Boolean(pending), Boolean(handoffState))
+          }
         );
         return;
       }
@@ -707,11 +713,18 @@ export class CodeFoxController {
         if (!pending) {
           await this.deps.telegram.sendMessage(
             chatId,
-            "No pending approval.\nNext: run /status, or start work with plain text or /run <instruction>."
+            "No pending approval.\nNext: run /status, or start work with plain text or /run <instruction>.",
+            { commandButtons: ["/status", "/details"] }
           );
           return;
         }
-        await this.deps.telegram.sendMessage(chatId, formatPendingApproval(pending));
+        await this.deps.telegram.sendMessage(chatId, formatPendingApproval(pending), {
+          commandButtons: ["/approve", "/deny", "/status"]
+        });
+        return;
+      }
+      case "service": {
+        await this.handleServiceCommand(chatId, userId, command);
         return;
       }
       case "handoff": {
@@ -1080,6 +1093,51 @@ export class CodeFoxController {
       threadId: closedThreadId
     });
     await this.deps.telegram.sendMessage(chatId, `Codex session closed (${closedThreadId}).`);
+  }
+
+  private async handleServiceCommand(
+    chatId: number,
+    userId: number,
+    command: Extract<ParsedCommand, { type: "service" }>
+  ): Promise<void> {
+    if (command.action !== "stop") {
+      await this.deps.telegram.sendMessage(chatId, "Unknown service command.");
+      return;
+    }
+
+    if (!command.confirm) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Service stop requested.\nNext: confirm with /service stop confirm.",
+        { commandButtons: ["/service stop confirm", "/status"] }
+      );
+      return;
+    }
+
+    if (!this.deps.requestServiceStop) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Service stop is not available in this runtime.\nNext: stop it from host shell with Ctrl+C or npm run dev:stop."
+      );
+      return;
+    }
+
+    const accepted = await this.deps.requestServiceStop({ chatId, userId });
+    if (!accepted) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Service stop request was rejected.\nNext: retry in a moment or stop from host shell."
+      );
+      return;
+    }
+
+    await this.deps.audit.log({
+      type: "service_stop_requested",
+      chatId,
+      userId,
+      source: "telegram_command"
+    });
+    await this.deps.telegram.sendMessage(chatId, "Service stop accepted. CodeFox is shutting down.");
   }
 
   private async handleApprove(chatId: number, userId: number): Promise<void> {
@@ -2494,8 +2552,13 @@ export class CodeFoxController {
       });
 
       const completionButtons = ["/details", "/status"];
-      if (this.externalHandoffs.has(chatId)) {
-        completionButtons.push("/handoff status");
+      const handoffState = this.externalHandoffs.get(chatId);
+      if (handoffState) {
+        if (countOutstandingHandoffWork(handoffState) > 0) {
+          completionButtons.push("/continue");
+        } else {
+          completionButtons.push("/handoff status");
+        }
       }
       await this.deps.telegram.sendMessage(
         chatId,
@@ -2955,6 +3018,23 @@ function countOutstandingHandoffWork(state: ExternalHandoffState): number {
   return state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id)).length;
 }
 
+function buildPrimaryCommandButtons(
+  activeRequestId: string | undefined,
+  hasPendingApproval: boolean,
+  hasHandoff: boolean
+): string[] {
+  if (hasPendingApproval) {
+    return ["/approve", "/deny", "/status"];
+  }
+  if (activeRequestId) {
+    return ["/abort", "/status", "/details"];
+  }
+  if (hasHandoff) {
+    return ["/continue", "/handoff show", "/status"];
+  }
+  return ["/status", "/details", "/pending"];
+}
+
 function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
   const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
   const nextWork = outstanding[0];
@@ -3059,6 +3139,7 @@ export function createControllerFromAdapters(params: {
     chatId: number;
     userId: number;
   }) => Promise<boolean>;
+  requestServiceStop?: (input: { chatId: number; userId: number }) => Promise<boolean>;
 }): CodeFoxController {
   return new CodeFoxController({
     telegram: params.telegram,
@@ -3081,7 +3162,8 @@ export function createControllerFromAdapters(params: {
     persistState: params.persistState,
     specPolicy: params.specPolicy,
     capabilityRegistry: params.capabilityRegistry,
-    externalApprovalDecision: params.externalApprovalDecision
+    externalApprovalDecision: params.externalApprovalDecision,
+    requestServiceStop: params.requestServiceStop
   });
 }
 

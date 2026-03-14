@@ -10,12 +10,13 @@ import { ExternalCodexRelay } from "./core/external-codex-relay.js";
 import { deriveExternalRoutes } from "./core/external-session-route.js";
 import { InstructionPolicy } from "./core/instruction-policy.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./core/local-command-queue.js";
+import { LocalChatLog, defaultLocalChatLogPath } from "./core/local-chat-log.js";
 import { PolicyEngine } from "./core/policy.js";
 import { RepoRegistry } from "./core/repo-registry.js";
 import { SessionManager } from "./core/session-manager.js";
 import { SpecPolicyEngine } from "./core/spec-policy.js";
 import { JsonStateStore, pruneStateByTtl } from "./core/state-store.js";
-import type { TelegramUpdate } from "./adapters/telegram.js";
+import type { TelegramAdapter, TelegramSendOptions, TelegramUpdate } from "./adapters/telegram.js";
 
 export interface AppRuntime {
   start(): Promise<void>;
@@ -26,12 +27,41 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
   const resolvedConfigPath = resolveConfigPath(configPath);
   const config = await loadConfig(resolvedConfigPath);
 
-  const telegram = new TelegramPollingAdapter(
+  const rawTelegram = new TelegramPollingAdapter(
     config.telegram.token,
     config.telegram.pollingTimeoutSeconds,
     config.telegram.pollIntervalMs,
     config.telegram.discardBacklogOnStart
   );
+  const localChatLog = new LocalChatLog(defaultLocalChatLogPath(config.state.filePath));
+  const telegram: TelegramAdapter = {
+    start: async (onUpdate) =>
+      rawTelegram.start(async (update) => {
+        const incoming = extractIncomingText(update);
+        if (incoming) {
+          await safeAppendLocalChatLog(localChatLog, {
+            chatId: incoming.chatId,
+            userId: incoming.userId,
+            direction: "inbound",
+            channel: "telegram",
+            text: incoming.text
+          });
+        }
+        await onUpdate(update);
+      }),
+    stop: () => rawTelegram.stop(),
+    sendMessage: async (chatId: number, text: string, options?: TelegramSendOptions) => {
+      await rawTelegram.sendMessage(chatId, text, options);
+      await safeAppendLocalChatLog(localChatLog, {
+        chatId,
+        direction: "outbound",
+        channel: "telegram",
+        text,
+        commandButtons: options?.commandButtons
+      });
+    },
+    downloadFile: (fileId, metadata) => rawTelegram.downloadFile(fileId, metadata)
+  };
   const access = new AccessControl(config.telegram.allowedUserIds, config.telegram.allowedChatIds);
   const repos = new RepoRegistry(config.repos);
   const audit = new AuditLogger(
@@ -82,6 +112,41 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
   const codexRuntimeInfo = codex.getRuntimeInfo();
   const instructionPolicy = new InstructionPolicy(config.safety.instructionPolicy);
   const localCommandQueue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
+  let started = false;
+  let stopped = false;
+  let stopPromise: Promise<void> | undefined;
+
+  const stopInternal = async (reason: string, requestedBy?: { chatId: number; userId: number }): Promise<void> => {
+    if (stopped) {
+      return stopPromise ?? Promise.resolve();
+    }
+    if (stopPromise) {
+      return stopPromise;
+    }
+
+    stopPromise = (async () => {
+      stopped = true;
+      localCommandQueue.stop();
+      if (externalRelayHttpServer) {
+        await externalRelayHttpServer.stop();
+        await audit.log({
+          type: "external_relay_http_stopped"
+        });
+      }
+      const shutdown = await controller.shutdown();
+      telegram.stop();
+      await stateStore.flush();
+      await audit.log({
+        type: "service_stop",
+        reason,
+        requestedBy,
+        abortedActiveRequests: shutdown.abortedRequestIds,
+        pendingActiveRequestsAfterStop: shutdown.pendingRequestIds
+      });
+    })();
+    return stopPromise;
+  };
+
   const externalRelay = new ExternalCodexRelay({
     audit,
     notify: (chatId, message) => telegram.sendMessage(chatId, message),
@@ -167,11 +232,17 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     externalApprovalDecision: async ({ leaseId, approvalKey, approved, userId }) => {
       const result = await externalRelay.decideApproval(leaseId, approvalKey, approved, userId);
       return Boolean(result);
+    },
+    requestServiceStop: async ({ chatId, userId }) => {
+      if (stopped) {
+        return false;
+      }
+      setTimeout(() => {
+        void stopInternal("telegram_service_stop", { chatId, userId });
+      }, 25);
+      return true;
     }
   });
-
-  let started = false;
-  let stopped = false;
 
   return {
     async start(): Promise<void> {
@@ -240,6 +311,13 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
           userId: command.userId,
           source: command.source
         });
+        await safeAppendLocalChatLog(localChatLog, {
+          chatId: command.chatId,
+          userId: command.userId,
+          direction: "inbound",
+          channel: "local",
+          text: command.text
+        });
         try {
           await controller.handleUpdate(buildLocalCommandUpdate(command));
           await audit.log({
@@ -262,27 +340,44 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
       await telegram.start((update) => controller.handleUpdate(update));
     },
     async stop(): Promise<void> {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
-      localCommandQueue.stop();
-      if (externalRelayHttpServer) {
-        await externalRelayHttpServer.stop();
-        await audit.log({
-          type: "external_relay_http_stopped"
-        });
-      }
-      const shutdown = await controller.shutdown();
-      telegram.stop();
-      await stateStore.flush();
-      await audit.log({
-        type: "service_stop",
-        abortedActiveRequests: shutdown.abortedRequestIds,
-        pendingActiveRequestsAfterStop: shutdown.pendingRequestIds
-      });
+      await stopInternal("host_stop");
     }
   };
+}
+
+function extractIncomingText(update: TelegramUpdate): { chatId: number; userId?: number; text: string } | undefined {
+  const message = update.message;
+  if (!message || typeof message.chat?.id !== "number") {
+    return undefined;
+  }
+  const text = typeof message.text === "string" ? message.text : typeof message.caption === "string" ? message.caption : "";
+  const normalized = text.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    chatId: message.chat.id,
+    userId: typeof message.from?.id === "number" ? message.from.id : undefined,
+    text: normalized
+  };
+}
+
+async function safeAppendLocalChatLog(
+  localChatLog: LocalChatLog,
+  entry: {
+    chatId: number;
+    userId?: number;
+    direction: "inbound" | "outbound";
+    channel: "telegram" | "local";
+    text: string;
+    commandButtons?: string[];
+  }
+): Promise<void> {
+  try {
+    await localChatLog.append(entry);
+  } catch (error) {
+    console.error(`Local chat log append failure: ${String(error)}`);
+  }
 }
 
 function buildLocalCommandUpdate(command: { id: string; chatId: number; userId: number; text: string }): TelegramUpdate {

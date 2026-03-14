@@ -44,6 +44,7 @@ export function formatHelp(): string {
     "/run <instruction>",
     "/steer <instruction>",
     "/close",
+    "/service stop [confirm]",
     "/status",
     "/details",
     "/continue [work-id|index]",

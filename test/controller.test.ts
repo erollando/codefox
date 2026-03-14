@@ -104,6 +104,7 @@ function makeController(
       chatId: number;
       userId: number;
     }) => Promise<boolean>;
+    requestServiceStop?: (input: { chatId: number; userId: number }) => Promise<boolean>;
   }
 ) {
   const telegram = options?.telegram ?? new FakeTelegram();
@@ -134,7 +135,8 @@ function makeController(
     initialSpecWorkflows: options?.initialSpecWorkflows,
     initialExternalHandoffs: options?.initialExternalHandoffs,
     persistState: options?.persistState,
-    externalApprovalDecision: options?.externalApprovalDecision
+    externalApprovalDecision: options?.externalApprovalDecision,
+    requestServiceStop: options?.requestServiceStop
   });
 
   return { controller, telegram, audit, approvals, sessions };
@@ -2303,5 +2305,35 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/close"));
     expect(sessions.getOrCreate(100).codexThreadId).toBeUndefined();
     expect(telegram.sent.some((item) => item.text.includes("Codex session closed"))).toBe(true);
+  });
+
+  it("requires confirmation before stopping service and then requests stop", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+    const stopRequests: Array<{ chatId: number; userId: number }> = [];
+    const { controller, telegram, audit } = makeController(fakeCodex, {
+      requestServiceStop: async (input) => {
+        stopRequests.push(input);
+        return true;
+      }
+    });
+
+    await controller.handleUpdate(makeUpdate("/service stop"));
+    const confirmPrompt = telegram.sent.at(-1);
+    expect(confirmPrompt?.text).toContain("confirm with /service stop confirm");
+    expect(confirmPrompt?.options?.commandButtons).toEqual(["/service stop confirm", "/status"]);
+    expect(stopRequests.length).toBe(0);
+
+    await controller.handleUpdate(makeUpdate("/service stop confirm"));
+    expect(stopRequests).toEqual([{ chatId: 100, userId: 1 }]);
+    expect(telegram.sent.at(-1)?.text).toContain("Service stop accepted");
+    expect(audit.events.some((event) => event.type === "service_stop_requested")).toBe(true);
   });
 });

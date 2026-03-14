@@ -35,6 +35,8 @@ What happens:
 - CodeFox routes your request to Codex under the selected mode.
 - You get concise progress/completion updates.
 - Use `/details` for full technical context.
+- Stop an active run with `/abort`.
+- Close the current Codex session context with `/close`.
 
 ### Goal 2: Handoff desk work to phone
 
@@ -56,6 +58,7 @@ Then in Telegram:
 What happens:
 - CodeFox binds to the active external route, ingests handoff state, and continues remaining work.
 - If multiple items exist, CodeFox defaults safely and lets you choose by id or index (`/continue 2`).
+- If `handoff:cli` auto-starts CodeFox, it runs in background; for live logs, start `npm run dev` in another terminal.
 
 ### Goal 3: Use local chat-like CLI
 
@@ -70,6 +73,32 @@ status
 what changed in the last run?
 :handoff
 :continue rw-1
+```
+
+### Goal 4: Use local web UI
+
+```bash
+npm run ui
+```
+
+Open `http://127.0.0.1:8789` in your browser.
+
+What you can do in UI:
+- see active sessions (repo, mode, active request)
+- view live transcript (incoming commands + CodeFox replies)
+- use quick action buttons (`/status`, `/continue`, `/approve`, `/abort`, ...)
+- send plain text or slash commands without Telegram
+
+Read-only dashboard view is still available:
+
+```bash
+npm run dashboard
+```
+
+One-shot snapshot:
+
+```bash
+npm run local:cli -- dashboard
 ```
 
 Stop background dev instance:
@@ -97,7 +126,6 @@ CodeFox is the authority. External workers are executors.
 
 ## Current Limits
 
-- Local UI is deferred; Telegram + local REPL are the active interfaces.
 - Capability packs exist as policy contracts; only `jira` is currently marked as native-backed (`implemented`), while other packs are `planned`.
 - Changelog-driven capability tracking is currently manual.
 - Behavior can still depend on installed Codex CLI/runtime version.

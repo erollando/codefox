@@ -31,6 +31,7 @@ export type ParsedCommand =
   | { type: "status" }
   | { type: "details" }
   | { type: "pending" }
+  | { type: "service"; action: "stop"; confirm: boolean }
   | { type: "handoff"; action: "status" | "show" | "continue" | "clear"; workId?: string }
   | { type: "approve" }
   | { type: "deny" }
@@ -138,6 +139,11 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "details" };
     case "/pending":
       return { type: "pending" };
+    case "/service":
+      if (!arg) {
+        return { type: "unknown", raw: text };
+      }
+      return parseServiceCommand(arg, text);
     case "/handoff":
       if (!arg) {
         return { type: "handoff", action: "status" };
@@ -164,6 +170,21 @@ export function parseCommand(text: string): ParsedCommand {
     default:
       return { type: "unknown", raw: text };
   }
+}
+
+function parseServiceCommand(arg: string, raw: string): ParsedCommand {
+  const parts = arg.split(/\s+/).filter(Boolean);
+  const subCommand = parts[0]?.toLowerCase();
+  if (subCommand !== "stop") {
+    return { type: "unknown", raw };
+  }
+  if (parts.length === 1) {
+    return { type: "service", action: "stop", confirm: false };
+  }
+  if (parts.length === 2 && parts[1].toLowerCase() === "confirm") {
+    return { type: "service", action: "stop", confirm: true };
+  }
+  return { type: "unknown", raw };
 }
 
 function parseHandoffCommand(arg: string, raw: string): ParsedCommand {

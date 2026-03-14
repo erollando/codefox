@@ -119,13 +119,15 @@ export class TelegramPollingAdapter implements TelegramAdapter {
 
   async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<void> {
     const parts = splitMessage(text, TELEGRAM_MESSAGE_LIMIT);
+    const replyMarkup =
+      options?.commandButtons && options.commandButtons.length > 0
+        ? buildCommandKeyboard(options.commandButtons)
+        : undefined;
     if (parts.length === 1) {
       await this.request("sendMessage", {
         chat_id: chatId,
         text: parts[0],
-        ...(options?.commandButtons && options.commandButtons.length > 0
-          ? { reply_markup: buildCommandKeyboard(options.commandButtons) }
-          : {})
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {})
       });
       return;
     }
@@ -133,7 +135,8 @@ export class TelegramPollingAdapter implements TelegramAdapter {
     for (let i = 0; i < parts.length; i += 1) {
       await this.request("sendMessage", {
         chat_id: chatId,
-        text: `[${i + 1}/${parts.length}]\n${parts[i]}`
+        text: `[${i + 1}/${parts.length}]\n${parts[i]}`,
+        ...(i === parts.length - 1 && replyMarkup ? { reply_markup: replyMarkup } : {})
       });
     }
   }

@@ -161,6 +161,8 @@ describe("parseCommand", () => {
       instruction: "use a smaller patch"
     });
     expect(parseCommand("/close")).toEqual({ type: "close" });
+    expect(parseCommand("/service stop")).toEqual({ type: "service", action: "stop", confirm: false });
+    expect(parseCommand("/service stop confirm")).toEqual({ type: "service", action: "stop", confirm: true });
     expect(parseCommand("/details")).toEqual({ type: "details" });
     expect(parseCommand("/pending")).toEqual({ type: "pending" });
     expect(parseCommand("/handoff")).toEqual({ type: "handoff", action: "status" });
@@ -226,6 +228,9 @@ describe("parseCommand", () => {
     expect(parseCommand("/handoff continue rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/continue rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/resume rw-1 extra").type).toBe("unknown");
+    expect(parseCommand("/service").type).toBe("unknown");
+    expect(parseCommand("/service restart").type).toBe("unknown");
+    expect(parseCommand("/service stop now").type).toBe("unknown");
     expect(parseCommand("/handoff invalid").type).toBe("unknown");
     expect(parseCommand("/audit").type).toBe("unknown");
     expect(parseCommand("/codex-changelog").type).toBe("unknown");

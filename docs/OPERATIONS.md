@@ -31,6 +31,7 @@ npm start -- ./config/codefox.config.json
 ## Stop
 
 - Send `SIGINT` (`Ctrl+C`) or `SIGTERM`.
+- From Telegram/local UI: `/service stop` then `/service stop confirm`.
 - For auto-started/background dev process: `npm run dev:stop -- --config <path>` (or `npm run local:cli -- --config <path> stop`).
 - CodeFox aborts in-flight Codex runs, waits briefly for shutdown, ends polling, then writes `service_stop`.
 - On startup, pending Telegram backlog can be discarded when `telegram.discardBacklogOnStart=true`.
@@ -46,6 +47,7 @@ npm run verify
 ## Logs
 
 - Audit logs are JSON lines at `audit.logFilePath` in config.
+- Local UI transcript mirror is stored at `<state-dir>/local-chat-log.jsonl` (derived from `state.filePath`).
 - Codex progress events include stream tags (`[stdout]`/`[stderr]`) in `codex_progress` line previews.
 - Audit log size is bounded by `audit.maxFileBytes` (default 5 MiB); file is truncated when the limit is exceeded.
 - Startup logs include detected Codex CLI version; if version is outside tested range, `codex_version_compatibility_warning` is emitted.
@@ -80,6 +82,7 @@ npm run verify
 - Run updates are concise by default; ask `/details` when you need full technical context.
 - `/close` to close stored Codex session thread explicitly
 - `/abort` to stop active Codex execution
+- `/service stop` to request a clean service shutdown (requires `/service stop confirm`)
 - `/repo add <name> <absolute-path>` to register a repo at runtime
 - `/repo init <name> [base-path]` to create, `git init`, register, and auto-select a repo
 - `/repo bootstrap <name> <python|java|nodejs> [base-path]` to init/register, apply local AGENTS template, and scaffold playbook docs
@@ -109,7 +112,13 @@ npm run verify
 ## External Relay (Optional)
 
 - Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
+- Local web UI: `npm run ui` (default `http://127.0.0.1:8789`).
+  - shows active sessions/spec/approvals/handoff summary
+  - shows mirrored transcript (incoming commands + CodeFox replies)
+  - provides quick command buttons and free-text input
+- Local dashboard watch remains available: `npm run dashboard`.
 - Primary local interface is the chat REPL: `npm run cli -- --config <path> [chatId]`.
+- One-shot dashboard snapshot: `npm run local:cli -- --config <path> dashboard`.
 - Compatibility alias: `npm run chat:cli -- --config <path> [chatId]`.
 - REPL local shortcuts:
   - `:help`
@@ -123,6 +132,7 @@ npm run verify
   - `:exit`
   - Any non-shortcut line is forwarded unchanged (plain text or slash command).
 - For shortcut local control actions, use:
+  - `npm run local:cli -- [--config <path>] dashboard [--watch]`
   - `npm run local:cli -- [--config <path>] approve [chatId]`
   - `npm run local:cli -- [--config <path>] deny [chatId]`
   - `npm run local:cli -- [--config <path>] status [chatId]`
@@ -140,6 +150,7 @@ npm run verify
   - Handoff payload includes source repo metadata; `/handoff continue` auto-aligns repo and can auto-register when source path is provided.
   - If relay is unreachable, handoff CLI prompts to start CodeFox automatically on interactive terminals.
   - When handoff CLI auto-starts CodeFox in background, it prints a PID/direct stop command and writes `<state-dir>/codefox.dev.pid`.
+  - Background auto-start is quiet by design; for live logs, run `npm run dev -- <path>` in a separate terminal.
   - If the target chat has no local spec workflow yet, CodeFox auto-bootstraps and approves one at ingest time.
 - Endpoints:
   - `GET /health` (always unauthenticated)

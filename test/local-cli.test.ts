@@ -105,6 +105,21 @@ describe("local CLI", () => {
   });
 
   it("parses local shortcut commands", () => {
+    const dashboard = parseLocalCliArgs(["dashboard"]);
+    expect(dashboard.ok).toBe(true);
+    if (!dashboard.ok || !dashboard.args) {
+      return;
+    }
+    expect(dashboard.args.command).toBe("dashboard");
+
+    const dashboardWatch = parseLocalCliArgs(["dashboard", "--watch"]);
+    expect(dashboardWatch.ok).toBe(true);
+    if (!dashboardWatch.ok || !dashboardWatch.args) {
+      return;
+    }
+    expect(dashboardWatch.args.command).toBe("dashboard");
+    expect(dashboardWatch.args.watch).toBe(true);
+
     const approve = parseLocalCliArgs(["approve", "100"]);
     expect(approve.ok).toBe(true);
     if (!approve.ok || !approve.args) {
@@ -225,6 +240,10 @@ describe("local CLI", () => {
     const invalidContinue = parseLocalCliArgs(["continue", "rw-1", "extra"]);
     expect(invalidContinue.ok).toBe(false);
     expect(invalidContinue.error).toContain("continue command format");
+
+    const invalidWatch = parseLocalCliArgs(["sessions", "--watch"]);
+    expect(invalidWatch.ok).toBe(false);
+    expect(invalidWatch.error).toContain("--watch is only supported");
   });
 
   it("renders persisted session/spec/approval views", async () => {
@@ -363,11 +382,13 @@ describe("local CLI", () => {
     const previousToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "test-token";
     let sessionsExit = 0;
+    let dashboardExit = 0;
     let approvalsExit = 0;
     let specsExit = 0;
     let sessionExit = 0;
     try {
       sessionsExit = await runLocalCli(["--config", configPath, "sessions"], output);
+      dashboardExit = await runLocalCli(["--config", configPath, "dashboard"], output);
       approvalsExit = await runLocalCli(["--config", configPath, "approvals"], output);
       specsExit = await runLocalCli(["--config", configPath, "specs"], output);
       sessionExit = await runLocalCli(["--config", configPath, "session", "100"], output);
@@ -380,6 +401,7 @@ describe("local CLI", () => {
     }
 
     expect(sessionsExit).toBe(0);
+    expect(dashboardExit).toBe(0);
     expect(approvalsExit).toBe(0);
     expect(specsExit).toBe(0);
     expect(sessionExit).toBe(0);
@@ -387,6 +409,8 @@ describe("local CLI", () => {
 
     const rendered = logs.join("\n\n");
     expect(rendered).toContain("Sessions:");
+    expect(rendered).toContain("Dashboard:");
+    expect(rendered).toContain("summary: sessions=1 approvals=1 specs=1");
     expect(rendered).toContain("Approvals:");
     expect(rendered).toContain("Specs:");
     expect(rendered).toContain("Session 100:");

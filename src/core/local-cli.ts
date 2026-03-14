@@ -18,6 +18,7 @@ export interface LocalCliOutput {
 export interface LocalCliParsedArgs {
   command:
     | "help"
+    | "dashboard"
     | "sessions"
     | "approvals"
     | "specs"
@@ -51,6 +52,7 @@ export interface LocalCliParsedArgs {
   leaseSeconds?: number;
   startIfMissingRelay?: boolean;
   repoPath?: string;
+  watch?: boolean;
 }
 
 interface RelayRoutesResponse {
@@ -91,6 +93,7 @@ export interface LocalCliParseResult {
 export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
   let configPath: string | undefined;
   let userId: number | undefined;
+  let watch = false;
   const positional: string[] = [];
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -126,27 +129,37 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
       index += 1;
       continue;
     }
+    if (token === "--watch") {
+      watch = true;
+      continue;
+    }
     positional.push(token);
   }
 
   const command = positional[0] ?? "help";
+  if (watch && command !== "dashboard") {
+    return {
+      ok: false,
+      error: "--watch is only supported with the dashboard command."
+    };
+  }
 
   if (command === "help") {
     return {
       ok: true,
       args: {
-        command: "help",
-        configPath
+        command: "help"
       }
     };
   }
 
-  if (command === "sessions" || command === "approvals" || command === "specs" || command === "stop") {
+  if (command === "dashboard" || command === "sessions" || command === "approvals" || command === "specs" || command === "stop") {
     return {
       ok: true,
       args: {
         command,
-        configPath
+        configPath,
+        watch: command === "dashboard" ? watch : undefined
       }
     };
   }
@@ -638,6 +651,10 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
     return runLocalChat(args, config, output);
   }
 
+  if (args.command === "dashboard") {
+    return runLocalDashboard(args, config, output);
+  }
+
   if (args.command === "send") {
     const effectiveUserId = args.userId ?? config.telegram.allowedUserIds[0];
     if (!effectiveUserId) {
@@ -744,6 +761,47 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
   return 0;
 }
 
+async function runLocalDashboard(args: LocalCliParsedArgs, config: LoadedConfig, output: LocalCliOutput): Promise<number> {
+  const renderSnapshot = async (): Promise<string> => {
+    const store = new JsonStateStore(config.state.filePath);
+    const loaded = await store.load();
+    const pruned = pruneStateByTtl(loaded, {
+      sessionTtlHours: config.state.sessionTtlHours,
+      approvalTtlHours: config.state.approvalTtlHours
+    }).state;
+    return renderDashboard(pruned.sessions, pruned.approvals, pruned.specWorkflows);
+  };
+
+  if (!args.watch) {
+    output.log(await renderSnapshot());
+    return 0;
+  }
+
+  if (!process.stdout.isTTY) {
+    output.error("dashboard --watch requires an interactive TTY. Run without --watch for a one-shot snapshot.");
+    return 1;
+  }
+
+  let stopped = false;
+  const onStop = () => {
+    stopped = true;
+  };
+  process.once("SIGINT", onStop);
+  process.once("SIGTERM", onStop);
+  try {
+    while (!stopped) {
+      const snapshot = await renderSnapshot();
+      process.stdout.write("\x1bc");
+      process.stdout.write(`${snapshot}\n\n(press Ctrl+C to exit)\n`);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  } finally {
+    process.off("SIGINT", onStop);
+    process.off("SIGTERM", onStop);
+  }
+  return 0;
+}
+
 type LoadedConfig = Awaited<ReturnType<typeof loadConfig>>;
 
 function resolveDefaultChatId(
@@ -810,6 +868,7 @@ async function runLocalHandoff(
         await persistRelayPid(pidFilePath, startedPid);
         output.log(`Started CodeFox in background (pid ${startedPid}). Stop it with: ${stopCommand}`);
         output.log(`Background pid file: ${pidFilePath}`);
+        output.log(`For live logs, run CodeFox in foreground with: npm run dev -- ${resolvedConfigPath}`);
       }
       const ready = await waitForRelayReady(relayBaseUrl, authToken, 10000);
       if (!ready) {
@@ -1928,12 +1987,17 @@ async function waitForRelayReady(baseUrl: string, authToken: string | undefined,
 function renderHelp(): string {
   return [
     "CodeFox local CLI",
+    "Primary local UI:",
+    "  npm run ui                         (browser UI at http://127.0.0.1:8789)",
+    "Dashboard (read-only watch):",
+    "  npm run dashboard",
     "Primary interactive shell:",
     "  npm run cli -- --config <path> [chatId]",
     "Compatibility alias:",
     "  npm run chat:cli -- --config <path> [chatId]",
     "Command-per-invocation utilities:",
     "Usage:",
+    "  npm run local:cli -- [--config <path>] dashboard [--watch]",
     "  npm run local:cli -- [--config <path>] sessions",
     "  npm run local:cli -- [--config <path>] approvals",
     "  npm run local:cli -- [--config <path>] specs",
@@ -1952,8 +2016,88 @@ function renderHelp(): string {
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
     "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>] [--repo-path <path>]",
     "             [--start-if-missing|--no-start-if-missing]",
+    "Global flags:",
+    "  --config <path>   Path to config file",
+    "  --user <id>       Override local user id for queued commands",
+    "  --watch           Dashboard live refresh mode (dashboard only)",
     "  npm run local:cli -- help"
   ].join("\n");
+}
+
+function renderDashboard(
+  sessions: Array<{
+    chatId: number;
+    selectedRepo?: string;
+    mode: string;
+    activeRequestId?: string;
+    codexThreadId?: string;
+    updatedAt: string;
+  }>,
+  approvals: Array<{
+    id: string;
+    chatId: number;
+    source?: "codefox" | "external-codex";
+    capabilityRef?: string;
+    createdAt: string;
+  }>,
+  specWorkflows: PersistedSpecWorkflow[]
+): string {
+  const lines = [
+    "Dashboard:",
+    `summary: sessions=${sessions.length} approvals=${approvals.length} specs=${specWorkflows.length}`
+  ];
+
+  if (sessions.length === 0) {
+    lines.push("chats: none");
+  } else {
+    lines.push("chats:");
+    const sortedSessions = [...sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    for (const session of sortedSessions) {
+      const approval = approvals.find((entry) => entry.chatId === session.chatId);
+      const spec = specWorkflows.find((entry) => entry.chatId === session.chatId);
+      const revision = spec ? getCurrentRevision(spec.workflow) : undefined;
+      lines.push(
+        `- chat=${session.chatId} repo=${session.selectedRepo ?? "(none)"} mode=${session.mode} activeRequest=${session.activeRequestId ?? "none"} thread=${session.codexThreadId ?? "none"} updatedAt=${session.updatedAt}`
+      );
+      lines.push(
+        `  approval=${
+          approval
+            ? `${approval.id} source=${approval.source ?? "codefox"} capability=${approval.capabilityRef ?? "(untyped)"} createdAt=${approval.createdAt}`
+            : "none"
+        }`
+      );
+      lines.push(
+        `  spec=${
+          revision
+            ? `v${revision.version} stage=${revision.stage} status=${revision.status} updatedAt=${revision.updatedAt}`
+            : "none"
+        }`
+      );
+    }
+  }
+
+  const orphanApprovals = approvals.filter((entry) => !sessions.some((session) => session.chatId === entry.chatId));
+  if (orphanApprovals.length > 0) {
+    lines.push("orphan approvals:");
+    for (const approval of orphanApprovals) {
+      lines.push(
+        `- id=${approval.id} chat=${approval.chatId} source=${approval.source ?? "codefox"} capability=${approval.capabilityRef ?? "(untyped)"} createdAt=${approval.createdAt}`
+      );
+    }
+  }
+
+  const orphanSpecs = specWorkflows.filter((entry) => !sessions.some((session) => session.chatId === entry.chatId));
+  if (orphanSpecs.length > 0) {
+    lines.push("orphan specs:");
+    for (const spec of orphanSpecs) {
+      const revision = getCurrentRevision(spec.workflow);
+      lines.push(
+        `- chat=${spec.chatId} version=v${revision.version} stage=${revision.stage} status=${revision.status} updatedAt=${revision.updatedAt}`
+      );
+    }
+  }
+
+  return lines.join("\n");
 }
 
 function renderSessions(
