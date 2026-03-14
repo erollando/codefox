@@ -241,6 +241,7 @@ export class CodeFoxController {
     accepted: boolean;
     reason?: string;
   }> {
+    await this.bootstrapMissingSpecForExternalHandoff(chatId, leaseId, handoff);
     const specValidation = this.validateHandoffSpecRef(chatId, handoff.specRevisionRef);
     if (!specValidation.accepted) {
       await this.deps.audit.log({
@@ -331,6 +332,57 @@ export class CodeFoxController {
     return {
       accepted: true
     };
+  }
+
+  private async bootstrapMissingSpecForExternalHandoff(
+    chatId: number,
+    leaseId: string,
+    handoff: ExternalCodexHandoffBundle
+  ): Promise<void> {
+    if (this.specDrafts.has(chatId)) {
+      return;
+    }
+    const match = /^v(\d+)$/i.exec(handoff.specRevisionRef.trim());
+    if (!match) {
+      return;
+    }
+    const expectedVersion = Number(match[1]);
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      return;
+    }
+
+    const remainingSummary = handoff.remainingWork[0]?.summary ?? "Continue external handoff work";
+    const intent = `Continue ${handoff.taskId}: ${remainingSummary}`;
+    let workflow = approveCurrentRevision(createInitialWorkflow(intent));
+    if (expectedVersion > 1) {
+      const current = getCurrentRevision(workflow);
+      const timestamp = new Date().toISOString();
+      workflow = {
+        revisions: [
+          ...workflow.revisions,
+          {
+            ...current,
+            version: expectedVersion,
+            stage: "approved",
+            status: "approved",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            approvedAt: timestamp
+          }
+        ]
+      };
+    }
+
+    this.specDrafts.set(chatId, workflow);
+    this.persistState();
+    await this.deps.audit.log({
+      type: "external_handoff_spec_bootstrapped",
+      chatId,
+      leaseId,
+      handoffId: handoff.handoffId,
+      taskId: handoff.taskId,
+      specRevisionRef: handoff.specRevisionRef
+    });
   }
 
   async handleUpdate(update: TelegramUpdate): Promise<void> {

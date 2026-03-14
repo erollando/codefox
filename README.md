@@ -218,6 +218,7 @@ npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoi
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
 `--remaining` is optional and auto-derived from available context (active request id, Codex thread id) when omitted.
+If no local spec exists for the chat yet, CodeFox auto-bootstraps and approves one during handoff ingest.
 
 ## Configuration
 

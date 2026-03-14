@@ -104,6 +104,7 @@ npm run verify
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
   - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`.
   - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-selects routed session, auto-generates task id, and auto-derives remaining summary when omitted).
+  - If the target chat has no local spec workflow yet, CodeFox auto-bootstraps and approves one at ingest time.
 - Endpoints:
   - `GET /health`
   - `GET /v1/external-codex/routes`

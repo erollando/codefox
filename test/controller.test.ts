@@ -563,6 +563,56 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("rw-1 [continued]"))).toBe(true);
   });
 
+  it("auto-bootstraps missing spec workflow during external handoff ingest", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+
+    const handoff: ExternalCodexHandoffBundle = {
+      schemaVersion: "v1",
+      leaseId: "lease_bootstrap",
+      handoffId: "handoff_bootstrap",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:00:00.000Z",
+      taskId: "TASK-BOOTSTRAP",
+      specRevisionRef: "v1",
+      completedWork: ["Implemented API route"],
+      remainingWork: [
+        {
+          id: "rw-1",
+          summary: "Run regression checks",
+          requestedCapabilityRef: "repo.run_checks"
+        }
+      ]
+    };
+
+    const ingest = await controller.ingestExternalHandoff(100, "lease_bootstrap", handoff);
+    expect(ingest.accepted).toBe(true);
+    expect(
+      audit.events.some(
+        (event) =>
+          event.type === "external_handoff_spec_bootstrapped" &&
+          event.handoffId === "handoff_bootstrap" &&
+          event.specRevisionRef === "v1"
+      )
+    ).toBe(true);
+
+    await controller.handleUpdate(makeUpdate("/spec status"));
+    const specStatus = telegram.sent.at(-1)?.text ?? "";
+    expect(specStatus).toContain("Spec status: v1 (approved, approved)");
+  });
+
   it("restores persisted external handoff state and renders /handoff status", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
