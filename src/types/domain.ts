@@ -4,6 +4,7 @@ export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhig
 export type TaskAttachmentKind = "image" | "document";
 export type AgentTemplateName = "python" | "java" | "nodejs";
 export type CapabilityPackName = "mail" | "calendar" | "repo" | "jira" | "ops" | "docs";
+export type CapabilityBackendStatus = "implemented" | "planned";
 export type CapabilityRiskLevel = "low" | "medium" | "high";
 export type CapabilityApprovalLevel =
   | "auto-allowed"

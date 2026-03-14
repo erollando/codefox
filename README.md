@@ -96,7 +96,7 @@ CodeFox is the authority. External workers are executors.
 ## Current Limits
 
 - Local UI is deferred; Telegram + local REPL are the active interfaces.
-- Capability packs exist as policy contracts, but backend maturity differs by pack.
+- Capability packs exist as policy contracts; only `jira` is currently marked as native-backed (`implemented`), while other packs are `planned`.
 - Changelog-driven capability tracking is currently manual.
 - Behavior can still depend on installed Codex CLI/runtime version.
 
@@ -106,6 +106,7 @@ CodeFox is the authority. External workers are executors.
 - **Desk-to-pocket walkthrough**: [Demo: Remote Handoff](./docs/DEMO_REMOTE_HANDOFF.md)
 - **One-page end-user story**: [Demo: One-Page Story](./docs/DEMO_ONE_PAGE_STORY.md)
 - **Example transcript output**: [demo-outputs/remote-handoff-transcript.txt](./docs/demo-outputs/remote-handoff-transcript.txt)
+- **Capability backend status + promotion checklist**: [Capability Backends](./docs/CAPABILITY_BACKENDS.md)
 
 ## Product Statement
 

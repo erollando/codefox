@@ -1,5 +1,6 @@
 import type {
   CapabilityApprovalLevel,
+  CapabilityBackendStatus,
   CapabilityExecutionContext,
   CapabilityInputFieldType,
   CapabilityPackName,
@@ -37,9 +38,18 @@ export interface CapabilityPackSummary {
   pack: CapabilityPackName;
   actionCount: number;
   runnableInModeCount: number;
+  backendStatus: CapabilityBackendStatus;
 }
 
 const CAPABILITY_PACKS: CapabilityPackName[] = ["mail", "calendar", "repo", "jira", "ops", "docs"];
+const CAPABILITY_PACK_BACKEND_STATUS: Record<CapabilityPackName, CapabilityBackendStatus> = {
+  mail: "planned",
+  calendar: "planned",
+  repo: "planned",
+  jira: "implemented",
+  ops: "planned",
+  docs: "planned"
+};
 
 function makeAction(spec: {
   pack: CapabilityPackName;
@@ -311,9 +321,14 @@ export class CapabilityRegistry {
       return {
         pack,
         actionCount: actions.length,
-        runnableInModeCount: actions.filter((action) => this.isActionRunnableInMode(action, mode)).length
+        runnableInModeCount: actions.filter((action) => this.isActionRunnableInMode(action, mode)).length,
+        backendStatus: CAPABILITY_PACK_BACKEND_STATUS[pack]
       };
     });
+  }
+
+  getPackBackendStatus(pack: CapabilityPackName): CapabilityBackendStatus {
+    return CAPABILITY_PACK_BACKEND_STATUS[pack];
   }
 
   listActions(pack?: CapabilityPackName): CapabilityActionSpec[] {

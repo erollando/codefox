@@ -171,15 +171,15 @@ describe("response formatter", () => {
     const overview = formatCapabilitiesSummary({
       mode: "active",
       packs: [
-        { pack: "repo", actionCount: 3, runnableInModeCount: 3 },
-        { pack: "jira", actionCount: 3, runnableInModeCount: 3 }
+        { pack: "repo", actionCount: 3, runnableInModeCount: 3, backendStatus: "planned" },
+        { pack: "jira", actionCount: 3, runnableInModeCount: 3, backendStatus: "implemented" }
       ],
       actions: []
     });
     const detail = formatCapabilitiesSummary({
       mode: "active",
       pack: "repo",
-      packs: [],
+      packs: [{ pack: "repo", actionCount: 3, runnableInModeCount: 3, backendStatus: "planned" }],
       actions: [
         {
           pack: "repo",
@@ -197,9 +197,12 @@ describe("response formatter", () => {
     });
 
     expect(overview).toContain("Capabilities (mode: active):");
-    expect(overview).toContain("- repo: actions=3, runnable=3");
+    expect(overview).toContain("- repo: actions=3, runnable=3, backend=planned");
+    expect(overview).toContain("- jira: actions=3, runnable=3, backend=implemented");
+    expect(overview).toContain("backend: implemented = native backend wired in CodeFox");
     expect(overview).toContain("Use /capabilities <pack> for action details.");
-    expect(detail).toContain("Capabilities pack 'repo' (mode: active):");
+    expect(detail).toContain("Capabilities pack 'repo' (mode: active, backend: planned):");
+    expect(detail).toContain("backend detail: policy/contract surface; native backend integration is not wired yet.");
     expect(detail).toContain("- run_checks: risk=low, approval=auto-allowed, context=local, mutates=no");
     expect(detail).toContain("inputs: checkProfile:enum");
     expect(detail).toContain("audit: resultSummary");

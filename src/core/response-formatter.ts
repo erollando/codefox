@@ -90,14 +90,20 @@ export function formatCapabilitiesSummary(input: {
       `Capabilities (mode: ${input.mode}):`,
       ...input.packs.map(
         (pack) =>
-          `- ${pack.pack}: actions=${pack.actionCount}, runnable=${pack.runnableInModeCount}`
+          `- ${pack.pack}: actions=${pack.actionCount}, runnable=${pack.runnableInModeCount}, backend=${pack.backendStatus}`
       ),
+      "backend: implemented = native backend wired in CodeFox, planned = contract/policy surface not yet native-backed.",
       "Use /capabilities <pack> for action details."
     ].join("\n");
   }
 
+  const packSummary = input.packs.find((entry) => entry.pack === input.pack);
+  const backendStatus = packSummary?.backendStatus ?? "planned";
   return [
-    `Capabilities pack '${input.pack}' (mode: ${input.mode}):`,
+    `Capabilities pack '${input.pack}' (mode: ${input.mode}, backend: ${backendStatus}):`,
+    backendStatus === "implemented"
+      ? "backend detail: native backend is wired in CodeFox."
+      : "backend detail: policy/contract surface; native backend integration is not wired yet.",
     ...(input.actions.length > 0
       ? input.actions.flatMap((action) => {
           const inputFields =
