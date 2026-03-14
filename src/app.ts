@@ -1,10 +1,13 @@
 import { CodexCliAdapter } from "./adapters/codex.js";
+import { ExternalRelayHttpServer } from "./adapters/external-relay-http.js";
 import { TelegramPollingAdapter } from "./adapters/telegram.js";
 import { ApprovalStore } from "./core/approval-store.js";
 import { AccessControl } from "./core/auth.js";
 import { AuditLogger } from "./core/audit-logger.js";
 import { loadConfig, persistRepos, resolveConfigPath } from "./core/config.js";
 import { CodeFoxController, createControllerFromAdapters } from "./core/controller.js";
+import { ExternalCodexRelay } from "./core/external-codex-relay.js";
+import { deriveExternalRoutes } from "./core/external-session-route.js";
 import { InstructionPolicy } from "./core/instruction-policy.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./core/local-command-queue.js";
 import { PolicyEngine } from "./core/policy.js";
@@ -78,6 +81,31 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
   const codexRuntimeInfo = codex.getRuntimeInfo();
   const instructionPolicy = new InstructionPolicy(config.safety.instructionPolicy);
   const localCommandQueue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
+  const externalRelay = new ExternalCodexRelay({
+    audit,
+    notify: (chatId, message) => telegram.sendMessage(chatId, message),
+    onApprovalRequested: async (event) => {
+      await audit.log({
+        type: "external_approval_request_relayed",
+        leaseId: event.leaseId,
+        chatId: event.chatId,
+        approvalKey: event.approvalKey,
+        requestedCapabilityRef: event.requestedCapabilityRef
+      });
+    }
+  });
+  const externalRelayAuthToken = config.externalRelay.authTokenEnvVar
+    ? process.env[config.externalRelay.authTokenEnvVar]
+    : undefined;
+  const externalRelayHttpServer = config.externalRelay.enabled
+    ? new ExternalRelayHttpServer({
+        relay: externalRelay,
+        host: config.externalRelay.host,
+        port: config.externalRelay.port,
+        authToken: externalRelayAuthToken,
+        getRoutes: () => deriveExternalRoutes(sessions.list())
+      })
+    : undefined;
 
   controller = createControllerFromAdapters({
     telegram,
@@ -145,6 +173,22 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         });
       }
 
+      if (config.externalRelay.enabled && config.externalRelay.authTokenEnvVar && !externalRelayAuthToken) {
+        throw new Error(
+          `externalRelay.authTokenEnvVar '${config.externalRelay.authTokenEnvVar}' is set but the environment variable is missing.`
+        );
+      }
+
+      if (externalRelayHttpServer) {
+        const address = await externalRelayHttpServer.start();
+        await audit.log({
+          type: "external_relay_http_started",
+          host: address.host,
+          port: address.port,
+          authEnabled: Boolean(externalRelayAuthToken)
+        });
+      }
+
       await localCommandQueue.start(async (command) => {
         await audit.log({
           type: "local_command_received",
@@ -180,6 +224,12 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
       }
       stopped = true;
       localCommandQueue.stop();
+      if (externalRelayHttpServer) {
+        await externalRelayHttpServer.stop();
+        await audit.log({
+          type: "external_relay_http_stopped"
+        });
+      }
       const shutdown = await controller.shutdown();
       telegram.stop();
       await stateStore.flush();

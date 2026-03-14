@@ -64,5 +64,11 @@
   "audit": {
     "logFilePath": "./logs/audit.log",
     "maxFileBytes": 5242880
+  },
+  "externalRelay": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "authTokenEnvVar": "CODEFOX_EXTERNAL_RELAY_TOKEN"
   }
 }

@@ -63,6 +63,25 @@ describe("config validation", () => {
     expect(validated.state.approvalTtlHours).toBeUndefined();
     expect(validated.audit.maxFileBytes).toBe(5 * 1024 * 1024);
     expect(validated.policy.specPolicy).toBeUndefined();
+    expect(validated.externalRelay.enabled).toBe(false);
+    expect(validated.externalRelay.host).toBe("127.0.0.1");
+    expect(validated.externalRelay.port).toBe(8787);
+  });
+
+  it("parses optional external relay config", () => {
+    const config = makeValidConfig();
+    (config as Record<string, unknown>).externalRelay = {
+      enabled: true,
+      host: "0.0.0.0",
+      port: 9001,
+      authTokenEnvVar: "CODEFOX_EXTERNAL_RELAY_TOKEN"
+    };
+
+    const validated = validateConfig(config);
+    expect(validated.externalRelay.enabled).toBe(true);
+    expect(validated.externalRelay.host).toBe("0.0.0.0");
+    expect(validated.externalRelay.port).toBe(9001);
+    expect(validated.externalRelay.authTokenEnvVar).toBe("CODEFOX_EXTERNAL_RELAY_TOKEN");
   });
 
   it("accepts full-access as policy.defaultMode", () => {

@@ -25,6 +25,8 @@ const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
 const DEFAULT_CODEX_BLOCKED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"] as const;
 const DEFAULT_CODEX_SESSION_IDLE_MINUTES = 120;
 const DEFAULT_AUDIT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+const DEFAULT_EXTERNAL_RELAY_HOST = "127.0.0.1";
+const DEFAULT_EXTERNAL_RELAY_PORT = 8787;
 const CODEX_REASONING_EFFORTS: CodexReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 const SPEC_POLICY_MODE_OPTION_KEYS = new Set([
   "requireApprovedSpecForRun",
@@ -296,6 +298,7 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
   const instructionPolicy = (safety.instructionPolicy as Record<string, unknown> | undefined) ?? {};
   const state = (config.state as Record<string, unknown> | undefined) ?? {};
   const audit = config.audit as Record<string, unknown>;
+  const externalRelay = (config.externalRelay as Record<string, unknown> | undefined) ?? {};
 
   if (!telegram || !codex || !policy || !audit) {
     throw new ConfigError("Config must include telegram, codex, policy, and audit sections");
@@ -365,6 +368,12 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
       : mustNumber(state.codexSessionIdleMinutes, "state.codexSessionIdleMinutes");
   assertPositiveInteger(codexSessionIdleMinutes, "state.codexSessionIdleMinutes");
 
+  const externalRelayPort =
+    typeof externalRelay.port === "undefined"
+      ? DEFAULT_EXTERNAL_RELAY_PORT
+      : mustNumber(externalRelay.port, "externalRelay.port");
+  assertPositiveInteger(externalRelayPort, "externalRelay.port");
+
   return {
     telegram: {
       token,
@@ -429,6 +438,18 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
     audit: {
       logFilePath: resolveFromBase(baseDir, mustString(audit.logFilePath, "audit.logFilePath")),
       maxFileBytes: parseOptionalPositiveInteger(audit.maxFileBytes, "audit.maxFileBytes") ?? DEFAULT_AUDIT_MAX_FILE_BYTES
+    },
+    externalRelay: {
+      enabled: typeof externalRelay.enabled === "boolean" ? externalRelay.enabled : false,
+      host:
+        typeof externalRelay.host === "undefined"
+          ? DEFAULT_EXTERNAL_RELAY_HOST
+          : mustString(externalRelay.host, "externalRelay.host"),
+      port: externalRelayPort,
+      authTokenEnvVar:
+        typeof externalRelay.authTokenEnvVar === "undefined"
+          ? undefined
+          : mustString(externalRelay.authTokenEnvVar, "externalRelay.authTokenEnvVar")
     }
   };
 }

@@ -3,9 +3,11 @@ import {
   ExternalCodexIntegration,
   type ExternalBindDecision,
   type ExternalBindRequest,
+  type ExternalEventDecision,
   type ExternalCodexEvent,
   type ExternalCodexHandoffBundle,
-  type ExternalHandoffDecision
+  type ExternalHandoffDecision,
+  type ExternalBindingLease
 } from "./external-codex-integration.js";
 
 export interface ExternalRelayAuditSink {
@@ -30,6 +32,16 @@ export interface ExternalRouteEntry {
   chatId: number;
 }
 
+export interface ExternalRelayEventResult {
+  decision: ExternalEventDecision;
+  relayed: boolean;
+}
+
+export interface ExternalRelayHandoffResult {
+  decision: ExternalHandoffDecision;
+  relayed: boolean;
+}
+
 export class ExternalCodexRelay {
   readonly integration: ExternalCodexIntegration;
   private readonly routes = new Map<string, ExternalRouteEntry>();
@@ -44,6 +56,13 @@ export class ExternalCodexRelay {
 
   unregisterRoute(sessionId: string): void {
     this.routes.delete(sessionId);
+  }
+
+  setRoutes(entries: ExternalRouteEntry[]): void {
+    this.routes.clear();
+    for (const entry of entries) {
+      this.routes.set(entry.sessionId, entry);
+    }
   }
 
   listRoutes(): ExternalRouteEntry[] {
@@ -63,7 +82,7 @@ export class ExternalCodexRelay {
     return this.integration.bind(request);
   }
 
-  async relayEvent(event: ExternalCodexEvent): Promise<void> {
+  async relayEvent(event: ExternalCodexEvent): Promise<ExternalRelayEventResult> {
     const decision = this.integration.acceptEvent(event);
     if (!decision.ok) {
       await this.options.audit.log({
@@ -75,7 +94,7 @@ export class ExternalCodexRelay {
         reasonCode: decision.reasonCode,
         reason: decision.reason
       });
-      return;
+      return { decision, relayed: false };
     }
 
     const route = this.routes.get(decision.lease.session.sessionId);
@@ -88,7 +107,7 @@ export class ExternalCodexRelay {
         eventType: event.type,
         eventId: event.eventId
       });
-      return;
+      return { decision, relayed: false };
     }
 
     await this.options.audit.log({
@@ -114,9 +133,10 @@ export class ExternalCodexRelay {
         requestedCapabilityRef: event.requestedCapabilityRef
       });
     }
+    return { decision, relayed: true };
   }
 
-  async relayHandoff(handoff: ExternalCodexHandoffBundle): Promise<ExternalHandoffDecision> {
+  async relayHandoff(handoff: ExternalCodexHandoffBundle): Promise<ExternalRelayHandoffResult> {
     const decision = this.integration.acceptHandoff(handoff);
     if (!decision.ok) {
       await this.options.audit.log({
@@ -127,7 +147,7 @@ export class ExternalCodexRelay {
         reasonCode: decision.reasonCode,
         reason: decision.reason
       });
-      return decision;
+      return { decision, relayed: false };
     }
 
     const route = this.routes.get(decision.lease.session.sessionId);
@@ -139,7 +159,7 @@ export class ExternalCodexRelay {
         sessionId: decision.lease.session.sessionId,
         handoffId: handoff.handoffId
       });
-      return decision;
+      return { decision, relayed: false };
     }
 
     await this.options.audit.log({
@@ -154,7 +174,11 @@ export class ExternalCodexRelay {
     });
 
     await this.options.notify(route.chatId, formatHandoffRelayMessage(decision.lease.session.sessionId, handoff));
-    return decision;
+    return { decision, relayed: true };
+  }
+
+  resolveLease(leaseId: string): ExternalBindingLease | undefined {
+    return this.integration.listLeases().find((lease) => lease.leaseId === leaseId);
   }
 }
 

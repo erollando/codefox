@@ -40,7 +40,7 @@ describe("ExternalCodexRelay", () => {
       return;
     }
 
-    await relay.relayEvent({
+    const progress = await relay.relayEvent({
       schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
       leaseId: bind.lease.leaseId,
       eventId: "evt-1",
@@ -51,8 +51,9 @@ describe("ExternalCodexRelay", () => {
       summary: "Running tests",
       progressPercent: 45
     });
+    expect(progress.relayed).toBe(true);
 
-    await relay.relayEvent({
+    const approval = await relay.relayEvent({
       schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
       leaseId: bind.lease.leaseId,
       eventId: "evt-2",
@@ -64,8 +65,9 @@ describe("ExternalCodexRelay", () => {
       approvalKey: "push-branch",
       requestedCapabilityRef: "repo.prepare_branch"
     });
+    expect(approval.relayed).toBe(true);
 
-    await relay.relayEvent({
+    const completion = await relay.relayEvent({
       schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
       leaseId: bind.lease.leaseId,
       eventId: "evt-3",
@@ -76,6 +78,7 @@ describe("ExternalCodexRelay", () => {
       status: "success",
       summary: "Execution complete"
     });
+    expect(completion.relayed).toBe(true);
 
     const handoff = await relay.relayHandoff({
       schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
@@ -89,7 +92,8 @@ describe("ExternalCodexRelay", () => {
       remainingWork: [{ id: "rw-1", summary: "Monitor release" }]
     });
 
-    expect(handoff.ok).toBe(true);
+    expect(handoff.decision.ok).toBe(true);
+    expect(handoff.relayed).toBe(true);
     expect(notifications).toHaveLength(4);
     expect(notifications[0]?.chatId).toBe(100);
     expect(notifications[0]?.message).toContain("progress [45%]");
@@ -141,7 +145,7 @@ describe("ExternalCodexRelay", () => {
     }
 
     relay.unregisterRoute("routed-session");
-    await relay.relayEvent({
+    const relayResult = await relay.relayEvent({
       schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
       leaseId: validBind.lease.leaseId,
       eventId: "evt-1",
@@ -152,6 +156,8 @@ describe("ExternalCodexRelay", () => {
       summary: "still running"
     });
 
+    expect(relayResult.decision.ok).toBe(true);
+    expect(relayResult.relayed).toBe(false);
     expect(auditEvents.some((event) => event.type === "external_event_relay_unrouted")).toBe(true);
   });
 });

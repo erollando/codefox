@@ -183,7 +183,13 @@ Copy the sample config to `config/codefox.config.json`:
     "approvalTtlHours": 72,
     "codexSessionIdleMinutes": 120
   },
-  "audit": { "logFilePath": "./logs/audit.log", "maxFileBytes": 5242880 }
+  "audit": { "logFilePath": "./logs/audit.log", "maxFileBytes": 5242880 },
+  "externalRelay": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8787,
+    "authTokenEnvVar": "CODEFOX_EXTERNAL_RELAY_TOKEN"
+  }
 }
 ```
 
@@ -193,6 +199,8 @@ If set, `state.sessionTtlHours` and `state.approvalTtlHours` prune stale records
 `state.codexSessionIdleMinutes` controls idle closure for stored Codex session threads.
 `audit.maxFileBytes` bounds the audit log file size (default 5 MiB) by truncating when the limit is reached.
 `policy.specPolicy` optionally overrides mode-specific spec requirements (`requireApprovedSpecForRun`, `allowForceApproval`, `requiredSectionsForApproval`).
+`externalRelay` enables an optional transport adapter for external Codex clients (`bind`, `event`, `handoff`) on local HTTP.
+If `externalRelay.authTokenEnvVar` is set, startup fails unless the env var exists and clients must send `Authorization: Bearer <token>`.
 `/repo init <name>` creates `<defaultParentPath>/<name>`, runs `git init`, registers it, and auto-selects it for the chat.
 `telegram.discardBacklogOnStart` drops offline backlog updates on startup (recommended for safety).
 
@@ -221,6 +229,7 @@ CodeFox auto-loads `.env` from the project root on startup.
 - `CODEFOX_CONFIG`: optional config path (default `./config/codefox.config.json`)
 - `CODEFOX_AUDIT_STDOUT`: set to `1` to mirror audit events to stdout
 - `CODEFOX_ENV_FILE`: optional path to an alternate env file (default `.env`)
+- `CODEFOX_EXTERNAL_RELAY_TOKEN`: optional bearer token used when `externalRelay.authTokenEnvVar` is configured
 
 Existing shell environment variables take precedence over values in `.env`.
 
@@ -254,6 +263,16 @@ npm run local:cli -- send 100 "/status"
 
 `send` writes a command envelope into a local queue (`<state-dir>/local-command-queue/inbox`).
 When CodeFox is running, it consumes queued local commands and executes them through the same controller/policy/audit path used for Telegram input.
+
+External relay HTTP transport (optional):
+
+- `GET /health`
+- `GET /v1/external-codex/routes`
+- `POST /v1/external-codex/bind`
+- `POST /v1/external-codex/event`
+- `POST /v1/external-codex/handoff`
+
+When enabled, routes are derived from active CodeFox sessions (`chat:<id>/repo:<name>/mode:<mode>`). The relay remains transport-agnostic; this HTTP server is a thin adapter boundary suitable for future VS Code plugin/skill clients.
 
 ## Validate
 

@@ -122,6 +122,13 @@ export interface StateConfig {
   codexSessionIdleMinutes: number;
 }
 
+export interface ExternalRelayConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  authTokenEnvVar?: string;
+}
+
 export interface AppConfig {
   telegram: TelegramConfig;
   repos: RepoConfig[];
@@ -131,6 +138,7 @@ export interface AppConfig {
   repoInit: RepoInitConfig;
   state: StateConfig;
   audit: AuditConfig;
+  externalRelay: ExternalRelayConfig;
 }
 
 export interface SessionState {
