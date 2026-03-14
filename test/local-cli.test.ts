@@ -1611,4 +1611,127 @@ describe("local CLI", () => {
       }
     }
   });
+
+  it("stops background CodeFox process by config scan when pid file is stale", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
+
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-cli-stop-fallback-"));
+    const repoPath = path.join(tmpDir, "repo");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+    const statePath = path.join(tmpDir, "state.json");
+    const pidFilePath = path.join(path.dirname(statePath), "codefox.dev.pid");
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          telegram: {
+            token: "dummy",
+            allowedUserIds: [1],
+            allowedChatIds: [100],
+            pollingTimeoutSeconds: 30,
+            pollIntervalMs: 1000,
+            discardBacklogOnStart: true
+          },
+          repos: [{ name: "payments-api", rootPath: repoPath }],
+          codex: {
+            command: "codex",
+            baseArgs: ["exec"],
+            runArgTemplate: ["{instruction}"],
+            repoArgTemplate: [],
+            timeoutMs: 60000,
+            blockedEnvVars: [],
+            preflightEnabled: false,
+            preflightArgs: ["--version"],
+            preflightTimeoutMs: 1000
+          },
+          policy: {
+            defaultMode: "observe"
+          },
+          safety: {
+            requireAgentsForRuns: false,
+            instructionPolicy: {
+              blockedPatterns: [],
+              allowedDownloadDomains: [],
+              forbiddenPathPatterns: []
+            }
+          },
+          repoInit: {
+            defaultParentPath: tmpDir
+          },
+          state: {
+            filePath: statePath,
+            codexSessionIdleMinutes: 120
+          },
+          audit: {
+            logFilePath: path.join(tmpDir, "audit.log")
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          sessions: [],
+          approvals: [],
+          specWorkflows: [],
+          externalHandoffs: []
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const background = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000);", "src/index.ts", path.resolve(configPath)],
+      {
+        detached: true,
+        stdio: "ignore"
+      }
+    );
+    background.unref();
+    const pid = background.pid as number;
+    await writeFile(pidFilePath, "999999\n", "utf8");
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const output = {
+      log(line: string) {
+        logs.push(line);
+      },
+      error(line: string) {
+        errors.push(line);
+      }
+    };
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+
+    try {
+      const code = await runLocalCli(["--config", configPath, "stop"], output);
+      expect(code).toBe(0);
+      expect(errors).toEqual([]);
+      expect(logs.join("\n")).toContain("Removed stale pid file");
+      expect(logs.join("\n")).toContain(`Stopped background CodeFox process pid ${pid}.`);
+    } finally {
+      if (typeof previousToken === "undefined") {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      }
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already stopped.
+      }
+    }
+  });
 });

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig, resolveConfigPath } from "./config.js";
 import { buildExternalSessionId } from "./external-session-route.js";
@@ -631,7 +631,7 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
   }
 
   if (args.command === "stop") {
-    return stopCodeFoxProcess(config.state.filePath, output);
+    return stopCodeFoxProcess(config.state.filePath, resolvedConfigPath, output);
   }
 
   if (args.command === "chat") {
@@ -1719,53 +1719,58 @@ async function persistRelayPid(pidFilePath: string, pid: number): Promise<void> 
   }
 }
 
-async function stopCodeFoxProcess(stateFilePath: string, output: LocalCliOutput): Promise<number> {
+async function stopCodeFoxProcess(
+  stateFilePath: string,
+  resolvedConfigPath: string,
+  output: LocalCliOutput
+): Promise<number> {
   const pidFilePath = relayPidFilePath(stateFilePath);
   const pid = await readRelayPid(pidFilePath);
-  if (!pid) {
-    output.error(`No background CodeFox PID found at ${pidFilePath}.`);
-    output.log("If CodeFox was started manually, stop it in that terminal.");
-    return 1;
-  }
+  const candidatePids = new Set<number>();
 
-  const alive = isProcessAlive(pid);
-  if (!alive) {
-    await removePidFile(pidFilePath);
-    output.log(`Removed stale pid file ${pidFilePath} (pid ${pid} was not running).`);
-    return 0;
-  }
-
-  const looksSafeToStop = await isLikelyCodeFoxProcess(pid);
-  if (!looksSafeToStop) {
-    output.error(`Refusing to stop pid ${pid}: process does not look like CodeFox.`);
-    output.error(`Inspect pid ${pid} manually, then remove stale file ${pidFilePath} if needed.`);
-    return 1;
-  }
-
-  try {
-    process.kill(pid);
-  } catch (error) {
-    output.error(`Failed to stop CodeFox pid ${pid}: ${String(error)}.`);
-    return 1;
-  }
-
-  const stoppedGracefully = await waitForProcessExit(pid, 5000);
-  if (!stoppedGracefully) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch (error) {
-      output.error(`CodeFox pid ${pid} did not stop gracefully and SIGKILL failed: ${String(error)}.`);
-      return 1;
+  if (pid) {
+    const alive = isProcessAlive(pid);
+    if (!alive) {
+      await removePidFile(pidFilePath);
+      output.log(`Removed stale pid file ${pidFilePath} (pid ${pid} was not running).`);
+    } else {
+      const looksSafeToStop = await isLikelyCodeFoxProcess(pid);
+      if (looksSafeToStop) {
+        candidatePids.add(pid);
+      } else {
+        output.log(`Ignoring pid ${pid} from ${pidFilePath}: process does not look like CodeFox.`);
+      }
     }
-    const stoppedAfterKill = await waitForProcessExit(pid, 2000);
-    if (!stoppedAfterKill) {
-      output.error(`CodeFox pid ${pid} is still running after SIGKILL.`);
-      return 1;
+  }
+
+  const fallbackPids = await findCodeFoxPidsByConfig(resolvedConfigPath);
+  for (const fallbackPid of fallbackPids) {
+    candidatePids.add(fallbackPid);
+  }
+
+  if (candidatePids.size === 0) {
+    output.error(`No running CodeFox process found for config ${resolvedConfigPath}.`);
+    output.log("If CodeFox was started manually in another terminal, stop it there.");
+    return 1;
+  }
+
+  const sortedPids = [...candidatePids].sort((left, right) => left - right);
+  let stoppedAny = false;
+  for (const targetPid of sortedPids) {
+    const stopResult = await stopProcessByPid(targetPid);
+    if (stopResult.ok) {
+      stoppedAny = true;
+      output.log(`Stopped background CodeFox process pid ${targetPid}.`);
+      continue;
     }
+    output.error(`Failed to stop CodeFox pid ${targetPid}: ${stopResult.error ?? "unknown error"}.`);
+  }
+
+  if (!stoppedAny) {
+    return 1;
   }
 
   await removePidFile(pidFilePath);
-  output.log(`Stopped background CodeFox process pid ${pid}.`);
   return 0;
 }
 
@@ -1806,6 +1811,49 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
   return !isProcessAlive(pid);
 }
 
+async function stopProcessByPid(pid: number): Promise<{ ok: boolean; error?: string }> {
+  if (!isProcessAlive(pid)) {
+    return { ok: true };
+  }
+  try {
+    process.kill(pid);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: String(error)
+    };
+  }
+
+  const stoppedGracefully = await waitForProcessExit(pid, 5000);
+  if (stoppedGracefully) {
+    return { ok: true };
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: `did not stop gracefully and SIGKILL failed: ${String(error)}`
+    };
+  }
+  const stoppedAfterKill = await waitForProcessExit(pid, 2000);
+  if (!stoppedAfterKill) {
+    return {
+      ok: false,
+      error: "still running after SIGKILL"
+    };
+  }
+  return { ok: true };
+}
+
 async function isLikelyCodeFoxProcess(pid: number): Promise<boolean> {
   if (process.platform !== "linux") {
     return true;
@@ -1817,6 +1865,39 @@ async function isLikelyCodeFoxProcess(pid: number): Promise<boolean> {
   } catch {
     return true;
   }
+}
+
+async function findCodeFoxPidsByConfig(configPath: string): Promise<number[]> {
+  if (process.platform !== "linux") {
+    return [];
+  }
+  const resolvedConfigPath = path.resolve(configPath);
+  const entries = await readdir("/proc", { withFileTypes: true }).catch(() => []);
+  const matches: number[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (!/^\d+$/.test(entry.name)) {
+      continue;
+    }
+    const pid = Number(entry.name);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) {
+      continue;
+    }
+    const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "");
+    if (!cmdline) {
+      continue;
+    }
+    const normalized = cmdline.replace(/\u0000/g, " ").trim();
+    if (
+      (normalized.includes("src/index.ts") || normalized.includes("dist/index.js")) &&
+      normalized.includes(resolvedConfigPath)
+    ) {
+      matches.push(pid);
+    }
+  }
+  return matches;
 }
 
 async function removePidFile(pidFilePath: string): Promise<void> {
