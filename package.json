@@ -12,6 +12,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "local:cli": "tsx src/local-cli.ts",
+    "demo:remote-handoff": "tsx scripts/demo-remote-handoff.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run build && npm test"

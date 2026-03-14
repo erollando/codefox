@@ -258,6 +258,14 @@ Or pass config path explicitly:
 npm run dev -- ./config/codefox.config.json
 ```
 
+Demo walkthrough (external Codex -> CodeFox continuation):
+
+```bash
+npm run demo:remote-handoff
+```
+
+See [Demo: Desk-to-Pocket Continuation](./docs/DEMO_REMOTE_HANDOFF.md).
+
 Local CLI (read model for sessions/specs/approvals):
 
 ```bash
