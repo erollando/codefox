@@ -50,6 +50,42 @@ describe("local CLI", () => {
     expect(parsedWithoutChat.args.chatId).toBeUndefined();
   });
 
+  it("parses local shortcut commands", () => {
+    const approve = parseLocalCliArgs(["approve", "100"]);
+    expect(approve.ok).toBe(true);
+    if (!approve.ok || !approve.args) {
+      return;
+    }
+    expect(approve.args.command).toBe("approve");
+    expect(approve.args.chatId).toBe(100);
+
+    const deny = parseLocalCliArgs(["deny"]);
+    expect(deny.ok).toBe(true);
+    if (!deny.ok || !deny.args) {
+      return;
+    }
+    expect(deny.args.command).toBe("deny");
+    expect(deny.args.chatId).toBeUndefined();
+
+    const contWithChat = parseLocalCliArgs(["continue", "100", "rw-2"]);
+    expect(contWithChat.ok).toBe(true);
+    if (!contWithChat.ok || !contWithChat.args) {
+      return;
+    }
+    expect(contWithChat.args.command).toBe("continue");
+    expect(contWithChat.args.chatId).toBe(100);
+    expect(contWithChat.args.workId).toBe("rw-2");
+
+    const contWithoutChat = parseLocalCliArgs(["continue", "rw-3"]);
+    expect(contWithoutChat.ok).toBe(true);
+    if (!contWithoutChat.ok || !contWithoutChat.args) {
+      return;
+    }
+    expect(contWithoutChat.args.command).toBe("continue");
+    expect(contWithoutChat.args.chatId).toBeUndefined();
+    expect(contWithoutChat.args.workId).toBe("rw-3");
+  });
+
   it("parses handoff command with required and optional flags", () => {
     const parsed = parseLocalCliArgs([
       "handoff",
@@ -100,6 +136,10 @@ describe("local CLI", () => {
     const invalid = parseLocalCliArgs(["session", "abc"]);
     expect(invalid.ok).toBe(false);
     expect(invalid.error).toContain("positive integer");
+
+    const invalidContinue = parseLocalCliArgs(["continue", "rw-1", "extra"]);
+    expect(invalidContinue.ok).toBe(false);
+    expect(invalidContinue.error).toContain("continue command format");
   });
 
   it("renders persisted session/spec/approval views", async () => {
@@ -355,6 +395,119 @@ describe("local CLI", () => {
     expect(errors).toEqual([]);
     expect(logs.join("\n")).toContain("Queued local command");
     expect(logs.join("\n")).toContain("Queue inbox:");
+  });
+
+  it("queues local shortcut commands with auto-selected chat", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-cli-shortcuts-"));
+    const repoPath = path.join(tmpDir, "repo");
+    const configPath = path.join(tmpDir, "codefox.config.json");
+    const statePath = path.join(tmpDir, "state.json");
+
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          telegram: {
+            token: "dummy",
+            allowedUserIds: [7],
+            allowedChatIds: [100],
+            pollingTimeoutSeconds: 30,
+            pollIntervalMs: 1000,
+            discardBacklogOnStart: true
+          },
+          repos: [{ name: "payments-api", rootPath: repoPath }],
+          codex: {
+            command: "codex",
+            baseArgs: ["exec"],
+            runArgTemplate: ["{instruction}"],
+            repoArgTemplate: [],
+            timeoutMs: 60000,
+            blockedEnvVars: [],
+            preflightEnabled: false,
+            preflightArgs: ["--version"],
+            preflightTimeoutMs: 1000
+          },
+          policy: {
+            defaultMode: "observe"
+          },
+          safety: {
+            requireAgentsForRuns: false,
+            instructionPolicy: {
+              blockedPatterns: [],
+              allowedDownloadDomains: [],
+              forbiddenPathPatterns: []
+            }
+          },
+          repoInit: {
+            defaultParentPath: tmpDir
+          },
+          state: {
+            filePath: statePath,
+            codexSessionIdleMinutes: 120
+          },
+          audit: {
+            logFilePath: path.join(tmpDir, "audit.log")
+          }
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          sessions: [
+            {
+              chatId: 100,
+              selectedRepo: "payments-api",
+              mode: "active",
+              updatedAt: "2026-03-14T12:00:00.000Z"
+            }
+          ],
+          approvals: [],
+          specWorkflows: []
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const previousToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "test-token";
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const output = {
+      log(line: string) {
+        logs.push(line);
+      },
+      error(line: string) {
+        errors.push(line);
+      }
+    };
+
+    try {
+      const approveCode = await runLocalCli(["--config", configPath, "approve"], output);
+      const continueCode = await runLocalCli(["--config", configPath, "continue", "rw-1"], output);
+      expect(approveCode).toBe(0);
+      expect(continueCode).toBe(0);
+    } finally {
+      if (typeof previousToken === "undefined") {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = previousToken;
+      }
+    }
+
+    expect(errors).toEqual([]);
+    const rendered = logs.join("\n");
+    expect(rendered).toContain("Auto-selected chat 100.");
+    expect(rendered).toContain(": /approve");
+    expect(rendered).toContain(": /continue rw-1");
   });
 
   it("runs handoff command by automating routes bind event handoff and revoke", async () => {

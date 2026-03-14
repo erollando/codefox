@@ -15,7 +15,7 @@ export interface LocalCliOutput {
 }
 
 export interface LocalCliParsedArgs {
-  command: "help" | "sessions" | "approvals" | "specs" | "session" | "send" | "handoff" | "chat";
+  command: "help" | "sessions" | "approvals" | "specs" | "session" | "send" | "handoff" | "chat" | "approve" | "deny" | "continue";
   chatId?: number;
   userId?: number;
   text?: string;
@@ -220,6 +220,77 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
         userId,
         text,
         configPath
+      }
+    };
+  }
+
+  if (command === "approve" || command === "deny") {
+    const chatIdRaw = positional[1];
+    if (!chatIdRaw) {
+      return {
+        ok: true,
+        args: {
+          command,
+          userId,
+          configPath
+        }
+      };
+    }
+    const chatId = Number(chatIdRaw);
+    if (!Number.isSafeInteger(chatId) || chatId <= 0) {
+      return {
+        ok: false,
+        error: "chatId must be a positive integer."
+      };
+    }
+    return {
+      ok: true,
+      args: {
+        command,
+        chatId,
+        userId,
+        configPath
+      }
+    };
+  }
+
+  if (command === "continue") {
+    const first = positional[1];
+    const second = positional[2];
+    const third = positional[3];
+    if (third) {
+      return {
+        ok: false,
+        error: "continue command accepts at most [chatId] [workId]."
+      };
+    }
+
+    let chatId: number | undefined;
+    let workId: string | undefined;
+    if (first) {
+      const parsedChatId = Number(first);
+      if (Number.isSafeInteger(parsedChatId) && parsedChatId > 0) {
+        chatId = parsedChatId;
+        workId = second?.trim() || undefined;
+      } else {
+        if (second) {
+          return {
+            ok: false,
+            error: "continue command format is: continue [chatId] [workId] or continue [workId]."
+          };
+        }
+        workId = first.trim();
+      }
+    }
+
+    return {
+      ok: true,
+      args: {
+        command: "continue",
+        chatId,
+        userId,
+        configPath,
+        workId
       }
     };
   }
@@ -568,6 +639,44 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
     approvalTtlHours: config.state.approvalTtlHours
   }).state;
 
+  if (args.command === "approve" || args.command === "deny" || args.command === "continue") {
+    const effectiveUserId = args.userId ?? config.telegram.allowedUserIds[0];
+    if (!effectiveUserId) {
+      output.error("No allowed user id configured. Use --user <id> or set telegram.allowedUserIds.");
+      return 1;
+    }
+
+    const resolved = resolveDefaultChatId(args.chatId, config, pruned.sessions);
+    if (!resolved.chatId) {
+      output.error("Could not determine target chatId. Pass <chatId> or configure a single telegram.allowedChatIds entry.");
+      return 1;
+    }
+    if (resolved.autoSelected) {
+      output.log(`Auto-selected chat ${resolved.chatId}.`);
+    }
+
+    const text =
+      args.command === "approve"
+        ? "/approve"
+        : args.command === "deny"
+          ? "/deny"
+          : args.workId
+            ? `/continue ${args.workId}`
+            : "/continue";
+
+    const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
+    const queued = await queue.enqueue({
+      chatId: resolved.chatId,
+      userId: effectiveUserId,
+      text
+    });
+    output.log(
+      `Queued local command ${queued.id} for chat ${queued.chatId} user ${queued.userId}: ${queued.text}`
+    );
+    output.log(`Queue inbox: ${queue.inboxPath()}`);
+    return 0;
+  }
+
   if (args.command === "sessions") {
     output.log(renderSessions(pruned.sessions));
     return 0;
@@ -597,6 +706,22 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
 }
 
 type LoadedConfig = Awaited<ReturnType<typeof loadConfig>>;
+
+function resolveDefaultChatId(
+  explicitChatId: number | undefined,
+  config: LoadedConfig,
+  sessions: Array<{ chatId: number; updatedAt: string }>
+): { chatId?: number; autoSelected: boolean } {
+  if (explicitChatId) {
+    return { chatId: explicitChatId, autoSelected: false };
+  }
+  const allowedChats = config.telegram.allowedChatIds ?? [];
+  if (allowedChats.length === 1) {
+    return { chatId: allowedChats[0], autoSelected: true };
+  }
+  const latestSession = [...sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return { chatId: latestSession?.chatId, autoSelected: Boolean(latestSession?.chatId) };
+}
 
 async function runLocalHandoff(
   args: LocalCliParsedArgs,
@@ -1427,6 +1552,9 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] session <chatId>",
     "  npm run local:cli -- [--config <path>] [--user <id>] chat [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] send <chatId> <command-text>",
+    "  npm run local:cli -- [--config <path>] [--user <id>] approve [chatId]",
+    "  npm run local:cli -- [--config <path>] [--user <id>] deny [chatId]",
+    "  npm run local:cli -- [--config <path>] [--user <id>] continue [chatId] [workId]",
     "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
     "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",

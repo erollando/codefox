@@ -106,6 +106,12 @@ npm run verify
 
 - Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
 - For a persistent chat-like local terminal workflow, use `npm run chat:cli -- --config <path> [chatId]`.
+- For shortcut local control actions, use:
+  - `npm run local:cli -- [--config <path>] approve [chatId]`
+  - `npm run local:cli -- [--config <path>] deny [chatId]`
+  - `npm run local:cli -- [--config <path>] continue [chatId] [workId]`
+  - These enqueue `/approve`, `/deny`, and `/continue [workId]` via the same local command queue/controller path.
+  - If `chatId` is omitted, CodeFox auto-selects single/default/most-recent chat context.
 - For an operator-facing handoff bridge without manual API calls, use:
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
   - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--repo-path <path>`, `--start-if-missing`, `--no-start-if-missing`.
