@@ -1007,6 +1007,7 @@ async function runLocalChat(args: LocalCliParsedArgs, config: LoadedConfig, outp
     output.error("Could not determine target chatId. Pass `chat <chatId>` or configure a single telegram.allowedChatIds entry.");
     return 1;
   }
+  let currentChatId: number = activeChatId;
 
   const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
   const { createInterface } = await import("node:readline/promises");
@@ -1014,39 +1015,137 @@ async function runLocalChat(args: LocalCliParsedArgs, config: LoadedConfig, outp
     input: process.stdin,
     output: process.stdout
   });
-  output.log(`CodeFox chat shell connected. chat=${activeChatId} user=${effectiveUserId}`);
-  output.log("Type /exit to close. Type /chat <id> to switch chat.");
+  output.log(`CodeFox chat shell connected. chat=${currentChatId} user=${effectiveUserId}`);
+  output.log("Type :help for local shell shortcuts. Type /exit to close. Type /chat <id> to switch chat.");
   try {
     while (true) {
-      const line = (await shell.question("codefox> ")).trim();
+      const inputLine: string = await shell.question(`codefox:${currentChatId}> `);
+      const line = inputLine.trim();
       if (!line) {
         continue;
+      }
+      if (line.startsWith(":")) {
+        const localShortcut = parseLocalChatShortcut(line);
+        if (localShortcut.command === "help") {
+          output.log(renderLocalChatShortcutHelp());
+          continue;
+        }
+        if (localShortcut.command === "exit") {
+          break;
+        }
+        if (localShortcut.command === "chat") {
+          if (typeof localShortcut.chatId === "number") {
+            currentChatId = localShortcut.chatId;
+          }
+          output.log(`Switched to chat ${currentChatId}.`);
+          continue;
+        }
+        if (localShortcut.command === "queue") {
+          const queued = await queue.enqueue({
+            chatId: currentChatId,
+            userId: effectiveUserId,
+            text: localShortcut.text
+          });
+          output.log(`queued ${queued.id} -> chat ${currentChatId}: ${localShortcut.text}`);
+          continue;
+        }
+        if (localShortcut.command === "passthrough") {
+          // Not a local shell shortcut; queue the line as normal input.
+        }
       }
       if (line === "/exit" || line === "/quit") {
         break;
       }
       if (line.startsWith("/chat ")) {
-        const nextChat = Number(line.slice("/chat ".length).trim());
+        const nextChat: number = Number(line.slice("/chat ".length).trim());
         if (!Number.isSafeInteger(nextChat) || nextChat <= 0) {
           output.error("chat id must be a positive integer.");
           continue;
         }
-        activeChatId = nextChat;
-        output.log(`Switched to chat ${activeChatId}.`);
+        currentChatId = nextChat;
+        output.log(`Switched to chat ${currentChatId}.`);
         continue;
       }
 
       const queued = await queue.enqueue({
-        chatId: activeChatId,
+        chatId: currentChatId,
         userId: effectiveUserId,
         text: line
       });
-      output.log(`queued ${queued.id} -> chat ${activeChatId}: ${line}`);
+      output.log(`queued ${queued.id} -> chat ${currentChatId}: ${line}`);
     }
   } finally {
     shell.close();
   }
   return 0;
+}
+
+type LocalChatShortcutParseResult =
+  | { command: "help" | "exit" }
+  | { command: "chat"; chatId?: number }
+  | { command: "queue"; text: string }
+  | { command: "passthrough" };
+
+function parseLocalChatShortcut(line: string): LocalChatShortcutParseResult {
+  const text = line.trim();
+  if (text === ":help") {
+    return { command: "help" };
+  }
+  if (text === ":exit" || text === ":quit") {
+    return { command: "exit" };
+  }
+  if (text === ":chat") {
+    return { command: "chat" };
+  }
+  if (text.startsWith(":chat ")) {
+    const chatId = Number(text.slice(":chat ".length).trim());
+    if (!Number.isSafeInteger(chatId) || chatId <= 0) {
+      return { command: "passthrough" };
+    }
+    return { command: "chat", chatId };
+  }
+  if (text === ":status") {
+    return { command: "queue", text: "/status" };
+  }
+  if (text === ":details") {
+    return { command: "queue", text: "/details" };
+  }
+  if (text === ":approve") {
+    return { command: "queue", text: "/approve" };
+  }
+  if (text === ":deny") {
+    return { command: "queue", text: "/deny" };
+  }
+  if (text === ":handoff") {
+    return { command: "queue", text: "/handoff show" };
+  }
+  if (text.startsWith(":continue ")) {
+    const workId = text.slice(":continue ".length).trim();
+    if (!workId) {
+      return { command: "passthrough" };
+    }
+    return { command: "queue", text: `/continue ${workId}` };
+  }
+  if (text === ":continue") {
+    return { command: "queue", text: "/continue" };
+  }
+  return { command: "passthrough" };
+}
+
+function renderLocalChatShortcutHelp(): string {
+  return [
+    "Local shell shortcuts:",
+    "  :help                 Show this help",
+    "  :chat [chatId]        Show/switch active chat",
+    "  :status               Queue /status",
+    "  :details              Queue /details",
+    "  :approve              Queue /approve",
+    "  :deny                 Queue /deny",
+    "  :handoff              Queue /handoff show",
+    "  :continue [workId]    Queue /continue [workId]",
+    "  :exit                 Close shell",
+    "Any non-shortcut input is queued as-is (plain text or Telegram slash command)."
+  ].join("\n");
 }
 
 function resolveTaskId(
@@ -1578,6 +1677,11 @@ async function waitForRelayReady(baseUrl: string, authToken: string | undefined,
 function renderHelp(): string {
   return [
     "CodeFox local CLI",
+    "Primary interactive shell:",
+    "  npm run cli -- --config <path> [chatId]",
+    "Compatibility alias:",
+    "  npm run chat:cli -- --config <path> [chatId]",
+    "Command-per-invocation utilities:",
     "Usage:",
     "  npm run local:cli -- [--config <path>] sessions",
     "  npm run local:cli -- [--config <path>] approvals",

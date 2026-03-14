@@ -211,14 +211,18 @@ External relay HTTP adapter (optional):
 Only one active lease is allowed per external session id; clients must revoke before re-binding.
 `GET /health` is intentionally unauthenticated for simple local liveness checks.
 
-## Local CLI (Read/Operate Sessions)
+## Local CLI (Primary: Chat Shell)
 
 ```bash
+npm run cli -- --config ./config/codefox.config.json
+# optional: start directly on a specific chat
+npm run cli -- --config ./config/codefox.config.json 100
+
+# one-shot operational utilities (advanced)
 npm run local:cli -- sessions
 npm run local:cli -- approvals
 npm run local:cli -- specs
 npm run local:cli -- session 100
-npm run chat:cli -- --config ./config/codefox.config.json
 npm run local:cli -- send 100 "/status"
 npm run local:cli -- approve 100
 npm run local:cli -- deny 100
@@ -229,9 +233,11 @@ npm run local:cli -- continue 100 rw-1
 npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoint implemented"
 ```
 
+`npm run cli` starts the persistent local REPL (compat alias: `npm run chat:cli`) so you can work in a chat-like loop without repeating `chatId`.
+Inside the REPL, `:help` shows local shortcuts (`:status`, `:details`, `:approve`, `:deny`, `:handoff`, `:continue [workId]`, `:chat [chatId]`, `:exit`).
+Any non-shortcut line is queued as-is (plain text or Telegram slash command).
 `send` writes a command envelope into `<state-dir>/local-command-queue/inbox`.
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
-`chat:cli` starts a persistent chat-like shell so you can send commands/questions without repeating `chatId` every time.
 `approve`, `deny`, `status`, `handoff-status`, `handoff-show`, and `continue` are shortcut local CLI commands that enqueue `/approve`, `/deny`, `/status`, `/handoff status`, `/handoff show`, and `/continue [work-id]` into the same controller path; when `chatId` is omitted, CodeFox auto-selects the default/single/most-recent chat.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
 When multiple active routes exist, `handoff:cli` shows them clearly and lets you choose; Enter keeps the most recently used route.

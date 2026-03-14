@@ -105,7 +105,19 @@ npm run verify
 ## External Relay (Optional)
 
 - Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
-- For a persistent chat-like local terminal workflow, use `npm run chat:cli -- --config <path> [chatId]`.
+- Primary local interface is the chat REPL: `npm run cli -- --config <path> [chatId]`.
+- Compatibility alias: `npm run chat:cli -- --config <path> [chatId]`.
+- REPL local shortcuts:
+  - `:help`
+  - `:chat [chatId]`
+  - `:status`
+  - `:details`
+  - `:approve`
+  - `:deny`
+  - `:handoff`
+  - `:continue [workId]`
+  - `:exit`
+  - Any non-shortcut line is forwarded unchanged (plain text or slash command).
 - For shortcut local control actions, use:
   - `npm run local:cli -- [--config <path>] approve [chatId]`
   - `npm run local:cli -- [--config <path>] deny [chatId]`
