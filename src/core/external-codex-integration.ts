@@ -143,6 +143,11 @@ export interface ExternalHandoffRemainingWorkItem {
   blockedByApproval?: boolean;
 }
 
+export interface ExternalHandoffSourceRepo {
+  name: string;
+  rootPath?: string;
+}
+
 export interface ExternalCodexHandoffBundle {
   schemaVersion: ExternalCodexSchemaVersion;
   leaseId: string;
@@ -153,6 +158,7 @@ export interface ExternalCodexHandoffBundle {
   specRevisionRef: string;
   completedWork: string[];
   remainingWork: ExternalHandoffRemainingWorkItem[];
+  sourceRepo?: ExternalHandoffSourceRepo;
   evidenceRefs?: string[];
   unresolvedQuestions?: string[];
   unresolvedRisks?: string[];
@@ -426,6 +432,17 @@ export class ExternalCodexIntegration {
     }
     if (!handoff.handoffId || !handoff.taskId || !handoff.specRevisionRef) {
       return this.rejectHandoff(handoff, "missing_required_field", "Handoff requires handoffId, taskId, and specRevisionRef.");
+    }
+    if (handoff.sourceRepo) {
+      if (!handoff.sourceRepo.name || handoff.sourceRepo.name.trim().length === 0) {
+        return this.rejectHandoff(handoff, "missing_required_field", "Handoff sourceRepo requires non-empty name.");
+      }
+      if (
+        typeof handoff.sourceRepo.rootPath !== "undefined" &&
+        handoff.sourceRepo.rootPath.trim().length === 0
+      ) {
+        return this.rejectHandoff(handoff, "missing_required_field", "Handoff sourceRepo.rootPath must be non-empty when provided.");
+      }
     }
     if (!isValidIsoTimestamp(handoff.createdAt)) {
       return this.rejectHandoff(handoff, "invalid_timestamp", "Handoff timestamp is not a valid ISO-8601 string.");

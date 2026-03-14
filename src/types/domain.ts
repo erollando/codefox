@@ -188,6 +188,10 @@ export interface ExternalHandoffBundleState {
   specRevisionRef: string;
   completedWork: string[];
   remainingWork: ExternalHandoffRemainingWork[];
+  sourceRepo?: {
+    name: string;
+    rootPath?: string;
+  };
   evidenceRefs?: string[];
   unresolvedQuestions?: string[];
   unresolvedRisks?: string[];
@@ -196,6 +200,10 @@ export interface ExternalHandoffBundleState {
 export interface ExternalHandoffStateSnapshot {
   chatId: number;
   leaseId: string;
+  sourceSessionId?: string;
+  sourceRepoName?: string;
+  sourceRepoPath?: string;
+  sourceMode?: PolicyMode;
   handoff: ExternalHandoffBundleState;
   receivedAt: string;
   continuedWorkIds: string[];

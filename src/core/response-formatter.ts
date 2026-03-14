@@ -264,7 +264,14 @@ export function formatPendingApproval(approval: ApprovalRequest): string {
 }
 
 export function formatError(message: string): string {
-  return `Error: ${message}`;
+  const normalized = message.trim();
+  if (!normalized) {
+    return "Error";
+  }
+  if (/^error:/i.test(normalized)) {
+    return normalized;
+  }
+  return `Error: ${normalized}`;
 }
 
 export function formatAuditLookup(viewId: string, event?: Record<string, unknown>): string {

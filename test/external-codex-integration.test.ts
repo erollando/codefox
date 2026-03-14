@@ -82,7 +82,7 @@ describe("ExternalCodexIntegration", () => {
     const integration = new ExternalCodexIntegration({
       manifest: {
         schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
-        capabilityClasses: ["progress", "completion"],
+        capabilityClasses: ["progress", "completion", "handoff_bundle"],
         maxLeaseSeconds: 60
       }
     });
@@ -103,7 +103,7 @@ describe("ExternalCodexIntegration", () => {
       clientId: "vscode-codex",
       session: { sessionId: "session-2" },
       requestedSchemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
-      requestedCapabilityClasses: ["progress", "completion"]
+      requestedCapabilityClasses: ["progress", "completion", "handoff_bundle"]
     });
     expect(bind.ok).toBe(true);
     if (!bind.ok) {
@@ -146,6 +146,23 @@ describe("ExternalCodexIntegration", () => {
     expect(stale.ok).toBe(false);
     if (!stale.ok) {
       expect(stale.reasonCode).toBe("out_of_order_sequence");
+    }
+
+    const invalidHandoff = integration.acceptHandoff({
+      schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
+      leaseId: bind.lease.leaseId,
+      handoffId: "handoff-invalid",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:00:20.000Z",
+      taskId: "TASK-INVALID",
+      specRevisionRef: "v1",
+      completedWork: [],
+      remainingWork: [{ id: "rw-1", summary: "continue" }],
+      sourceRepo: { name: " " }
+    });
+    expect(invalidHandoff.ok).toBe(false);
+    if (!invalidHandoff.ok) {
+      expect(invalidHandoff.reasonCode).toBe("missing_required_field");
     }
   });
 

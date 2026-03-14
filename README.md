@@ -127,7 +127,8 @@ Handoff and audit:
 Notes:
 
 - Plain text (non-slash) input is treated as `/run <text>`.
-- In `active` and `full-access`, untyped `/run` is blocked by capability policy; use typed `/act`.
+- While a run is active, plain text is treated as steer guidance (same behavior as `/steer <text>`).
+- Untyped `/run` is allowed in every mode; `/act` remains available when you want explicit typed capability routing.
 
 ## Session Model
 
@@ -203,6 +204,7 @@ External relay HTTP adapter (optional):
 - `POST /v1/external-codex/handoff`
 
 Only one active lease is allowed per external session id; clients must revoke before re-binding.
+`GET /health` is intentionally unauthenticated for simple local liveness checks.
 
 ## Local CLI (Read/Operate Sessions)
 
@@ -211,15 +213,21 @@ npm run local:cli -- sessions
 npm run local:cli -- approvals
 npm run local:cli -- specs
 npm run local:cli -- session 100
+npm run chat:cli -- --config ./config/codefox.config.json
 npm run local:cli -- send 100 "/status"
 npm run handoff:cli -- --config ./config/codefox.config.json --completed "Endpoint implemented"
 ```
 
 `send` writes a command envelope into `<state-dir>/local-command-queue/inbox`.
 When CodeFox is running, it consumes queued local commands through the same controller/policy/audit path used for Telegram input.
+`chat:cli` starts a persistent chat-like shell so you can send commands/questions without repeating `chatId` every time.
 `handoff:cli` is an IDE-agnostic bridge command that automates relay route lookup, lease bind, completion event, and typed handoff submit so users do not need manual `curl` calls; chat/task are auto-resolved by default and can be overridden when needed.
+When multiple active routes exist, `handoff:cli` shows them clearly and lets you choose; Enter keeps the most recently used route.
 `--remaining` is optional and auto-derived from available context (active request id, Codex thread id) when omitted.
+Use `--repo-path <absolute-path>` only when you want to override automatic source repo path detection.
+Handoff bundles include source repo metadata; on `/handoff continue`, CodeFox auto-aligns to the source repo and can auto-register it when the bundle includes a valid local path.
 If relay is unreachable, `handoff:cli` can start CodeFox and retry (`--start-if-missing` / `--no-start-if-missing`; interactive prompt by default on TTY).
+If `handoff:cli` auto-starts CodeFox in background, it prints the process PID, a direct stop command, and writes a PID file (`<state-dir>/codefox.dev.pid`).
 If no local spec exists for the chat yet, CodeFox auto-bootstraps and approves one during handoff ingest.
 
 ## Configuration

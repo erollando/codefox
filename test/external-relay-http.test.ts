@@ -182,8 +182,11 @@ describe("ExternalRelayHttpServer", () => {
     const address = await server.start();
     const base = `http://${address.host}:${address.port}`;
 
-    const unauthorized = await fetch(`${base}/health`);
-    expect(unauthorized.status).toBe(401);
+    const health = await fetch(`${base}/health`);
+    expect(health.status).toBe(200);
+
+    const unauthorizedRoutes = await fetch(`${base}/v1/external-codex/routes`);
+    expect(unauthorizedRoutes.status).toBe(401);
 
     const authorized = await fetch(`${base}/health`, {
       headers: {

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { loadConfig, resolveConfigPath } from "./config.js";
 import { buildExternalSessionId } from "./external-session-route.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
@@ -13,7 +15,7 @@ export interface LocalCliOutput {
 }
 
 export interface LocalCliParsedArgs {
-  command: "help" | "sessions" | "approvals" | "specs" | "session" | "send" | "handoff";
+  command: "help" | "sessions" | "approvals" | "specs" | "session" | "send" | "handoff" | "chat";
   chatId?: number;
   userId?: number;
   text?: string;
@@ -32,6 +34,7 @@ export interface LocalCliParsedArgs {
   relayPort?: number;
   leaseSeconds?: number;
   startIfMissingRelay?: boolean;
+  repoPath?: string;
 }
 
 interface RelayRoutesResponse {
@@ -127,6 +130,36 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
       ok: true,
       args: {
         command,
+        configPath
+      }
+    };
+  }
+
+  if (command === "chat") {
+    const chatIdRaw = positional[1];
+    if (!chatIdRaw) {
+      return {
+        ok: true,
+        args: {
+          command: "chat",
+          userId,
+          configPath
+        }
+      };
+    }
+    const chatId = Number(chatIdRaw);
+    if (!Number.isSafeInteger(chatId) || chatId <= 0) {
+      return {
+        ok: false,
+        error: "chatId must be a positive integer."
+      };
+    }
+    return {
+      ok: true,
+      args: {
+        command: "chat",
+        chatId,
+        userId,
         configPath
       }
     };
@@ -231,6 +264,7 @@ interface HandoffParsedArgs {
   relayPort?: number;
   leaseSeconds?: number;
   startIfMissingRelay?: boolean;
+  repoPath?: string;
 }
 
 function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffParsedArgs; error?: string } {
@@ -263,6 +297,7 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
   let relayPort: number | undefined;
   let leaseSeconds: number | undefined;
   let startIfMissingRelay: boolean | undefined;
+  let repoPath: string | undefined;
 
   for (let index = startIndex; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -440,6 +475,17 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
       startIfMissingRelay = false;
       continue;
     }
+    if (token === "--repo-path") {
+      const value = readRequired(token);
+      if (!value) {
+        return {
+          ok: false,
+          error: "Missing value for --repo-path."
+        };
+      }
+      repoPath = value;
+      continue;
+    }
 
     return {
       ok: false,
@@ -464,7 +510,8 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
       relayHost: relayHost?.trim(),
       relayPort,
       leaseSeconds,
-      startIfMissingRelay
+      startIfMissingRelay,
+      repoPath: repoPath?.trim()
     }
   };
 }
@@ -488,6 +535,10 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
 
   if (args.command === "handoff") {
     return runLocalHandoff(args, config, output, resolvedConfigPath);
+  }
+
+  if (args.command === "chat") {
+    return runLocalChat(args, config, output);
   }
 
   if (args.command === "send") {
@@ -588,7 +639,14 @@ async function runLocalHandoff(
     const shouldStart = await shouldStartMissingRelay(args, relayBaseUrl, resolvedConfigPath, output);
     if (shouldStart) {
       output.log(`Starting CodeFox with config ${resolvedConfigPath}...`);
-      startCodeFoxProcess(resolvedConfigPath);
+      const startedPid = startCodeFoxProcess(resolvedConfigPath);
+      if (typeof startedPid === "number" && startedPid > 0) {
+        const stopCommand = process.platform === "win32" ? `taskkill /PID ${startedPid} /F` : `kill ${startedPid}`;
+        const pidFilePath = relayPidFilePath(config.state.filePath);
+        await persistRelayPid(pidFilePath, startedPid);
+        output.log(`Started CodeFox in background (pid ${startedPid}). Stop it with: ${stopCommand}`);
+        output.log(`Background pid file: ${pidFilePath}`);
+      }
       const ready = await waitForRelayReady(relayBaseUrl, authToken, 10000);
       if (!ready) {
         output.error(`Started CodeFox, but external relay is still unreachable at ${relayBaseUrl}.`);
@@ -620,7 +678,13 @@ async function runLocalHandoff(
   }
   const routes = routesResponse.body.routes ?? [];
 
-  const context = resolveHandoffContext(args, pruned.sessions, routes);
+  const selectedRouteSessionId =
+    !args.sessionId && typeof args.chatId !== "number"
+      ? await chooseRouteForHandoff(pruned.sessions, routes, output)
+      : undefined;
+  const contextArgs = selectedRouteSessionId ? { ...args, sessionId: selectedRouteSessionId } : args;
+
+  const context = resolveHandoffContext(contextArgs, pruned.sessions, routes);
   if (!context.ok || !context.value) {
     output.error(context.error ?? "Could not resolve handoff context.");
     return 1;
@@ -688,8 +752,8 @@ async function runLocalHandoff(
 
   const session = pruned.sessions.find((entry) => entry.chatId === chatId);
   const taskId = resolveTaskId(args, session);
-  const capabilityRef = resolveCapabilityRef(session?.mode);
   const remainingSummary = resolveRemainingSummary(args, session);
+  const sourceRepo = resolveSourceRepoMetadata(sessionId, args.repoPath, output);
   const specRevisionRef = await resolveOrBootstrapSpecRevisionRef({
     args,
     chatId,
@@ -724,10 +788,10 @@ async function runLocalHandoff(
       remainingWork: [
         {
           id: workId,
-          summary: remainingSummary,
-          ...(capabilityRef ? { requestedCapabilityRef: capabilityRef } : {})
+          summary: remainingSummary
         }
       ],
+      ...(sourceRepo ? { sourceRepo } : {}),
       ...(args.unresolvedQuestions && args.unresolvedQuestions.length > 0
         ? { unresolvedQuestions: args.unresolvedQuestions }
         : {}),
@@ -754,6 +818,76 @@ async function runLocalHandoff(
   output.log("Next steps in Telegram:");
   output.log("  /handoff show");
   output.log(`  /handoff continue ${workId}`);
+  return 0;
+}
+
+async function runLocalChat(args: LocalCliParsedArgs, config: LoadedConfig, output: LocalCliOutput): Promise<number> {
+  const effectiveUserId = args.userId ?? config.telegram.allowedUserIds[0];
+  if (!effectiveUserId) {
+    output.error("No allowed user id configured. Use --user <id> or set telegram.allowedUserIds.");
+    return 1;
+  }
+
+  const store = new JsonStateStore(config.state.filePath);
+  const loaded = await store.load();
+  const pruned = pruneStateByTtl(loaded, {
+    sessionTtlHours: config.state.sessionTtlHours,
+    approvalTtlHours: config.state.approvalTtlHours
+  }).state;
+
+  let activeChatId = args.chatId;
+  if (!activeChatId) {
+    const allowedChats = config.telegram.allowedChatIds ?? [];
+    if (allowedChats.length === 1) {
+      activeChatId = allowedChats[0];
+    } else {
+      const latestSession = [...pruned.sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+      activeChatId = latestSession?.chatId;
+    }
+  }
+  if (!activeChatId) {
+    output.error("Could not determine target chatId. Pass `chat <chatId>` or configure a single telegram.allowedChatIds entry.");
+    return 1;
+  }
+
+  const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
+  const { createInterface } = await import("node:readline/promises");
+  const shell = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  output.log(`CodeFox chat shell connected. chat=${activeChatId} user=${effectiveUserId}`);
+  output.log("Type /exit to close. Type /chat <id> to switch chat.");
+  try {
+    while (true) {
+      const line = (await shell.question("codefox> ")).trim();
+      if (!line) {
+        continue;
+      }
+      if (line === "/exit" || line === "/quit") {
+        break;
+      }
+      if (line.startsWith("/chat ")) {
+        const nextChat = Number(line.slice("/chat ".length).trim());
+        if (!Number.isSafeInteger(nextChat) || nextChat <= 0) {
+          output.error("chat id must be a positive integer.");
+          continue;
+        }
+        activeChatId = nextChat;
+        output.log(`Switched to chat ${activeChatId}.`);
+        continue;
+      }
+
+      const queued = await queue.enqueue({
+        chatId: activeChatId,
+        userId: effectiveUserId,
+        text: line
+      });
+      output.log(`queued ${queued.id} -> chat ${activeChatId}: ${line}`);
+    }
+  } finally {
+    shell.close();
+  }
   return 0;
 }
 
@@ -793,13 +927,6 @@ function resolveRemainingSummary(
     return `Continue remaining work from Codex session ${session.codexThreadId.trim()}`;
   }
   return "Continue remaining handoff work";
-}
-
-function resolveCapabilityRef(mode?: string): string | undefined {
-  if (mode === "active" || mode === "full-access") {
-    return "repo.run_checks";
-  }
-  return undefined;
 }
 
 function resolveHandoffContext(
@@ -895,6 +1022,115 @@ function resolveHandoffContext(
       sessionId: selectedRoute.sessionId,
       autoSelected: true
     }
+  };
+}
+
+function resolveSourceRepoMetadata(
+  sessionId: string,
+  repoPathOverride: string | undefined,
+  output: LocalCliOutput
+): { name: string; rootPath?: string } | undefined {
+  const route = parseRouteSessionId(sessionId);
+  if (!route?.repoName) {
+    return undefined;
+  }
+  const resolvedOverride = repoPathOverride?.trim();
+  const candidatePath = resolvedOverride
+    ? path.resolve(resolvedOverride)
+    : detectCurrentGitRoot() ?? path.resolve(process.cwd());
+  const currentDirName = path.basename(candidatePath);
+  if (currentDirName !== route.repoName) {
+    if (resolvedOverride) {
+      output.log(
+        `Ignoring --repo-path '${candidatePath}' because it does not match source repo '${route.repoName}'.`
+      );
+    }
+    return { name: route.repoName };
+  }
+  return {
+    name: route.repoName,
+    rootPath: candidatePath
+  };
+}
+
+function detectCurrentGitRoot(): string | undefined {
+  const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: process.cwd(),
+    stdio: ["ignore", "pipe", "ignore"],
+    encoding: "utf8"
+  });
+  if (result.status !== 0) {
+    return undefined;
+  }
+  const trimmed = String(result.stdout ?? "").trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+async function chooseRouteForHandoff(
+  sessions: Array<{ chatId: number; selectedRepo?: string; mode: string; updatedAt: string }>,
+  routes: Array<{ sessionId: string; chatId: number }>,
+  output: LocalCliOutput
+): Promise<string | undefined> {
+  if (routes.length <= 1) {
+    return undefined;
+  }
+  const ranked = routes
+    .map((route) => ({
+      route,
+      updatedAt: sessions.find((entry) => entry.chatId === route.chatId)?.updatedAt ?? ""
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const defaultRoute = ranked[0]?.route;
+  if (!defaultRoute) {
+    return undefined;
+  }
+
+  const render = ranked.map((entry, index) => {
+    const details = parseRouteSessionId(entry.route.sessionId);
+    const repo = details?.repoName ?? "(unknown-repo)";
+    const mode = details?.mode ?? "(unknown-mode)";
+    const marker = index === 0 ? "default" : "";
+    return `${index + 1}. chat=${entry.route.chatId} repo=${repo} mode=${mode} updated=${entry.updatedAt || "(unknown)"}${marker ? ` (${marker})` : ""}`;
+  });
+  output.log("Multiple active CodeFox routes found. Choose a handoff target:");
+  for (const line of render) {
+    output.log(`  ${line}`);
+  }
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    output.log(`Auto-selecting default route: ${defaultRoute.sessionId}`);
+    return defaultRoute.sessionId;
+  }
+  const { createInterface } = await import("node:readline/promises");
+  const prompt = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  try {
+    const answer = (await prompt.question("Route number (Enter for default): ")).trim();
+    if (!answer) {
+      return defaultRoute.sessionId;
+    }
+    const index = Number(answer);
+    if (!Number.isSafeInteger(index) || index < 1 || index > ranked.length) {
+      output.log(`Invalid selection '${answer}', using default route.`);
+      return defaultRoute.sessionId;
+    }
+    return ranked[index - 1].route.sessionId;
+  } finally {
+    prompt.close();
+  }
+}
+
+function parseRouteSessionId(sessionId: string): { chatId: number; repoName: string; mode: string } | undefined {
+  const match = /^chat:(\d+)\/repo:([^/]+)\/mode:(observe|active|full-access)$/.exec(sessionId);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    chatId: Number(match[1]),
+    repoName: match[2],
+    mode: match[3]
   };
 }
 
@@ -1087,7 +1323,7 @@ async function shouldStartMissingRelay(
   }
 }
 
-function startCodeFoxProcess(resolvedConfigPath: string): void {
+function startCodeFoxProcess(resolvedConfigPath: string): number | undefined {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const child = spawn(npmCommand, ["run", "dev", "--", resolvedConfigPath], {
     cwd: process.cwd(),
@@ -1096,6 +1332,20 @@ function startCodeFoxProcess(resolvedConfigPath: string): void {
     env: process.env
   });
   child.unref();
+  return child.pid;
+}
+
+function relayPidFilePath(stateFilePath: string): string {
+  const stateDir = path.dirname(path.resolve(stateFilePath));
+  return path.join(stateDir, "codefox.dev.pid");
+}
+
+async function persistRelayPid(pidFilePath: string, pid: number): Promise<void> {
+  try {
+    await writeFile(pidFilePath, `${pid}\n`, "utf8");
+  } catch {
+    // Non-fatal: user still has direct pid and stop command in output.
+  }
 }
 
 async function waitForRelayReady(baseUrl: string, authToken: string | undefined, timeoutMs: number): Promise<boolean> {
@@ -1123,11 +1373,13 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] approvals",
     "  npm run local:cli -- [--config <path>] specs",
     "  npm run local:cli -- [--config <path>] session <chatId>",
+    "  npm run local:cli -- [--config <path>] [--user <id>] chat [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] send <chatId> <command-text>",
     "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
     "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
-    "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>] [--start-if-missing|--no-start-if-missing]",
+    "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>] [--repo-path <path>]",
+    "             [--start-if-missing|--no-start-if-missing]",
     "  npm run local:cli -- help"
   ].join("\n");
 }

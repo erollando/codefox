@@ -267,6 +267,23 @@ function sanitizeExternalHandoffs(externalHandoffs: ExternalHandoffStateSnapshot
     .map((entry) => ({
       chatId: entry.chatId,
       leaseId: entry.leaseId.trim(),
+      sourceSessionId: typeof entry.sourceSessionId === "string" ? entry.sourceSessionId.trim() : undefined,
+      sourceRepoName:
+        typeof entry.sourceRepoName === "string"
+          ? entry.sourceRepoName.trim()
+          : typeof entry.handoff.sourceRepo?.name === "string"
+            ? entry.handoff.sourceRepo.name.trim()
+            : undefined,
+      sourceRepoPath:
+        typeof entry.sourceRepoPath === "string"
+          ? entry.sourceRepoPath.trim()
+          : typeof entry.handoff.sourceRepo?.rootPath === "string"
+            ? entry.handoff.sourceRepo.rootPath.trim()
+            : undefined,
+      sourceMode:
+        entry.sourceMode === "observe" || entry.sourceMode === "active" || entry.sourceMode === "full-access"
+          ? entry.sourceMode
+          : undefined,
       handoff: {
         schemaVersion: typeof entry.handoff.schemaVersion === "string" ? entry.handoff.schemaVersion : "v1",
         leaseId: typeof entry.handoff.leaseId === "string" ? entry.handoff.leaseId : entry.leaseId.trim(),
@@ -286,6 +303,17 @@ function sanitizeExternalHandoffs(externalHandoffs: ExternalHandoffStateSnapshot
             blockedByApproval: typeof work.blockedByApproval === "boolean" ? work.blockedByApproval : undefined
           }))
           .filter((work) => work.id.length > 0 && work.summary.length > 0),
+        sourceRepo:
+          entry.handoff.sourceRepo && typeof entry.handoff.sourceRepo === "object"
+            ? {
+                name:
+                  typeof entry.handoff.sourceRepo.name === "string" ? entry.handoff.sourceRepo.name.trim() : "",
+                rootPath:
+                  typeof entry.handoff.sourceRepo.rootPath === "string"
+                    ? entry.handoff.sourceRepo.rootPath.trim()
+                    : undefined
+              }
+            : undefined,
         evidenceRefs: Array.isArray(entry.handoff.evidenceRefs)
           ? entry.handoff.evidenceRefs.filter((value): value is string => typeof value === "string")
           : undefined,
@@ -299,7 +327,12 @@ function sanitizeExternalHandoffs(externalHandoffs: ExternalHandoffStateSnapshot
       receivedAt: isValidIsoTimestamp(entry.receivedAt) ? entry.receivedAt : new Date().toISOString(),
       continuedWorkIds: entry.continuedWorkIds.filter((value): value is string => typeof value === "string")
     }))
-    .filter((entry) => entry.handoff.handoffId.length > 0 && entry.handoff.taskId.length > 0);
+    .filter(
+      (entry) =>
+        entry.handoff.handoffId.length > 0 &&
+        entry.handoff.taskId.length > 0 &&
+        (!entry.handoff.sourceRepo || entry.handoff.sourceRepo.name.length > 0)
+    );
 }
 
 function sanitizeSpecRevisions(revisions: SpecRevision[]): SpecRevision[] {

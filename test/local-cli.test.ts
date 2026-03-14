@@ -31,6 +31,25 @@ describe("local CLI", () => {
     expect(parsed.args.text).toBe("/status");
   });
 
+  it("parses chat command with optional chatId", () => {
+    const parsedWithChat = parseLocalCliArgs(["--user", "9", "chat", "100"]);
+    expect(parsedWithChat.ok).toBe(true);
+    if (!parsedWithChat.ok || !parsedWithChat.args) {
+      return;
+    }
+    expect(parsedWithChat.args.command).toBe("chat");
+    expect(parsedWithChat.args.chatId).toBe(100);
+    expect(parsedWithChat.args.userId).toBe(9);
+
+    const parsedWithoutChat = parseLocalCliArgs(["chat"]);
+    expect(parsedWithoutChat.ok).toBe(true);
+    if (!parsedWithoutChat.ok || !parsedWithoutChat.args) {
+      return;
+    }
+    expect(parsedWithoutChat.args.command).toBe("chat");
+    expect(parsedWithoutChat.args.chatId).toBeUndefined();
+  });
+
   it("parses handoff command with required and optional flags", () => {
     const parsed = parseLocalCliArgs([
       "handoff",
@@ -43,6 +62,8 @@ describe("local CLI", () => {
       "Implemented endpoint",
       "--risk",
       "Regression may fail",
+      "--repo-path",
+      "/tmp/payments-api",
       "--start-if-missing"
     ]);
     expect(parsed.ok).toBe(true);
@@ -55,6 +76,7 @@ describe("local CLI", () => {
     expect(parsed.args.remainingSummary).toBe("Run regression suite");
     expect(parsed.args.completedWork).toEqual(["Implemented endpoint"]);
     expect(parsed.args.unresolvedRisks).toEqual(["Regression may fail"]);
+    expect(parsed.args.repoPath).toBe("/tmp/payments-api");
     expect(parsed.args.startIfMissingRelay).toBe(true);
   });
 
@@ -606,10 +628,10 @@ describe("local CLI", () => {
     expect(handoffBody?.remainingWork).toEqual([
       {
         id: "rw-1",
-        summary: "Continue remaining handoff work",
-        requestedCapabilityRef: "repo.run_checks"
+        summary: "Continue remaining handoff work"
       }
     ]);
+    expect(handoffBody?.sourceRepo).toEqual({ name: "payments-api" });
     expect(handoffBody?.specRevisionRef).toBe("v2");
   });
 

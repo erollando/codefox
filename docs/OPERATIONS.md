@@ -70,6 +70,7 @@ npm run verify
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
+- Plain text while a run is active is treated as steer guidance automatically.
 - `/close` to close stored Codex session thread explicitly
 - `/abort` to stop active Codex execution
 - `/repo add <name> <absolute-path>` to register a repo at runtime
@@ -81,7 +82,7 @@ npm run verify
 - `/repo remove <name>` to remove a registered repo
 - `/repo info [name]` to inspect mapped repo path
 - `/mode <observe|active|full-access>` to set execution policy mode
-- `/policy [observe|active|full-access]` to inspect effective policy and spec gates
+- `/policy [observe|active|full-access]` to inspect effective policy and spec rules
 - `/capabilities [pack]` to inspect typed action contracts
 - `/act <pack.action> <instruction>` to execute typed capability actions
 - `/audit <view_id>` to inspect policy/status view audit records
@@ -101,14 +102,17 @@ npm run verify
 ## External Relay (Optional)
 
 - Enable `externalRelay` in config to expose local HTTP adapter for external Codex clients.
+- For a persistent chat-like local terminal workflow, use `npm run chat:cli -- --config <path> [chatId]`.
 - For an operator-facing handoff bridge without manual API calls, use:
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
-  - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--start-if-missing`, `--no-start-if-missing`.
-  - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-selects routed session, auto-generates task id, and auto-derives remaining summary when omitted).
+  - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--repo-path <path>`, `--start-if-missing`, `--no-start-if-missing`.
+  - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-generates task id, auto-derives remaining summary, and if multiple routes exist asks for an explicit route choice with default to most recently used).
+  - Handoff payload includes source repo metadata; `/handoff continue` auto-aligns repo and can auto-register when source path is provided.
   - If relay is unreachable, handoff CLI prompts to start CodeFox automatically on interactive terminals.
+  - When handoff CLI auto-starts CodeFox in background, it prints a PID/direct stop command and writes `<state-dir>/codefox.dev.pid`.
   - If the target chat has no local spec workflow yet, CodeFox auto-bootstraps and approves one at ingest time.
 - Endpoints:
-  - `GET /health`
+  - `GET /health` (always unauthenticated)
   - `GET /v1/external-codex/routes`
   - `GET /v1/external-codex/approval?leaseId=<id>&approvalKey=<key>`
   - `POST /v1/external-codex/bind`

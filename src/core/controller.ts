@@ -104,6 +104,10 @@ type AdmissionSource = "run" | "act" | "handoff_continue" | "steer";
 
 interface ExternalHandoffState {
   leaseId: string;
+  sourceSessionId?: string;
+  sourceRepoName?: string;
+  sourceRepoPath?: string;
+  sourceMode?: PolicyMode;
   bundle: ExternalCodexHandoffBundle;
   receivedAt: string;
   continuedWorkIds: string[];
@@ -174,6 +178,10 @@ export class CodeFoxController {
       }
       this.externalHandoffs.set(entry.chatId, {
         leaseId: entry.leaseId,
+        sourceSessionId: entry.sourceSessionId,
+        sourceRepoName: entry.sourceRepoName,
+        sourceRepoPath: entry.sourceRepoPath,
+        sourceMode: entry.sourceMode,
         bundle: mapStateBundleToExternalBundle(entry.handoff),
         receivedAt: entry.receivedAt,
         continuedWorkIds: [...entry.continuedWorkIds]
@@ -196,6 +204,10 @@ export class CodeFoxController {
       .map(([chatId, handoff]) => ({
         chatId,
         leaseId: handoff.leaseId,
+        sourceSessionId: handoff.sourceSessionId,
+        sourceRepoName: handoff.sourceRepoName,
+        sourceRepoPath: handoff.sourceRepoPath,
+        sourceMode: handoff.sourceMode,
         handoff: mapExternalBundleToStateBundle(handoff.bundle),
         receivedAt: handoff.receivedAt,
         continuedWorkIds: [...handoff.continuedWorkIds]
@@ -246,7 +258,12 @@ export class CodeFoxController {
     };
   }
 
-  async ingestExternalHandoff(chatId: number, leaseId: string, handoff: ExternalCodexHandoffBundle): Promise<{
+  async ingestExternalHandoff(
+    chatId: number,
+    leaseId: string,
+    handoff: ExternalCodexHandoffBundle,
+    sourceSessionId?: string
+  ): Promise<{
     accepted: boolean;
     reason?: string;
   }> {
@@ -315,6 +332,10 @@ export class CodeFoxController {
 
     this.externalHandoffs.set(chatId, {
       leaseId,
+      sourceSessionId: sourceSessionId?.trim(),
+      sourceRepoName: handoff.sourceRepo?.name?.trim() || parseRepoFromExternalSessionId(sourceSessionId),
+      sourceRepoPath: handoff.sourceRepo?.rootPath?.trim() || undefined,
+      sourceMode: parseModeFromExternalSessionId(sourceSessionId),
       bundle: cloneExternalHandoffBundle(handoff),
       receivedAt: new Date().toISOString(),
       continuedWorkIds: []
@@ -675,11 +696,6 @@ export class CodeFoxController {
           await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
         }
-        const specGateMessage = this.getSpecRunGateMessage(chatId, session.mode);
-        if (specGateMessage) {
-          await this.deps.telegram.sendMessage(chatId, specGateMessage);
-          return;
-        }
         const capabilityAction = this.capabilityRegistry.resolveAction(command.capabilityRef);
         if (!capabilityAction) {
           await this.deps.audit.log({
@@ -717,13 +733,14 @@ export class CodeFoxController {
         return;
       }
       case "run": {
-        if (!session.selectedRepo) {
-          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
+        const isExplicitRunCommand = text.trim().toLowerCase().startsWith("/run");
+        if (session.activeRequestId && !isExplicitRunCommand) {
+          const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
+          await this.handleSteer(chatId, userId, command.instruction, attachments);
           return;
         }
-        const specGateMessage = this.getSpecRunGateMessage(chatId, session.mode);
-        if (specGateMessage) {
-          await this.deps.telegram.sendMessage(chatId, specGateMessage);
+        if (!session.selectedRepo) {
+          await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
           return;
         }
         const attachments = this.resolveAttachmentsForRun(chatId, downloadedAttachments);
@@ -1206,6 +1223,43 @@ export class CodeFoxController {
     }
 
     const session = this.deps.sessions.getOrCreate(chatId);
+    if (state.sourceRepoName && session.selectedRepo !== state.sourceRepoName) {
+      if (!this.deps.repos.has(state.sourceRepoName)) {
+        if (state.sourceRepoPath) {
+          const registered = await this.tryRegisterSourceRepoFromHandoff(chatId, userId, state.sourceRepoName, state.sourceRepoPath);
+          if (!registered) {
+            await this.deps.telegram.sendMessage(
+              chatId,
+              `Cannot continue handoff ${state.bundle.handoffId}: source repo '${state.sourceRepoName}' could not be auto-registered from '${state.sourceRepoPath}'. Use /repo add ${state.sourceRepoName} <absolute-path>.`
+            );
+            return;
+          }
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Handoff source repo auto-registered: ${state.sourceRepoName}\npath: ${state.sourceRepoPath}`
+          );
+        } else {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Cannot continue handoff ${state.bundle.handoffId}: source repo '${state.sourceRepoName}' is not registered. Use /repo add ${state.sourceRepoName} <absolute-path>.`
+          );
+          return;
+        }
+      }
+      this.deps.sessions.setRepo(chatId, state.sourceRepoName);
+      this.deps.sessions.clearCodexSession(chatId);
+      await this.deps.audit.log({
+        type: "external_handoff_repo_aligned",
+        chatId,
+        userId,
+        handoffId: state.bundle.handoffId,
+        sourceRepo: state.sourceRepoName
+      });
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Handoff source repo detected: switched to ${state.sourceRepoName} for continuation.`
+      );
+    }
     if (!session.selectedRepo) {
       await this.deps.telegram.sendMessage(chatId, "Select a repo first with /repo <name>.");
       return;
@@ -1380,6 +1434,30 @@ export class CodeFoxController {
     }
 
     await this.registerRepo(chatId, userId, repoName, resolvedPath, "repo_added");
+  }
+
+  private async tryRegisterSourceRepoFromHandoff(
+    chatId: number,
+    userId: number,
+    repoName: string,
+    sourceRepoPath: string
+  ): Promise<boolean> {
+    const resolvedPath = path.resolve(sourceRepoPath);
+    const target = await stat(resolvedPath).catch(() => undefined);
+    if (!target?.isDirectory()) {
+      await this.deps.audit.log({
+        type: "external_handoff_repo_auto_register_failed",
+        chatId,
+        userId,
+        repo: repoName,
+        path: resolvedPath,
+        reason: "path_not_directory"
+      });
+      return false;
+    }
+
+    await this.registerRepo(chatId, userId, repoName, resolvedPath, "repo_added_from_handoff");
+    return this.deps.repos.has(repoName);
   }
 
   private async handleRepoInit(chatId: number, userId: number, repoName: string, basePathOverride?: string): Promise<void> {
@@ -1599,7 +1677,7 @@ export class CodeFoxController {
     userId: number,
     repoName: string,
     resolvedPath: string,
-    eventType: "repo_added" | "repo_initialized"
+    eventType: "repo_added" | "repo_initialized" | "repo_added_from_handoff"
   ): Promise<void> {
     try {
       const added = this.deps.repos.add({
@@ -1627,7 +1705,12 @@ export class CodeFoxController {
         repo: added.name,
         path: added.rootPath
       });
-      const prefix = eventType === "repo_initialized" ? "Repo initialized and added" : "Repo added";
+      const prefix =
+        eventType === "repo_initialized"
+          ? "Repo initialized and added"
+          : eventType === "repo_added_from_handoff"
+            ? "Repo added from handoff"
+            : "Repo added";
       if (eventType === "repo_initialized") {
         this.deps.sessions.setRepo(chatId, added.name);
         this.deps.sessions.clearCodexSession(chatId);
@@ -2284,30 +2367,6 @@ export class CodeFoxController {
     return "Another request is currently being scheduled for this chat.";
   }
 
-  private getSpecRunGateMessage(chatId: number, mode: PolicyMode): string | undefined {
-    const modePolicy = this.specPolicy.forMode(mode);
-    if (!modePolicy.requireApprovedSpecForRun) {
-      return undefined;
-    }
-
-    const spec = this.specDrafts.get(chatId);
-    if (!spec) {
-      return `Mode ${mode} requires an approved spec. Use /spec draft <intent> then /spec approve before /run or /act.`;
-    }
-
-    const currentSpecRevision = getCurrentRevision(spec);
-    if (currentSpecRevision.status !== "approved") {
-      return `Spec v${currentSpecRevision.version} is ${currentSpecRevision.status}. Use /spec approve before /run or /act, or /spec clear to discard it.`;
-    }
-
-    const missing = this.specPolicy.listMissingSectionsForMode(currentSpecRevision, mode);
-    if (missing.length > 0) {
-      return `Approved spec v${currentSpecRevision.version} is missing sections required for mode ${mode} (${missing.join(", ")}). Use /spec clarify then /spec approve.`;
-    }
-
-    return undefined;
-  }
-
   private validateHandoffSpecRef(chatId: number, specRevisionRef: string): { accepted: boolean; reason?: string } {
     const match = /^v(\d+)$/i.exec(specRevisionRef.trim());
     if (!match) {
@@ -2347,19 +2406,11 @@ export class CodeFoxController {
 
   private decideCapabilityAdmission(mode: PolicyMode, capabilityAction?: CapabilityActionSpec): CapabilityAdmissionDecision {
     if (!capabilityAction) {
-      if (mode === "observe") {
-        return {
-          allowed: true,
-          requiresApproval: false,
-          reasonCode: "legacy_untyped_observe",
-          reason: "Untyped observe-mode run allowed."
-        };
-      }
       return {
-        allowed: false,
+        allowed: true,
         requiresApproval: false,
-        reasonCode: "capability_required",
-        reason: "Select a typed action with /act <pack.action> <instruction> or switch to /observe for untyped questions."
+        reasonCode: `legacy_untyped_${mode}`,
+        reason: `Untyped ${mode}-mode run allowed.`
       };
     }
 
@@ -2467,6 +2518,8 @@ function formatExternalHandoffStatus(state: ExternalHandoffState): string {
   const nextWork = outstanding[0];
   return [
     `Handoff ${state.bundle.handoffId}`,
+    `source repo: ${state.sourceRepoName ?? "(not provided)"}`,
+    `source path: ${state.sourceRepoPath ?? "(not provided)"}`,
     `task id: ${state.bundle.taskId}`,
     `remaining: ${outstanding.length}/${state.bundle.remainingWork.length}`,
     `next: ${nextWork ? `${nextWork.id} - ${nextWork.summary}` : "none"}`
@@ -2476,6 +2529,10 @@ function formatExternalHandoffStatus(state: ExternalHandoffState): string {
 function formatExternalHandoffDetail(state: ExternalHandoffState): string {
   const lines = [
     `Handoff detail: ${state.bundle.handoffId}`,
+    `source session: ${state.sourceSessionId ?? "(not provided)"}`,
+    `source repo: ${state.sourceRepoName ?? "(not provided)"}`,
+    `source path: ${state.sourceRepoPath ?? "(not provided)"}`,
+    `source mode: ${state.sourceMode ?? "(not provided)"}`,
     `task id: ${state.bundle.taskId}`,
     `spec ref: ${state.bundle.specRevisionRef}`,
     `completed work count: ${state.bundle.completedWork.length}`,
@@ -2510,6 +2567,26 @@ function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
     commands.push("/handoff status");
   }
   return commands;
+}
+
+function parseRepoFromExternalSessionId(sessionId: string | undefined): string | undefined {
+  if (!sessionId) {
+    return undefined;
+  }
+  const match = /^chat:\d+\/repo:([^/]+)\/mode:(observe|active|full-access)$/.exec(sessionId.trim());
+  return match?.[1];
+}
+
+function parseModeFromExternalSessionId(sessionId: string | undefined): PolicyMode | undefined {
+  if (!sessionId) {
+    return undefined;
+  }
+  const match = /^chat:\d+\/repo:[^/]+\/mode:(observe|active|full-access)$/.exec(sessionId.trim());
+  const mode = match?.[1];
+  if (mode === "observe" || mode === "active" || mode === "full-access") {
+    return mode;
+  }
+  return undefined;
 }
 
 export function createControllerFromAdapters(params: {
@@ -2590,6 +2667,12 @@ function cloneExternalHandoffBundle(handoff: ExternalCodexHandoffBundle): Extern
     ...handoff,
     completedWork: [...handoff.completedWork],
     remainingWork: handoff.remainingWork.map((work) => ({ ...work })),
+    sourceRepo: handoff.sourceRepo
+      ? {
+          name: handoff.sourceRepo.name,
+          rootPath: handoff.sourceRepo.rootPath
+        }
+      : undefined,
     evidenceRefs: handoff.evidenceRefs ? [...handoff.evidenceRefs] : undefined,
     unresolvedQuestions: handoff.unresolvedQuestions ? [...handoff.unresolvedQuestions] : undefined,
     unresolvedRisks: handoff.unresolvedRisks ? [...handoff.unresolvedRisks] : undefined
@@ -2607,6 +2690,12 @@ function mapExternalBundleToStateBundle(bundle: ExternalCodexHandoffBundle): Ext
     specRevisionRef: bundle.specRevisionRef,
     completedWork: [...bundle.completedWork],
     remainingWork: bundle.remainingWork.map((work) => ({ ...work })),
+    sourceRepo: bundle.sourceRepo
+      ? {
+          name: bundle.sourceRepo.name,
+          rootPath: bundle.sourceRepo.rootPath
+        }
+      : undefined,
     evidenceRefs: bundle.evidenceRefs ? [...bundle.evidenceRefs] : undefined,
     unresolvedQuestions: bundle.unresolvedQuestions ? [...bundle.unresolvedQuestions] : undefined,
     unresolvedRisks: bundle.unresolvedRisks ? [...bundle.unresolvedRisks] : undefined
@@ -2624,6 +2713,12 @@ function mapStateBundleToExternalBundle(bundle: ExternalHandoffBundleState): Ext
     specRevisionRef: bundle.specRevisionRef,
     completedWork: [...bundle.completedWork],
     remainingWork: bundle.remainingWork.map((work) => ({ ...work })),
+    sourceRepo: bundle.sourceRepo
+      ? {
+          name: bundle.sourceRepo.name,
+          rootPath: bundle.sourceRepo.rootPath
+        }
+      : undefined,
     evidenceRefs: bundle.evidenceRefs ? [...bundle.evidenceRefs] : undefined,
     unresolvedQuestions: bundle.unresolvedQuestions ? [...bundle.unresolvedQuestions] : undefined,
     unresolvedRisks: bundle.unresolvedRisks ? [...bundle.unresolvedRisks] : undefined

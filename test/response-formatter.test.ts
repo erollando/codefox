@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAuditLookup, formatPolicySummary, formatSessionStatus, formatTaskResult } from "../src/core/response-formatter.js";
+import { formatAuditLookup, formatError, formatPolicySummary, formatSessionStatus, formatTaskResult } from "../src/core/response-formatter.js";
 import { formatCapabilitiesSummary } from "../src/core/response-formatter.js";
 
 describe("response formatter", () => {
@@ -194,5 +194,10 @@ describe("response formatter", () => {
     expect(detail).toContain("inputs: checkProfile:enum");
     expect(detail).toContain("audit: resultSummary");
     expect(detail).toContain("rollback: (none)");
+  });
+
+  it("avoids duplicate error prefixing", () => {
+    expect(formatError("Error: Unknown repository 'x'")).toBe("Error: Unknown repository 'x'");
+    expect(formatError("Unknown repository 'x'")).toBe("Error: Unknown repository 'x'");
   });
 });

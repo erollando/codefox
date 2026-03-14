@@ -27,6 +27,7 @@ export interface ExternalCodexRelayOptions {
   }) => Promise<void>;
   onHandoffReceived?: (event: {
     leaseId: string;
+    sessionId: string;
     chatId: number;
     handoff: ExternalCodexHandoffBundle;
   }) => Promise<void>;
@@ -227,6 +228,7 @@ export class ExternalCodexRelay {
     if (this.options.onHandoffReceived) {
       await this.options.onHandoffReceived({
         leaseId: handoff.leaseId,
+        sessionId: decision.lease.session.sessionId,
         chatId: route.chatId,
         handoff
       });
@@ -278,7 +280,7 @@ export class ExternalCodexRelay {
 }
 
 function formatEventRelayMessage(sessionId: string, event: ExternalCodexEvent): string {
-  const prefix = `External Codex (${sessionId})`;
+  const prefix = "External Codex";
   if (event.type === "progress") {
     const percent = typeof event.progressPercent === "number" ? ` [${event.progressPercent}%]` : "";
     return `${prefix} progress${percent}: ${event.summary}`;
@@ -293,9 +295,9 @@ function formatEventRelayMessage(sessionId: string, event: ExternalCodexEvent): 
   return `${prefix} completion (${event.status}): ${event.summary}`;
 }
 
-function formatHandoffRelayMessage(sessionId: string, handoff: ExternalCodexHandoffBundle): string {
+function formatHandoffRelayMessage(_sessionId: string, handoff: ExternalCodexHandoffBundle): string {
   return [
-    `External Codex (${sessionId}) handoff bundle received:`,
+    "External Codex handoff bundle received:",
     `task: ${handoff.taskId}`,
     `spec ref: ${handoff.specRevisionRef}`,
     `completed work: ${handoff.completedWork.length}`,

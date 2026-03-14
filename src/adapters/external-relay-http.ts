@@ -72,6 +72,15 @@ export class ExternalRelayHttpServer {
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const method = req.method ?? "GET";
+    const requestUrl = new URL(req.url ?? "/", "http://localhost");
+    const pathname = requestUrl.pathname;
+
+    if (method === "GET" && pathname === "/health") {
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
     if (this.options.authToken) {
       const authorization = req.headers.authorization ?? "";
       if (authorization !== `Bearer ${this.options.authToken}`) {
@@ -84,15 +93,6 @@ export class ExternalRelayHttpServer {
     }
 
     this.options.relay.setRoutes(this.options.getRoutes());
-
-    const method = req.method ?? "GET";
-    const requestUrl = new URL(req.url ?? "/", "http://localhost");
-    const pathname = requestUrl.pathname;
-
-    if (method === "GET" && pathname === "/health") {
-      sendJson(res, 200, { ok: true });
-      return;
-    }
 
     if (method === "GET" && pathname === "/v1/external-codex/routes") {
       sendJson(res, 200, {

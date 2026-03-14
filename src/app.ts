@@ -123,7 +123,7 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
       });
     },
     onHandoffReceived: async (event) => {
-      const ingest = await controller.ingestExternalHandoff(event.chatId, event.leaseId, event.handoff);
+      const ingest = await controller.ingestExternalHandoff(event.chatId, event.leaseId, event.handoff, event.sessionId);
       if (!ingest.accepted) {
         await telegram.sendMessage(
           event.chatId,
