@@ -1112,11 +1112,12 @@ export class CodeFoxController {
       });
       await this.deps.telegram.sendMessage(
         chatId,
-        `Capability policy blocked run: ${
+        [
           pending.capabilityRef
-            ? `Unknown capability action '${pending.capabilityRef}'.`
-            : "Select a typed action with /act <pack.action> <instruction>."
-        }`
+            ? `Capability policy blocked run: Unknown capability action '${pending.capabilityRef}'.`
+            : "Capability policy blocked run: pending approval requires a capability action but none was attached.",
+          "Next: retry the original request, or run /act <pack.action> <instruction>."
+        ].join("\n")
       );
       return;
     }
@@ -2472,20 +2473,38 @@ export class CodeFoxController {
   private async sendAdmissionBusyMessage(chatId: number): Promise<void> {
     const session = this.deps.sessions.getOrCreate(chatId);
     const source = this.executionAdmissionSource.get(chatId);
+
+    if (session.activeRequestId) {
+      if (source === "handoff_continue") {
+        await this.deps.telegram.sendMessage(
+          chatId,
+          `Handoff continuation run ${session.activeRequestId} is active.\nNext: send plain text to steer, use /status for context, or /abort to stop.`,
+          { commandButtons: ["/status", "/abort"] }
+        );
+        return;
+      }
+      await this.deps.telegram.sendMessage(
+        chatId,
+        `Run ${session.activeRequestId} is active.\nNext: send plain text to steer, use /status for context, or /abort to stop.`,
+        { commandButtons: ["/status", "/abort"] }
+      );
+      return;
+    }
+
     if (source === "handoff_continue") {
       await this.deps.telegram.sendMessage(
         chatId,
-        "Handoff continuation is being scheduled. Next: wait for the continuation update, or check /handoff status.",
+        "Handoff continuation is being prepared.\nNext: wait for the continuation update, or check /handoff status.",
         { commandButtons: ["/handoff status", "/status"] }
       );
       return;
     }
 
-    if (session.activeRequestId) {
+    if (source) {
       await this.deps.telegram.sendMessage(
         chatId,
-        `Run ${session.activeRequestId} is active.\nNext: send plain text to steer, use /status for context, or /abort to stop.`,
-        { commandButtons: ["/status", "/abort"] }
+        `${formatAdmissionSource(source)} is being prepared for this chat.\nNext: wait for the update, or use /status.`,
+        { commandButtons: ["/status"] }
       );
       return;
     }
@@ -2641,6 +2660,21 @@ function addAuditRef(message: string, viewId: string): string {
 
 function trimTerminalPunctuation(input: string): string {
   return input.trim().replace(/[.!\s]+$/g, "");
+}
+
+function formatAdmissionSource(source: AdmissionSource): string {
+  switch (source) {
+    case "run":
+      return "Run request";
+    case "act":
+      return "Typed action request";
+    case "handoff_continue":
+      return "Handoff continuation";
+    case "steer":
+      return "Steer update";
+    default:
+      return "Request";
+  }
 }
 
 function formatExternalHandoffStatus(state: ExternalHandoffState): string {
