@@ -46,6 +46,7 @@ export function formatHelp(): string {
     "/close",
     "/status",
     "/details",
+    "/continue [work-id]",
     "/handoff [status|show|continue [work-id]|clear]",
     "/audit <view_id>",
     "/abort"

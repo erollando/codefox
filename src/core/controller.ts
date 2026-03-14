@@ -2672,7 +2672,7 @@ function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
   const nextWork = outstanding[0];
   const commands = ["/handoff show"];
   if (nextWork) {
-    commands.push(`/handoff continue ${nextWork.id}`);
+    commands.push(`/continue ${nextWork.id}`);
   } else {
     commands.push("/handoff status");
   }

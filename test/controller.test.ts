@@ -589,7 +589,7 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("Handoff handoff_1"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("rw-1 [continued]"))).toBe(true);
     expect(
-      telegram.sent.some((item) => item.options?.commandButtons?.includes("/handoff continue rw-1") === true)
+      telegram.sent.some((item) => item.options?.commandButtons?.includes("/continue rw-1") === true)
     ).toBe(true);
   });
 

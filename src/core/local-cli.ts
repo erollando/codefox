@@ -817,7 +817,7 @@ async function runLocalHandoff(
   output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
   output.log("Next steps in Telegram:");
   output.log("  /handoff show");
-  output.log(`  /handoff continue ${workId}`);
+  output.log(`  /continue ${workId}`);
   return 0;
 }
 

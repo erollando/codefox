@@ -610,7 +610,7 @@ describe("local CLI", () => {
     expect(logs.join("\n")).toContain("Handoff submitted successfully");
     expect(logs.join("\n")).toContain("Auto-selected session chat:100/repo:payments-api/mode:active");
     expect(logs.join("\n")).toContain("task id: TASK-");
-    expect(logs.join("\n")).toContain("/handoff continue rw-1");
+    expect(logs.join("\n")).toContain("/continue rw-1");
 
     expect(relayRequests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
       "GET /v1/external-codex/routes",

@@ -143,6 +143,11 @@ export function parseCommand(text: string): ParsedCommand {
         return { type: "handoff", action: "status" };
       }
       return parseHandoffCommand(arg, text);
+    case "/continue":
+      if (!arg) {
+        return { type: "handoff", action: "continue" };
+      }
+      return parseContinueAlias(arg, text);
     case "/approve":
       return { type: "approve" };
     case "/deny":
@@ -179,6 +184,14 @@ function parseHandoffCommand(arg: string, raw: string): ParsedCommand {
     return parts.length === 1 ? { type: "handoff", action: "clear" } : { type: "unknown", raw };
   }
 
+  return { type: "unknown", raw };
+}
+
+function parseContinueAlias(arg: string, raw: string): ParsedCommand {
+  const parts = arg.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    return { type: "handoff", action: "continue", workId: parts[0] };
+  }
   return { type: "unknown", raw };
 }
 
