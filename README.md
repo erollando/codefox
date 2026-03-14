@@ -13,6 +13,7 @@ It authenticates Telegram users/chats, maps requests to approved repositories, a
   - repo root safety
   - policy modes (`observe`, `active`, `full-access`)
 - Codex adapter: CLI invocation with `runArgTemplate`, mode sandbox mapping, and thread-resume support.
+- External Codex integration core: leased bind + typed event/handoff schemas for transport-agnostic attached reporting and continuation handoff.
 - Audit logging: structured JSON lines with redacted previews for request/progress text (including tagged `[stdout]`/`[stderr]` Codex progress lines).
 - Startup records detected Codex CLI version in audit logs and emits a non-blocking compatibility warning when outside tested range.
 
@@ -239,6 +240,15 @@ Or pass config path explicitly:
 
 ```bash
 npm run dev -- ./config/codefox.config.json
+```
+
+Local CLI (read model for sessions/specs/approvals):
+
+```bash
+npm run local:cli -- sessions
+npm run local:cli -- approvals
+npm run local:cli -- specs
+npm run local:cli -- session 100
 ```
 
 ## Validate
