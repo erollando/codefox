@@ -645,6 +645,7 @@ const UI_HTML = `<!doctype html>
       --brand-soft: #d8f3ef;
       --brand-soft-2: #effaf8;
       --shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+      --app-vh: 1vh;
     }
     html, body { height: 100%; }
     * { box-sizing: border-box; }
@@ -653,8 +654,8 @@ const UI_HTML = `<!doctype html>
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
       color: var(--text);
-      min-height: 100dvh;
-      height: 100dvh;
+      min-height: calc(var(--app-vh) * 100);
+      height: calc(var(--app-vh) * 100);
       overflow: hidden;
     }
     .shell {
@@ -664,7 +665,7 @@ const UI_HTML = `<!doctype html>
       display: grid;
       grid-template-columns: 280px 1fr;
       gap: 14px;
-      height: 100dvh;
+      height: calc(var(--app-vh) * 100);
     }
     .card {
       background: var(--card);
@@ -822,7 +823,7 @@ const UI_HTML = `<!doctype html>
         grid-template-rows: auto 1fr;
         padding: 10px;
         gap: 10px;
-        height: 100dvh;
+        height: calc(var(--app-vh) * 100);
       }
       .sessions {
         max-height: 116px;
@@ -857,7 +858,7 @@ const UI_HTML = `<!doctype html>
       grid-template-rows: auto 1fr;
       padding: 10px;
       gap: 10px;
-      height: 100dvh;
+      height: calc(var(--app-vh) * 100);
     }
     body.mobile-mode .sessions {
       max-height: 116px;
@@ -904,6 +905,21 @@ const UI_HTML = `<!doctype html>
     </section>
   </div>
   <script>
+    function updateViewportHeightVar() {
+      const viewportHeight = window.visualViewport && window.visualViewport.height
+        ? window.visualViewport.height
+        : window.innerHeight;
+      const vh = viewportHeight * 0.01;
+      document.documentElement.style.setProperty("--app-vh", vh + "px");
+    }
+
+    updateViewportHeightVar();
+    window.addEventListener("resize", updateViewportHeightVar, { passive: true });
+    if (window.visualViewport && typeof window.visualViewport.addEventListener === "function") {
+      window.visualViewport.addEventListener("resize", updateViewportHeightVar, { passive: true });
+      window.visualViewport.addEventListener("scroll", updateViewportHeightVar, { passive: true });
+    }
+
     const params = new URLSearchParams(window.location.search);
     const forcedMobile = params.get("mobile") === "1";
     if (forcedMobile) {
