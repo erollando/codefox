@@ -10,7 +10,7 @@ Use this page as the index for detailed operational docs.
 2. **Operate day-to-day from Telegram**
 - Read: [OPERATIONS.md](./OPERATIONS.md#operational-commands-telegram)
 
-3. **Use local REPL / local controls**
+3. **Use local UI / local controls**
 - Read: [OPERATIONS.md](./OPERATIONS.md#external-relay-optional)
 
 4. **Use local web UI**

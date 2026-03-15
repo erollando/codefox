@@ -121,6 +121,7 @@ export interface StateConfig {
   sessionTtlHours?: number;
   approvalTtlHours?: number;
   codexSessionIdleMinutes: number;
+  chatLogMaxFileBytes?: number;
 }
 
 export interface ExternalRelayConfig {

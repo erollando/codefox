@@ -34,4 +34,32 @@ describe("LocalChatLog", () => {
     expect(chat100).toHaveLength(2);
     expect(chat100.map((entry) => entry.text)).toEqual(["/status", "Status reply"]);
   });
+
+  it("keeps only the newest messages within the configured file cap", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codefox-chatlog-cap-"));
+    const filePath = path.join(root, "chat.log");
+    const log = new LocalChatLog(filePath, 260);
+
+    await log.append({
+      chatId: 100,
+      direction: "outbound",
+      channel: "telegram",
+      text: "first message"
+    });
+    await log.append({
+      chatId: 100,
+      direction: "outbound",
+      channel: "telegram",
+      text: "second message"
+    });
+    await log.append({
+      chatId: 100,
+      direction: "outbound",
+      channel: "telegram",
+      text: "third message"
+    });
+
+    const retained = await log.tail(100, 20);
+    expect(retained.map((entry) => entry.text)).toEqual(["third message"]);
+  });
 });

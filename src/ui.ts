@@ -8,7 +8,7 @@ import { JsonStateStore, pruneStateByTtl } from "./core/state-store.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./core/local-command-queue.js";
 import { LocalChatLog, defaultLocalChatLogPath } from "./core/local-chat-log.js";
 import { getCurrentRevision } from "./core/spec-workflow.js";
-import { ensureCodeFoxRunning } from "./core/dev-runtime.js";
+import { ensureCodeFoxRunning, stopOwnedCodeFoxProcess } from "./core/dev-runtime.js";
 import { UiDeviceAuthStore, defaultUiDeviceStorePath } from "./core/ui-device-auth.js";
 
 interface UiArgs {
@@ -73,10 +73,15 @@ if (!args.ok) {
   const config = await loadConfig(configPath);
   const store = new JsonStateStore(config.state.filePath);
   const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
-  const chatLog = new LocalChatLog(defaultLocalChatLogPath(config.state.filePath));
+  const chatLog = new LocalChatLog(
+    defaultLocalChatLogPath(config.state.filePath),
+    config.state.chatLogMaxFileBytes ?? 2 * 1024 * 1024
+  );
   const deviceAuth = new UiDeviceAuthStore(defaultUiDeviceStorePath(config.state.filePath));
   const defaultUserId = args.value.userId ?? config.telegram.allowedUserIds[0];
   const pairCodes = new Map<string, number>();
+  let ownedRuntimePid: number | undefined;
+  let shuttingDown = false;
 
   if (!defaultUserId) {
     console.error("No allowed user id configured. Set telegram.allowedUserIds or pass --user <id>.");
@@ -88,6 +93,7 @@ if (!args.ok) {
         stateFilePath: config.state.filePath
       });
       if (ensured.started) {
+        ownedRuntimePid = ensured.pid;
         console.log(`CodeFox was not running. Started background service (pid ${ensured.pid}).`);
       }
     } catch (error) {
@@ -182,6 +188,37 @@ if (!args.ok) {
         writeJson(response, 500, { ok: false, error: String(error) });
       }
     });
+
+    const shutdown = (signal: string): void => {
+      if (shuttingDown) {
+        return;
+      }
+      shuttingDown = true;
+      void (async () => {
+        if (ownedRuntimePid) {
+          console.log(`Received ${signal}, stopping auto-started CodeFox (pid ${ownedRuntimePid})...`);
+        }
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }).catch(() => undefined);
+        if (ownedRuntimePid) {
+          try {
+            await stopOwnedCodeFoxProcess({
+              pid: ownedRuntimePid,
+              stateFilePath: config.state.filePath
+            });
+          } catch (error) {
+            console.error(`Failed to stop auto-started CodeFox: ${String(error)}`);
+          }
+        }
+      })().finally(() => {
+        process.exit(0);
+      });
+    };
+
+    process.on("SIGINT", () => shutdown("SIGINT"));
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGHUP", () => shutdown("SIGHUP"));
 
     server.listen(args.value.port, args.value.host, async () => {
       console.log(`CodeFox UI ready at http://${args.value.host}:${args.value.port}`);
@@ -402,23 +439,23 @@ function buildQuickCommands(
   }
 ): string[] {
   if (hasApproval) {
-    return ["Approve request", "Deny request", "Show pending", "Show status", "Stop service"];
+    return ["/approve", "/deny", "/pending", "/status", "/service stop"];
   }
   if (activeRequest) {
-    return ["Abort run", "Show status", "Show details", "Stop service"];
+    return ["/abort", "/status", "/details", "/service stop"];
   }
   if (handoff) {
     if (handoff.awaitingConfirmation) {
-      return ["Accept handoff", "Reject handoff", "Handoff details", "Show status"];
+      return ["/accept", "/reject", "/handoff show", "/status"];
     }
     if (handoff.awaitingExternalCompletion) {
-      return ["Handoff details", "Show status", "Stop service"];
+      return ["/handoff show", "/status", "/service stop"];
     }
     if (handoff.remainingOpen > 0) {
-      return ["Continue handoff", "Handoff details", "Show status", "Stop service"];
+      return ["/continue", "/handoff show", "/status", "/service stop"];
     }
   }
-  return ["Show status", "Show details", "Show pending", "Stop service"];
+  return ["/status", "/details", "/pending", "/service stop"];
 }
 
 function resolveDefaultChatId(
@@ -801,12 +838,19 @@ const UI_HTML = `<!doctype html>
       padding: 9px 10px;
       background: #fff;
       box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+      max-width: min(92%, 780px);
     }
     .msg.outbound {
+      align-self: flex-start;
       border-left: 4px solid #0369a1;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      border-color: #bfdbfe;
     }
     .msg.inbound {
+      align-self: flex-end;
       border-left: 4px solid var(--brand);
+      background: linear-gradient(180deg, #f7fffc 0%, #eefcf6 100%);
+      border-color: #b7ead6;
     }
     .msg pre {
       margin: 5px 0 0;
@@ -814,6 +858,29 @@ const UI_HTML = `<!doctype html>
       font-family: "IBM Plex Mono", "Cascadia Code", monospace;
       font-size: 12px;
       line-height: 1.45;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .actions button {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 5px 10px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
+      min-height: 28px;
+    }
+    .actions button:hover {
+      border-color: var(--brand);
+      background: #fff;
     }
     .composer {
       display: grid;
@@ -984,6 +1051,7 @@ const UI_HTML = `<!doctype html>
       const nextFingerprint = buildMessageFingerprint(data.messages || []);
       const hasNewMessages = nextFingerprint !== lastMessageFingerprint;
       lastMessageFingerprint = nextFingerprint;
+      const activeCommands = resolveActiveCommands(data);
 
       sessionsEl.innerHTML = "";
       for (const session of data.sessions) {
@@ -1003,7 +1071,7 @@ const UI_HTML = `<!doctype html>
       const selected = data.selected;
       if (!selected) {
         contextEl.innerHTML =
-          "<span class='tiny'>No active session yet. Start from Telegram, REPL, or handoff.</span>";
+          "<span class='tiny'>No active session yet. Start from Telegram, the local UI, or handoff.</span>";
         quickEl.innerHTML = "";
         feedEl.innerHTML = "<div class='tiny'>No messages yet.</div>";
         forceScrollToBottom = false;
@@ -1030,7 +1098,7 @@ const UI_HTML = `<!doctype html>
       contextEl.innerHTML = pills.join("");
 
       quickEl.innerHTML = "";
-      for (const command of selected.quickCommands) {
+      for (const command of activeCommands) {
         const button = document.createElement("button");
         button.textContent = formatCommandLabel(command);
         button.onclick = () => sendText(command);
@@ -1046,11 +1114,27 @@ const UI_HTML = `<!doctype html>
           card.className = "msg " + message.direction;
           const header = document.createElement("div");
           header.className = "tiny";
-          header.textContent = message.timestamp + " • " + message.channel + " • " + message.direction;
+          header.textContent =
+            message.timestamp +
+            " • " +
+            message.channel +
+            " • " +
+            (message.direction === "inbound" ? "input" : "output");
           const body = document.createElement("pre");
           body.textContent = message.text;
           card.appendChild(header);
           card.appendChild(body);
+          if (Array.isArray(message.commandButtons) && message.commandButtons.length > 0) {
+            const actions = document.createElement("div");
+            actions.className = "actions";
+            for (const command of message.commandButtons) {
+              const actionButton = document.createElement("button");
+              actionButton.textContent = formatCommandLabel(command);
+              actionButton.onclick = () => sendText(command);
+              actions.appendChild(actionButton);
+            }
+            card.appendChild(actions);
+          }
           feedEl.appendChild(card);
         }
       }
@@ -1085,7 +1169,13 @@ const UI_HTML = `<!doctype html>
       if (typeof command !== "string") {
         return "";
       }
-      return command.startsWith("/") ? command.slice(1) : command;
+      return command;
+    }
+
+    function resolveActiveCommands(data) {
+      return Array.isArray(data.selected && data.selected.quickCommands)
+        ? data.selected.quickCommands.filter((value) => typeof value === "string" && value.trim())
+        : [];
     }
 
     function buildMessageFingerprint(messages) {

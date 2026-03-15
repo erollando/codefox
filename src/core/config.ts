@@ -24,6 +24,7 @@ const DEFAULT_FORBIDDEN_PATH_PATTERNS = [
 ] as const;
 const DEFAULT_CODEX_BLOCKED_ENV_VARS = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_TOKEN", "CODEFOX_*"] as const;
 const DEFAULT_CODEX_SESSION_IDLE_MINUTES = 120;
+const DEFAULT_CHAT_LOG_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_AUDIT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_EXTERNAL_RELAY_HOST = "127.0.0.1";
 const DEFAULT_EXTERNAL_RELAY_PORT = 8787;
@@ -433,7 +434,10 @@ export function validateConfig(parsed: unknown, baseDir: string = process.cwd())
       ),
       sessionTtlHours: parseOptionalPositiveNumber(state.sessionTtlHours, "state.sessionTtlHours"),
       approvalTtlHours: parseOptionalPositiveNumber(state.approvalTtlHours, "state.approvalTtlHours"),
-      codexSessionIdleMinutes
+      codexSessionIdleMinutes,
+      chatLogMaxFileBytes:
+        parseOptionalPositiveInteger(state.chatLogMaxFileBytes, "state.chatLogMaxFileBytes") ??
+        DEFAULT_CHAT_LOG_MAX_FILE_BYTES
     },
     audit: {
       logFilePath: resolveFromBase(baseDir, mustString(audit.logFilePath, "audit.logFilePath")),

@@ -25,7 +25,7 @@ Output includes a full transcript (`USER>`, `CODEFOX>`, and `EXTERNAL_CODEX>` li
 
 - External progress and approval events entering CodeFox
 - Handoff bundle ingest
-- `Accept handoff`
+- `/accept`
 - waiting state while the external client is still running
 - later external `completion`
 - automatic CodeFox continuation from stored handoff context

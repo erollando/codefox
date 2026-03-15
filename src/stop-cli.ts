@@ -3,7 +3,7 @@ import { runLocalCli } from "./core/local-cli.js";
 
 try {
   await loadEnvFile();
-  const exitCode = await runLocalCli(["chat", ...process.argv.slice(2)], {
+  const exitCode = await runLocalCli(["stop", ...process.argv.slice(2)], {
     log(line) {
       console.log(line);
     },
@@ -13,6 +13,6 @@ try {
   });
   process.exitCode = exitCode;
 } catch (error) {
-  console.error(`Chat CLI error: ${String(error)}`);
+  console.error(`Stop CLI error: ${String(error)}`);
   process.exitCode = 1;
 }

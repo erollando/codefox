@@ -23,10 +23,10 @@ describe("response formatter", () => {
       { instructionPreview: "prepare release commit and push branch" }
     );
 
-    expect(message).toContain("Completed: done");
-    expect(message).toContain("request: prepare release commit and push branch");
-    expect(message).toContain("Next: use /details for full context.");
+    expect(message).toBe("done");
     expect(message).not.toContain("request completed:");
+    expect(message).not.toContain("request:");
+    expect(message).not.toContain("Next: use /details for full context.");
     expect(message).not.toContain("output:");
     expect(message).not.toContain("very noisy transcript");
   });

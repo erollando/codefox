@@ -170,6 +170,11 @@ describe("parseCommand", () => {
     expect(parseCommand("/stopconfirm")).toEqual({ type: "service", action: "stop", confirm: true });
     expect(parseCommand("/details")).toEqual({ type: "details" });
     expect(parseCommand("/pending")).toEqual({ type: "pending" });
+    expect(parseCommand("/handoff show")).toEqual({ type: "handoff", action: "show" });
+    expect(parseCommand("/handoff status")).toEqual({ type: "handoff", action: "status" });
+    expect(parseCommand("/handoff clear")).toEqual({ type: "handoff", action: "clear" });
+    expect(parseCommand("/accept")).toEqual({ type: "handoff_confirmation", decision: "accept" });
+    expect(parseCommand("/reject")).toEqual({ type: "handoff_confirmation", decision: "reject" });
     expect(parseCommand("/continue")).toEqual({ type: "handoff", action: "continue" });
     expect(parseCommand("/continue rw-1")).toEqual({
       type: "handoff",
@@ -193,20 +198,6 @@ describe("parseCommand", () => {
       type: "run",
       instruction: "fix failing build"
     });
-  });
-
-  it("parses human-readable reply-keyboard button labels", () => {
-    expect(parseCommand("Show status")).toEqual({ type: "status" });
-    expect(parseCommand("Show details")).toEqual({ type: "details" });
-    expect(parseCommand("Show pending")).toEqual({ type: "pending" });
-    expect(parseCommand("Approve request")).toEqual({ type: "approve" });
-    expect(parseCommand("Deny request")).toEqual({ type: "deny" });
-    expect(parseCommand("Abort run")).toEqual({ type: "abort" });
-    expect(parseCommand("Stop service")).toEqual({ type: "service", action: "stop", confirm: false });
-    expect(parseCommand("Confirm stop")).toEqual({ type: "service", action: "stop", confirm: true });
-    expect(parseCommand("Handoff details")).toEqual({ type: "handoff", action: "show" });
-    expect(parseCommand("Continue handoff")).toEqual({ type: "handoff", action: "continue" });
-    expect(parseCommand("Continue 2")).toEqual({ type: "handoff", action: "continue", workId: "2" });
   });
 
   it("returns unknown for malformed inputs", () => {
@@ -236,6 +227,7 @@ describe("parseCommand", () => {
     expect(parseCommand("/steer").type).toBe("unknown");
     expect(parseCommand("/continue rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/resume rw-1 extra").type).toBe("unknown");
+    expect(parseCommand("/handoff accept").type).toBe("unknown");
     expect(parseCommand("/service").type).toBe("unknown");
     expect(parseCommand("/service restart").type).toBe("unknown");
     expect(parseCommand("/service stop now").type).toBe("unknown");

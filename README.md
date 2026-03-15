@@ -6,7 +6,7 @@ CodeFox is a control plane for Codex work: you can start locally, continue remot
 
 ## What You Get
 
-- One shared session state across Telegram, local UI, and local REPL.
+- One shared session state across Telegram, the local UI, and local admin commands.
 - Structured, approval-aware execution instead of ad-hoc remote control.
 - Seamless switch between desk and phone without losing context.
 
@@ -101,23 +101,7 @@ Mobile mode:
 Important: laptop UI and phone UI show the same CodeFox data and session state, so switching between local and remote work stays consistent.
 Remote scope note: in CodeFox today, "remote" (internet) UI means Telegram. LAN/browser control is handled by the local web UI.
 
-### Local REPL
-
-```bash
-npm run cli
-```
-
-If CodeFox is not running, REPL auto-starts it in background.
-
-Example:
-
-```text
-status
-what changed in the last run?
-:handoff
-:accept
-:continue rw-1
-```
+Local rule: slash-prefixed input is for CodeFox control. Plain text is forwarded to Codex as work/steer input.
 
 ### External Handoff (Desk -> Telegram)
 
@@ -134,17 +118,15 @@ If CodeFox is not already running, the handoff CLI now prompts before starting i
 Then from Telegram/UI:
 
 ```text
-Accept handoff
+/accept
 ```
 
-Handoff behavior: after a handoff arrives, Telegram shows `Accept handoff` / `Reject handoff`. If the external client is still running, CodeFox waits for the external completion signal and then starts its own continuation automatically. If the external client already finished, accepting starts that continuation immediately. Acceptance does not attach to or reclaim the original external Codex thread. CodeFox only takes ownership of the handoff state and any later CodeFox-managed continuation run. Today, external handoff continuity is task/spec/repo context continuity; same-thread takeover would require the external client to provide a resumable Codex thread/session id.
+Handoff behavior: after a handoff arrives, Telegram/UI shows `/accept`, `/reject`, and `/handoff show`. If the external client is still running, CodeFox waits for the external completion signal and then starts its own continuation automatically. If the external client already finished, accepting starts that continuation immediately. Acceptance does not attach to or reclaim the original external Codex thread. CodeFox only takes ownership of the handoff state and any later CodeFox-managed continuation run. Today, external handoff continuity is task/spec/repo context continuity; same-thread takeover would require the external client to provide a resumable Codex thread/session id.
 
 ## Operational Helpers
 
 ```bash
 npm run dev:stop
-npm run dashboard
-npm run local:cli -- dashboard
 ```
 
 ## Trust Boundary

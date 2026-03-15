@@ -25,7 +25,7 @@
   <rect class="panel" x="30" y="70" width="280" height="170" />
   <text class="text" x="52" y="102">User Channels</text>
   <text class="small" x="52" y="132">- Telegram</text>
-  <text class="small" x="52" y="156">- Local REPL / mobile UI</text>
+  <text class="small" x="52" y="156">- Local UI / mobile UI</text>
   <text class="small" x="52" y="180">- Voice/forms (future)</text>
   <text class="small" x="52" y="212">Users do not talk to workers directly.</text>
 

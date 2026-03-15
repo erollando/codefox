@@ -59,6 +59,7 @@ describe("config validation", () => {
     expect(validated.codex.preflightArgs).toEqual(["--version"]);
     expect(validated.codex.preflightTimeoutMs).toBe(5000);
     expect(validated.state.codexSessionIdleMinutes).toBe(120);
+    expect(validated.state.chatLogMaxFileBytes).toBe(2 * 1024 * 1024);
     expect(validated.state.sessionTtlHours).toBeUndefined();
     expect(validated.state.approvalTtlHours).toBeUndefined();
     expect(validated.audit.maxFileBytes).toBe(5 * 1024 * 1024);
@@ -97,12 +98,14 @@ describe("config validation", () => {
       filePath: "./.codefox/state.json",
       sessionTtlHours: 72,
       approvalTtlHours: 24,
-      codexSessionIdleMinutes: 45
+      codexSessionIdleMinutes: 45,
+      chatLogMaxFileBytes: 4096
     };
     const validated = validateConfig(config);
     expect(validated.state.sessionTtlHours).toBe(72);
     expect(validated.state.approvalTtlHours).toBe(24);
     expect(validated.state.codexSessionIdleMinutes).toBe(45);
+    expect(validated.state.chatLogMaxFileBytes).toBe(4096);
   });
 
   it("parses optional policy.specPolicy overrides", () => {
@@ -185,6 +188,15 @@ describe("config validation", () => {
       codexSessionIdleMinutes: 0
     };
     expect(() => validateConfig(config)).toThrowError(/state\.codexSessionIdleMinutes/);
+  });
+
+  it("rejects non-positive chat log max file bytes", () => {
+    const config = makeValidConfig();
+    (config as Record<string, unknown>).state = {
+      filePath: "./.codefox/state.json",
+      chatLogMaxFileBytes: 0
+    };
+    expect(() => validateConfig(config)).toThrowError(/state\.chatLogMaxFileBytes/);
   });
 
   it("parses optional audit.maxFileBytes and rejects non-positive values", () => {

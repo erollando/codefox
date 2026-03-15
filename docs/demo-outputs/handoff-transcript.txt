@@ -15,8 +15,8 @@ npm run handoff:cli -- --config ./config/codefox.config.json --completed "API en
 07. spec ref: v2
 08. remaining work: rw-1 (Run full regression checks before release)
 09. Next steps in Telegram:
-10.   Accept handoff
-11.   Handoff details (optional)
+10.   /accept
+11.   /handoff show (optional)
 12.   After acceptance, CodeFox can continue immediately.
 
 === Relay Calls ===

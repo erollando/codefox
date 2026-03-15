@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -42,17 +42,21 @@ export class LocalChatLog {
       commandButtons: input.commandButtons && input.commandButtons.length > 0 ? [...input.commandButtons] : undefined
     };
 
-    const line = `${JSON.stringify(entry)}\n`;
+    const line = JSON.stringify(entry);
     this.writeQueue = this.writeQueue.then(async () => {
       const parentDir = path.dirname(this.filePath);
       await mkdir(parentDir, { recursive: true });
 
-      const lineBytes = Buffer.byteLength(line, "utf8");
-      const currentSize = await this.readFileSize();
-      if (currentSize + lineBytes > this.maxFileBytes) {
-        await writeFile(this.filePath, "", "utf8");
-      }
-      await appendFile(this.filePath, line, "utf8");
+      const existing = await readFile(this.filePath, "utf8").catch(() => "");
+      const lines = existing
+        .split("\n")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      lines.push(line);
+
+      const compacted = compactJsonlLines(lines, this.maxFileBytes);
+      const nextContents = compacted.length > 0 ? `${compacted.join("\n")}\n` : "";
+      await writeFile(this.filePath, nextContents, "utf8");
     });
     await this.writeQueue;
   }
@@ -81,17 +85,28 @@ export class LocalChatLog {
     }
     return entries.reverse();
   }
-
-  private async readFileSize(): Promise<number> {
-    try {
-      const info = await stat(this.filePath);
-      return info.size;
-    } catch {
-      return 0;
-    }
-  }
 }
 
 export function defaultLocalChatLogPath(stateFilePath: string): string {
   return path.join(path.dirname(path.resolve(stateFilePath)), "local-chat-log.jsonl");
+}
+
+function compactJsonlLines(lines: string[], maxFileBytes: number): string[] {
+  const kept: string[] = [];
+  let totalBytes = 0;
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    const lineBytes = Buffer.byteLength(`${line}\n`, "utf8");
+    if (kept.length > 0 && totalBytes + lineBytes > maxFileBytes) {
+      break;
+    }
+    if (kept.length === 0 && lineBytes > maxFileBytes) {
+      continue;
+    }
+    kept.push(line);
+    totalBytes += lineBytes;
+  }
+
+  return kept.reverse();
 }

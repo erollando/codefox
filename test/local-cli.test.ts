@@ -90,25 +90,6 @@ describe("local CLI", () => {
     expect(parsed.args.text).toBe("/status");
   });
 
-  it("parses chat command with optional chatId", () => {
-    const parsedWithChat = parseLocalCliArgs(["--user", "9", "chat", "100"]);
-    expect(parsedWithChat.ok).toBe(true);
-    if (!parsedWithChat.ok || !parsedWithChat.args) {
-      return;
-    }
-    expect(parsedWithChat.args.command).toBe("chat");
-    expect(parsedWithChat.args.chatId).toBe(100);
-    expect(parsedWithChat.args.userId).toBe(9);
-
-    const parsedWithoutChat = parseLocalCliArgs(["chat"]);
-    expect(parsedWithoutChat.ok).toBe(true);
-    if (!parsedWithoutChat.ok || !parsedWithoutChat.args) {
-      return;
-    }
-    expect(parsedWithoutChat.args.command).toBe("chat");
-    expect(parsedWithoutChat.args.chatId).toBeUndefined();
-  });
-
   it("parses local shortcut commands", () => {
     const dashboard = parseLocalCliArgs(["dashboard"]);
     expect(dashboard.ok).toBe(true);
@@ -898,7 +879,7 @@ describe("local CLI", () => {
     expect(logs.join("\n")).toContain("Handoff submitted successfully");
     expect(logs.join("\n")).toContain("Auto-selected session chat:100/repo:payments-api/mode:active");
     expect(logs.join("\n")).toContain("task id: TASK-");
-    expect(logs.join("\n")).toContain("Accept handoff");
+    expect(logs.join("\n")).toContain("/accept");
     expect(logs.join("\n")).toContain("After acceptance, CodeFox can continue immediately.");
 
     expect(relayRequests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([

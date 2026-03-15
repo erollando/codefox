@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export interface EnsureCodeFoxRunningResult {
@@ -38,6 +38,45 @@ export async function ensureCodeFoxRunning(input: {
     pid,
     runningPids: [pid]
   };
+}
+
+export async function stopOwnedCodeFoxProcess(input: {
+  pid?: number;
+  stateFilePath: string;
+}): Promise<void> {
+  const pid = input.pid;
+  if (!pid || pid <= 0) {
+    return;
+  }
+
+  if (!isProcessAlive(pid)) {
+    await removeRelayPidIfMatches(input.stateFilePath, pid);
+    return;
+  }
+
+  try {
+    process.kill(pid);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code !== "ESRCH") {
+      throw error;
+    }
+  }
+
+  const stoppedGracefully = await waitForProcessExit(pid, 5000);
+  if (!stoppedGracefully) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== "ESRCH") {
+        throw error;
+      }
+    }
+    await waitForProcessExit(pid, 2000);
+  }
+
+  await removeRelayPidIfMatches(input.stateFilePath, pid);
 }
 
 async function waitForRunningProcess(
@@ -121,6 +160,17 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isProcessAlive(pid);
+}
+
 async function isLikelyCodeFoxProcess(pid: number): Promise<boolean> {
   if (process.platform !== "linux") {
     return true;
@@ -162,4 +212,17 @@ async function findCodeFoxPidsByConfig(configPath: string): Promise<number[]> {
     }
   }
   return matches;
+}
+
+async function removeRelayPidIfMatches(stateFilePath: string, pid: number): Promise<void> {
+  const pidFilePath = relayPidFilePath(stateFilePath);
+  const pidFromFile = await readRelayPid(pidFilePath);
+  if (pidFromFile !== pid) {
+    return;
+  }
+  try {
+    await unlink(pidFilePath);
+  } catch {
+    // Non-fatal cleanup.
+  }
 }

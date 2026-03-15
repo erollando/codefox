@@ -50,9 +50,10 @@ export function formatHelp(): string {
     "/stop [confirm] | /stopconfirm",
     "/status",
     "/details",
+    "/handoff <status|show|continue [work-id|index]|clear>",
+    "/accept | /reject",
     "/continue [work-id|index]",
     "/resume [work-id|index]",
-    "Accept handoff | Reject handoff | Handoff details | Continue handoff",
     "/audit <view_id>",
     "/abort"
   ].join("\n");
@@ -265,6 +266,10 @@ export function formatTaskResult(
   const safeInstructionPreview = context?.instructionPreview
     ? redactSensitive(context.instructionPreview).trim()
     : "";
+
+  if (result.ok) {
+    return safeSummary;
+  }
 
   const state = result.ok ? "Completed" : result.aborted ? "Aborted" : result.timedOut ? "Timed out" : "Failed";
   const lines = [`${state}: ${safeSummary}`];

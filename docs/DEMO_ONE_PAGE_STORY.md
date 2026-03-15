@@ -16,7 +16,7 @@ CodeFox keeps the work moving from your phone.
 1. Start CodeFox.
 2. In Telegram, set repo/mode and approve the spec.
 3. Trigger handoff from desk.
-4. From phone, tap `Accept handoff`.
+4. From phone, tap `/accept`.
 5. If desk Codex is still running, CodeFox waits and starts its own continuation when desk execution finishes.
 
 ## Transcript (Command + Reply)
@@ -40,8 +40,8 @@ CODEFOX> Pending approval: extapr_prepare-branch ...
 USER> /approve
 CODEFOX> Approved external request extapr_prepare-branch.
 
-CODEFOX> Accept handoff? External Codex is still running. CodeFox will wait and start its own continuation when it finishes.
-USER> Accept handoff
+CODEFOX> Use /accept to take over this handoff when ready. External Codex is still running, and CodeFox will continue after it finishes.
+USER> /accept
 CODEFOX> Accepted handoff handoff_1. External Codex is still running. CodeFox will start its own continuation automatically when it finishes.
 
 CODEFOX> External Codex finished (success) for handoff handoff_1. Starting CodeFox continuation now.

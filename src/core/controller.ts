@@ -126,6 +126,7 @@ interface ExternalHandoffState {
 
 const SHUTDOWN_ABORT_TIMEOUT_MS = 5000;
 const SHUTDOWN_ABORT_POLL_INTERVAL_MS = 50;
+const TASK_START_NOTICE_DELAY_MS = 5000;
 const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
 
 export interface ControllerShutdownResult {
@@ -438,8 +439,8 @@ export class CodeFoxController {
     await this.deps.telegram.sendMessage(
       chatId,
       latestCompletion
-        ? "Accept handoff? External Codex already finished and CodeFox can start its own continuation immediately."
-        : "Accept handoff? External Codex is still running. CodeFox will wait and start its own continuation when it finishes.",
+        ? "Use /accept to take over this handoff now. External Codex already finished, so CodeFox can continue immediately."
+        : "Use /accept to take over this handoff when ready. External Codex is still running, and CodeFox will continue after it finishes.",
       { commandButtons: buildHandoffConfirmationButtons() }
     );
     return {
@@ -478,11 +479,11 @@ export class CodeFoxController {
     });
 
     if (updated.awaitingConfirmation) {
-      await this.deps.telegram.sendMessage(
-        chatId,
-        `External Codex finished (${completion.status}) for handoff ${state.bundle.handoffId}. Accept the handoff to start CodeFox continuation automatically.`,
-        { commandButtons: buildHandoffConfirmationButtons() }
-      );
+        await this.deps.telegram.sendMessage(
+          chatId,
+          `External Codex finished (${completion.status}) for handoff ${state.bundle.handoffId}. Use /accept to start CodeFox continuation automatically.`,
+          { commandButtons: buildHandoffConfirmationButtons() }
+        );
       return;
     }
 
@@ -842,6 +843,22 @@ export class CodeFoxController {
       }
       case "handoff": {
         await this.handleHandoffCommand(chatId, userId, command);
+        return;
+      }
+      case "handoff_confirmation": {
+        const handoffState = this.externalHandoffs.get(chatId);
+        if (!handoffState || !handoffState.awaitingConfirmation) {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            "No pending handoff confirmation.\nNext: use /handoff show or /status."
+          );
+          return;
+        }
+        if (command.decision === "accept") {
+          await this.acceptPendingHandoff(chatId, userId, handoffState);
+          return;
+        }
+        await this.rejectPendingHandoff(chatId, userId, handoffState);
         return;
       }
       case "approve": {
@@ -1510,7 +1527,7 @@ export class CodeFoxController {
     if (!state) {
       await this.deps.telegram.sendMessage(
         chatId,
-        "No external handoff available.\nNext: run `npm run handoff:cli` from your desk session. When the handoff arrives, use Accept handoff.",
+        "No external handoff available.\nNext: run `npm run handoff:cli` from your desk session. When the handoff arrives, use /accept.",
         { commandButtons: [showStatusButton()] }
       );
       return;
@@ -1553,7 +1570,7 @@ export class CodeFoxController {
     if (state.awaitingConfirmation) {
       await this.deps.telegram.sendMessage(
         chatId,
-        "This handoff still needs acceptance.\nNext: use Accept handoff or Reject handoff.",
+        "This handoff still needs confirmation.\nNext: use /accept or /reject.",
         { commandButtons: buildHandoffConfirmationButtons() }
       );
       return;
@@ -1561,7 +1578,7 @@ export class CodeFoxController {
     if (state.awaitingExternalCompletion) {
       await this.deps.telegram.sendMessage(
         chatId,
-        "External Codex is still running for this handoff.\nNext: wait for completion, or use Handoff details for context.",
+        "External Codex is still running for this handoff.\nNext: wait for completion, or use /handoff show for context.",
         { commandButtons: buildHandoffCommandButtons(state) }
       );
       return;
@@ -1583,7 +1600,7 @@ export class CodeFoxController {
               chatId,
               [
                 `Cannot continue handoff ${state.bundle.handoffId}: source repo '${sourceRepoName}' could not be auto-registered from '${state.sourceRepoPath}'.`,
-                `Next: use /repo add ${sourceRepoName} <absolute-path>, then Continue handoff.`
+                `Next: use /repo add ${sourceRepoName} <absolute-path>, then /continue.`
               ].join("\n"),
               { commandButtons: buildHandoffCommandButtons(state) }
             );
@@ -1604,7 +1621,7 @@ export class CodeFoxController {
             chatId,
             [
               `Cannot continue handoff ${state.bundle.handoffId}: source repo '${sourceRepoName}' is not registered.`,
-              `Next: use /repo add ${sourceRepoName} <absolute-path>, then Continue handoff.`
+              `Next: use /repo add ${sourceRepoName} <absolute-path>, then /continue.`
             ].join("\n"),
             { commandButtons: buildHandoffCommandButtons(state) }
           );
@@ -1629,7 +1646,7 @@ export class CodeFoxController {
     if (!session.selectedRepo) {
       await this.deps.telegram.sendMessage(
         chatId,
-        "No repo selected.\nNext: use /repo <name>, then Continue handoff.",
+        "No repo selected.\nNext: use /repo <name>, then /continue.",
         { commandButtons: buildHandoffCommandButtons(state) }
       );
       return;
@@ -1641,7 +1658,7 @@ export class CodeFoxController {
         chatId,
         [
           `Cannot continue handoff ${state.bundle.handoffId}: ${specValidation.reason}`,
-          "Next: use /spec status and /spec approve (or /spec draft if needed), then Continue handoff."
+          "Next: use /spec status and /spec approve (or /spec draft if needed), then /continue."
         ].join("\n"),
         { commandButtons: buildHandoffCommandButtons(state) }
       );
@@ -1652,8 +1669,8 @@ export class CodeFoxController {
       await this.deps.telegram.sendMessage(
         chatId,
         automatic
-          ? `External handoff is ready, but request ${session.activeRequestId} is already running.\nNext: use Abort run or wait, then Continue handoff.`
-          : `Request ${session.activeRequestId} is already running.\nNext: use Show status or Abort run before continuing the handoff.`,
+          ? `External handoff is ready, but request ${session.activeRequestId} is already running.\nNext: use /abort or wait, then /continue.`
+          : `Request ${session.activeRequestId} is already running.\nNext: use /status or /abort before continuing the handoff.`,
         { commandButtons: [showStatusButton(), abortRunButton()] }
       );
       return;
@@ -1663,7 +1680,7 @@ export class CodeFoxController {
     if (outstanding.length === 0) {
       await this.deps.telegram.sendMessage(
         chatId,
-        "All handoff work items are already continued.\nNext: use Show status, Handoff details, or start a new /run.",
+        "All handoff work items are already continued.\nNext: use /status, /handoff show, or start a new /run.",
         { commandButtons: [showStatusButton(), handoffDetailsButton()] }
       );
       return;
@@ -1689,7 +1706,7 @@ export class CodeFoxController {
         chatId,
         [
           `Multiple handoff items are pending. Defaulting to ${selectedIndex}: ${nextWork.id} - ${nextWork.summary}`,
-          "Next: use Continue 1, Continue 2, or Continue handoff."
+          "Next: use /continue 1, /continue 2, or /continue."
         ].join("\n"),
         { commandButtons: buildHandoffSelectionCommandButtons(state) }
       );
@@ -1703,7 +1720,7 @@ export class CodeFoxController {
         chatId,
         [
           `Unknown capability action '${nextWork.requestedCapabilityRef}' for handoff item '${nextWork.id}'.`,
-          "Next: review Handoff details and choose a different item."
+          "Next: review /handoff show and choose a different item."
         ].join("\n"),
         { commandButtons: buildHandoffSelectionCommandButtons(state) }
       );
@@ -2687,6 +2704,8 @@ export class CodeFoxController {
 
     let resultSent = false;
     let runResultResumeRejected = false;
+    let runFinished = false;
+    let startNoticeTimer: NodeJS.Timeout | undefined;
 
     try {
       const repo = this.deps.repos.get(repoName);
@@ -2717,10 +2736,19 @@ export class CodeFoxController {
       };
 
       this.deps.sessions.setActiveRequest(chatId, requestId);
-      await this.deps.telegram.sendMessage(
-        chatId,
-        formatTaskStart(repoName, mode, requestId, runKind, Boolean(resumeThreadId), resumeThreadId)
-      );
+      startNoticeTimer = setTimeout(() => {
+        if (runFinished) {
+          return;
+        }
+        void this.deps.telegram
+          .sendMessage(
+            chatId,
+            formatTaskStart(repoName, mode, requestId, runKind, Boolean(resumeThreadId), resumeThreadId)
+          )
+          .catch((error) => {
+            console.error(`Failed to send task start message: ${String(error)}`);
+          });
+      }, TASK_START_NOTICE_DELAY_MS);
 
       await this.deps.audit.log({
         type: "codex_start",
@@ -2828,6 +2856,10 @@ export class CodeFoxController {
         await this.deps.telegram.sendMessage(chatId, formatError("Internal execution error. Check audit logs for details."));
       }
     } finally {
+      runFinished = true;
+      if (startNoticeTimer) {
+        clearTimeout(startNoticeTimer);
+      }
       this.activeAborts.delete(requestId);
       this.steerTriggeredAborts.delete(requestId);
       const session = this.deps.sessions.getOrCreate(chatId);
@@ -2999,7 +3031,7 @@ export class CodeFoxController {
     if (source === "handoff_continue") {
       await this.deps.telegram.sendMessage(
         chatId,
-        "Handoff continuation is being prepared.\nNext: wait for the continuation update, or use Handoff details.",
+        "Handoff continuation is being prepared.\nNext: wait for the continuation update, or use /handoff show.",
         { commandButtons: [showStatusButton(), handoffDetailsButton()] }
       );
       return;
@@ -3299,7 +3331,8 @@ function formatExternalHandoffDetail(state: ExternalHandoffState): string {
       state.externalCompletionSummary ? ` - ${state.externalCompletionSummary}` : ""
     }`,
     `completed work count: ${state.bundle.completedWork.length}`,
-    "remaining work:"
+    `outstanding work: ${countOutstandingHandoffWork(state)}/${state.bundle.remainingWork.length}`,
+    "handoff work:"
   ];
 
   for (const [index, work] of state.bundle.remainingWork.entries()) {
@@ -3364,9 +3397,9 @@ function buildHandoffSelectionCommandButtons(state: ExternalHandoffState): strin
   const outstanding = state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id));
   const commands = [handoffDetailsButton(), continueHandoffButton()];
   if (outstanding[1]) {
-    commands.push(`Continue 2`);
+    commands.push("/continue 2");
   } else if (outstanding[0]) {
-    commands.push("Continue 1");
+    commands.push("/continue 1");
   }
   return commands;
 }
@@ -3417,51 +3450,51 @@ function resolveOutstandingHandoffWork(
 }
 
 function showStatusButton(): string {
-  return "Show status";
+  return "/status";
 }
 
 function showDetailsButton(): string {
-  return "Show details";
+  return "/details";
 }
 
 function showPendingButton(): string {
-  return "Show pending";
+  return "/pending";
 }
 
 function approveRequestButton(): string {
-  return "Approve request";
+  return "/approve";
 }
 
 function denyRequestButton(): string {
-  return "Deny request";
+  return "/deny";
 }
 
 function abortRunButton(): string {
-  return "Abort run";
+  return "/abort";
 }
 
 function stopServiceButton(): string {
-  return "Stop service";
+  return "/service stop";
 }
 
 function confirmStopButton(): string {
-  return "Confirm stop";
+  return "/service stop confirm";
 }
 
 function acceptHandoffButton(): string {
-  return "Accept handoff";
+  return "/accept";
 }
 
 function rejectHandoffButton(): string {
-  return "Reject handoff";
+  return "/reject";
 }
 
 function continueHandoffButton(): string {
-  return "Continue handoff";
+  return "/continue";
 }
 
 function handoffDetailsButton(): string {
-  return "Handoff details";
+  return "/handoff show";
 }
 
 function renderOutstandingHandoffChoices(
@@ -3469,7 +3502,7 @@ function renderOutstandingHandoffChoices(
 ): string {
   return outstanding
     .slice(0, 8)
-    .map((work, index) => `${index + 1}. Continue ${index + 1} -> ${work.id} - ${work.summary}`)
+    .map((work, index) => `${index + 1}. /continue ${index + 1} -> ${work.id} - ${work.summary}`)
     .join("\n");
 }
 

@@ -29,7 +29,7 @@ npm run dev -- ./config/codefox.config.json
 
 ## Desk-Side Flow
 
-1. In Telegram (or local REPL), prepare route/spec:
+1. In Telegram or the local UI, prepare route/spec:
 
 ```text
 /repo payments-api
@@ -49,7 +49,7 @@ If CodeFox is not already running, the CLI prompts `[F/b/N]`. Default `F` starts
 3. After the command succeeds, Telegram shows the handoff prompt. The primary action is:
 
 ```text
-Accept handoff
+/accept
 ```
 
 Because `handoff:cli` is a one-shot bridge, it sends a completion event before the handoff bundle. That means acceptance can continue immediately rather than waiting for a later external completion event.

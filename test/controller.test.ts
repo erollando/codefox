@@ -293,7 +293,7 @@ describe("CodeFoxController", () => {
     expect(details).toContain("Status:");
     expect(details).toContain("pending approval: none");
     expect(details).toContain("external handoff: none");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["Show status", "Handoff details", "Show pending"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status", "/handoff show", "/pending"]);
   });
 
   it("returns full policy summary for /policy and supports mode override", async () => {
@@ -554,8 +554,8 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0].context.runKind).toBe("run");
     expect(fakeCodex.calls[0].context.mode).toBe("active");
     expect(fakeCodex.calls[0].context.capability?.ref).toBe("repo.run_checks");
-    expect(telegram.sent.some((item) => item.text.includes("Working on your request in payments-api (active)."))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Completed:"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Working on your request in payments-api (active)."))).toBe(false);
+    expect(telegram.sent.some((item) => item.text === "done")).toBe(true);
     expect(sessions.getOrCreate(100).codexThreadId).toBe("thread_1");
     expect(
       audit.events.some(
@@ -815,10 +815,10 @@ describe("CodeFoxController", () => {
     const ingest = await controller.ingestExternalHandoff(100, "lease_1", handoff, undefined, makeCompletionEvent("lease_1"));
     expect(ingest.accepted).toBe(true);
 
-    await controller.handleUpdate(makeUpdate("Handoff details"));
-    await controller.handleUpdate(makeUpdate("Accept handoff"));
+    await controller.handleUpdate(makeUpdate("/handoff show"));
+    await controller.handleUpdate(makeUpdate("/accept"));
     await flushAsyncWork();
-    await controller.handleUpdate(makeUpdate("Handoff details"));
+    await controller.handleUpdate(makeUpdate("/handoff show"));
 
     expect(fakeCodex.calls.length).toBe(1);
     expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
@@ -826,7 +826,7 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.some((item) => item.text.includes("Handoff detail: handoff_1"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("rw-1 [continued]"))).toBe(true);
     expect(
-      telegram.sent.some((item) => item.options?.commandButtons?.includes("Accept handoff") === true)
+      telegram.sent.some((item) => item.options?.commandButtons?.includes("/accept") === true)
     ).toBe(true);
   });
 
@@ -863,7 +863,7 @@ describe("CodeFoxController", () => {
     const ingest = await controller.ingestExternalHandoff(100, "lease_wait", handoff);
     expect(ingest.accepted).toBe(true);
 
-    await controller.handleUpdate(makeUpdate("Accept handoff"));
+    await controller.handleUpdate(makeUpdate("/accept"));
     expect(fakeCodex.calls).toHaveLength(0);
     expect(telegram.sent.some((item) => item.text.includes("CodeFox will start its own continuation automatically"))).toBe(true);
 
@@ -1009,7 +1009,7 @@ describe("CodeFoxController", () => {
     const message = telegram.sent.at(-1)?.text ?? "";
     expect(message).toContain("No external handoff available.");
     expect(message).toContain("npm run handoff:cli");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["Show status"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status"]);
   });
 
   it("returns actionable guidance for invalid handoff work id", async () => {
@@ -1055,7 +1055,7 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/continue rw-unknown"));
     const message = telegram.sent.at(-1)?.text ?? "";
     expect(message).toContain("is not available");
-    expect(message).toContain("Continue 1");
+    expect(message).toContain("/continue 1");
     expect(message).toContain("Choices:");
   });
 
@@ -1164,7 +1164,7 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
     const notice = telegram.sent.find((item) => item.text.includes("Multiple handoff items are pending. Defaulting to 1"));
     expect(notice).toBeDefined();
-    expect(notice?.options?.commandButtons).toContain("Continue 2");
+    expect(notice?.options?.commandButtons).toContain("/continue 2");
   });
 
   it("aligns continuation repo with handoff source session repo", async () => {
@@ -1215,7 +1215,7 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
     await controller.handleUpdate(makeUpdate("/spec approve"));
 
-    await controller.handleUpdate(makeUpdate("Continue handoff"));
+    await controller.handleUpdate(makeUpdate("/continue"));
     await flushAsyncWork();
 
     expect(sessions.getOrCreate(100).selectedRepo).toBe("payments-api");
@@ -1276,7 +1276,7 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
     await controller.handleUpdate(makeUpdate("/spec approve"));
 
-    await controller.handleUpdate(makeUpdate("Continue handoff"));
+    await controller.handleUpdate(makeUpdate("/continue"));
     await flushAsyncWork();
 
     expect(sessions.getOrCreate(100).selectedRepo).toBe("payments-api");
@@ -1335,7 +1335,7 @@ describe("CodeFoxController", () => {
     expect(specStatus).toContain("Spec status: v1 (approved, approved)");
   });
 
-  it("restores persisted external handoff state and renders Handoff details", async () => {
+  it("restores persisted external handoff state and renders /handoff show", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -1375,7 +1375,7 @@ describe("CodeFoxController", () => {
       ]
     });
 
-    await controller.handleUpdate(makeUpdate("Handoff details"));
+    await controller.handleUpdate(makeUpdate("/handoff show"));
     const statusMessage = telegram.sent.at(-1)?.text ?? "";
     expect(statusMessage).toContain("Handoff detail: handoff_1");
     expect(statusMessage).toContain("rw-1 [pending]");
@@ -2016,7 +2016,7 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[1].context.instruction).toContain("Steer update from the user");
     expect(telegram.sent.some((item) => item.text.includes("Steer received"))).toBe(false);
     expect(telegram.sent.some((item) => item.text.includes("Applying 1 steer update"))).toBe(false);
-    expect(telegram.sent.some((item) => item.text.includes("Applying steer update in payments-api (active)."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Applying steer update in payments-api (active)."))).toBe(false);
     expect(telegram.sent.some((item) => item.text.includes("Aborted: Run aborted by user."))).toBe(false);
   });
 
@@ -2689,7 +2689,7 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/service stop"));
     const confirmPrompt = telegram.sent.at(-1);
     expect(confirmPrompt?.text).toContain("confirm with /stopconfirm");
-    expect(confirmPrompt?.options?.commandButtons).toEqual(["Confirm stop", "Show status"]);
+    expect(confirmPrompt?.options?.commandButtons).toEqual(["/service stop confirm", "/status"]);
     expect(stopRequests.length).toBe(0);
 
     await controller.handleUpdate(makeUpdate("/service stop confirm"));

@@ -26,8 +26,8 @@ note: this demo starts after the desk-side handoff action and focuses on relay/c
 18. CODEFOX> Approved external request extapr_prepare-branch.
 19. EXTERNAL_CODEX> handoff bundle: TASK-DEMO-42 with remaining work rw-1
 20. CODEFOX> External Codex handoff bundle received: | task: TASK-DEMO-42 | spec ref: v2 | completed work: 2 | remaining work: 1
-21. CODEFOX> Accept handoff? External Codex is still running. CodeFox will wait and start its own continuation when it finishes.
-22. USER> Accept handoff
+21. CODEFOX> Use /accept to take over this handoff when ready. External Codex is still running, and CodeFox will continue after it finishes.
+22. USER> /accept
 23. CODEFOX> Accepted handoff handoff-demo-1. External Codex is still running. CodeFox will start its own continuation automatically when it finishes.
 24. EXTERNAL_CODEX> event completion: Execution phase complete in VS Code client
 25. CODEFOX> External Codex completion (success): Execution phase complete in VS Code client

@@ -34,7 +34,7 @@ npm start -- ./config/codefox.config.json
 - Send `SIGINT` (`Ctrl+C`) or `SIGTERM`.
 - From Telegram/local UI: `/stop` then `/stopconfirm` (or `/service stop` then `/service stop confirm`).
 - For an interactive handoff-started foreground process, stop it in the same terminal with `Ctrl+C`.
-- For auto-started/background dev process: `npm run dev:stop -- --config <path>` (or `npm run local:cli -- --config <path> stop`).
+- For auto-started/background dev process: `npm run dev:stop -- --config <path>`.
 - CodeFox aborts in-flight Codex runs, waits briefly for shutdown, ends polling, then writes `service_stop`.
 - On startup, pending Telegram backlog can be discarded when `telegram.discardBacklogOnStart=true`.
 
@@ -50,6 +50,7 @@ npm run verify
 
 - Audit logs are JSON lines at `audit.logFilePath` in config.
 - Local UI transcript mirror is stored at `<state-dir>/local-chat-log.jsonl` (derived from `state.filePath`).
+- Local UI transcript mirror is capped by `state.chatLogMaxFileBytes` (default 2 MiB) and retains the newest window within that cap.
 - Paired UI devices are stored at `<state-dir>/ui-devices.json` (derived from `state.filePath`).
 - Codex progress events include stream tags (`[stdout]`/`[stderr]`) in `codex_progress` line previews.
 - Audit log size is bounded by `audit.maxFileBytes` (default 5 MiB); file is truncated when the limit is exceeded.
@@ -74,9 +75,9 @@ npm run verify
 - `/status` to inspect selected repo, mode, active request, and codex session id
 - `/details` for expanded technical context (session + handoff + approval pointers)
 - `/codex-changelog` to fetch the official Codex RSS feed, compare against the persisted baseline, and report new entries vs no-change with impact hints
-- `Accept handoff` / `Reject handoff` are the primary Telegram handoff actions.
-- `Handoff details` shows the current handoff bundle and remaining work.
-- `Continue handoff` is the primary continue action when handoff work is ready.
+- `/accept` / `/reject` are the primary handoff confirmation actions.
+- `/handoff show` shows the current handoff bundle and remaining work.
+- `/continue` is the primary continue action when handoff work is ready.
 - `/continue [work-id|index]` remains available as shorthand when you need a typed continue command.
 - `/resume [work-id|index]` as alias of `/continue`
 - External handoff carries task context only; it does not import/attach the external desk-side Codex process.
@@ -127,36 +128,10 @@ npm run verify
   - shows active sessions/spec/approvals/handoff summary
   - shows mirrored transcript (incoming commands + CodeFox replies)
   - provides quick command buttons and free-text input
+  - quick actions submit slash commands directly so control input is explicit
   - auto-starts CodeFox runtime in background if missing
   - loopback requests are trusted; non-loopback requests require paired-device cookie auth
   - in LAN mode (`--host 0.0.0.0`), startup prints one-time pair QR/link (`/pair?code=...`) for phone registration
-- Local dashboard watch remains available: `npm run dashboard`.
-- Primary local interface is the chat REPL: `npm run cli -- --config <path> [chatId]`.
-  - auto-starts CodeFox runtime in background if missing
-- One-shot dashboard snapshot: `npm run local:cli -- --config <path> dashboard`.
-- Compatibility alias: `npm run chat:cli -- --config <path> [chatId]`.
-- REPL local shortcuts:
-  - `:help`
-  - `:chat [chatId]`
-  - `:status`
-  - `:details`
-  - `:approve`
-  - `:deny`
-  - `:accept`
-  - `:reject`
-  - `:handoff` (queues `Handoff details`)
-  - `:continue [workId]`
-  - `:exit`
-  - Any non-shortcut line is forwarded unchanged (plain text or slash command).
-- For shortcut local control actions, use:
-  - `npm run local:cli -- [--config <path>] dashboard [--watch]`
-  - `npm run local:cli -- [--config <path>] approve [chatId]`
-  - `npm run local:cli -- [--config <path>] deny [chatId]`
-  - `npm run local:cli -- [--config <path>] status [chatId]`
-  - `npm run local:cli -- [--config <path>] continue [chatId] [workId]`
-  - `npm run local:cli -- [--config <path>] stop` (stop background dev process from PID file)
-  - These enqueue `/approve`, `/deny`, `/status`, and `/continue [workId]` via the same local command queue/controller path.
-  - If `chatId` is omitted, CodeFox auto-selects single/default/most-recent chat context.
 - For an operator-facing handoff bridge without manual API calls, use:
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
   - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--repo-path <path>`, `--start-in-foreground`, `--start-in-background`, `--no-start-if-missing`.
@@ -169,7 +144,7 @@ npm run verify
   - Background start is explicit (`--start-in-background` or legacy `--start-if-missing`), prints a cross-platform stop command, and writes `<state-dir>/codefox.dev.pid`.
 - `handoff:cli` is still a one-shot bridge command. It submits a finished-phase handoff bundle; it cannot keep a lease open and emit a later completion event after the command exits.
 - `handoff:cli` does not export the external Codex thread/session id, so CodeFox cannot resume that exact external thread after takeover. The follow-up run starts from the submitted handoff context.
-- Its terminal output now points users to `Accept handoff` as the primary Telegram next step; `Handoff details` remains the optional inspection path.
+- Its terminal output now points users to `/accept` as the primary Telegram/UI next step; `/handoff show` remains the optional inspection path.
   - If the target chat has no local spec workflow yet, CodeFox auto-bootstraps and approves one at ingest time.
   - Demo split:
     - `npm run demo:handoff` shows the desk terminal action and relay calls.

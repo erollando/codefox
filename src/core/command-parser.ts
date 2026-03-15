@@ -34,6 +34,7 @@ export type ParsedCommand =
   | { type: "pending" }
   | { type: "service"; action: "stop"; confirm: boolean }
   | { type: "handoff"; action: "status" | "show" | "continue" | "clear"; workId?: string }
+  | { type: "handoff_confirmation"; decision: "accept" | "reject" }
   | { type: "approve" }
   | { type: "deny" }
   | { type: "abort" }
@@ -70,10 +71,6 @@ export function parseCommand(text: string): ParsedCommand {
   }
 
   if (!trimmed.startsWith("/")) {
-    const buttonCommand = parseButtonCommand(trimmed);
-    if (buttonCommand) {
-      return buttonCommand;
-    }
     return { type: "run", instruction: trimmed };
   }
 
@@ -152,11 +149,20 @@ export function parseCommand(text: string): ParsedCommand {
         return { type: "unknown", raw: text };
       }
       return parseServiceCommand(arg, text);
+    case "/handoff":
+      if (!arg) {
+        return { type: "unknown", raw: text };
+      }
+      return parseHandoffCommand(arg, text);
     case "/stop":
       return parseStopAlias(arg, text);
     case "/stopconfirm":
     case "/stop-confirm":
       return { type: "service", action: "stop", confirm: true };
+    case "/accept":
+      return arg ? { type: "unknown", raw: text } : { type: "handoff_confirmation", decision: "accept" };
+    case "/reject":
+      return arg ? { type: "unknown", raw: text } : { type: "handoff_confirmation", decision: "reject" };
     case "/continue":
       if (!arg) {
         return { type: "handoff", action: "continue" };
@@ -178,53 +184,6 @@ export function parseCommand(text: string): ParsedCommand {
     default:
       return { type: "unknown", raw: text };
   }
-}
-
-function parseButtonCommand(text: string): ParsedCommand | undefined {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-
-  if (normalized === "show status") {
-    return { type: "status" };
-  }
-  if (normalized === "show details") {
-    return { type: "details" };
-  }
-  if (normalized === "show pending") {
-    return { type: "pending" };
-  }
-  if (normalized === "approve request") {
-    return { type: "approve" };
-  }
-  if (normalized === "deny request") {
-    return { type: "deny" };
-  }
-  if (normalized === "abort run") {
-    return { type: "abort" };
-  }
-  if (normalized === "stop service") {
-    return { type: "service", action: "stop", confirm: false };
-  }
-  if (normalized === "confirm stop") {
-    return { type: "service", action: "stop", confirm: true };
-  }
-  if (normalized === "handoff details") {
-    return { type: "handoff", action: "show" };
-  }
-  if (normalized === "continue handoff") {
-    return { type: "handoff", action: "continue" };
-  }
-  if (normalized === "clear handoff") {
-    return { type: "handoff", action: "clear" };
-  }
-  const continueItemMatch = /^continue (\d+)$/.exec(normalized);
-  if (continueItemMatch) {
-    return { type: "handoff", action: "continue", workId: continueItemMatch[1] };
-  }
-
-  return undefined;
 }
 
 function parseServiceCommand(arg: string, raw: string): ParsedCommand {

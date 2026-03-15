@@ -293,7 +293,7 @@ async function runDemo(): Promise<void> {
     }
   );
 
-  await runUserCommand(controller, telegram, transcript, "Accept handoff", userId, chatId);
+  await runUserCommand(controller, telegram, transcript, "/accept", userId, chatId);
 
   await runExternalStep(
     telegram,

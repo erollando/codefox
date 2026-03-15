@@ -34,7 +34,10 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     config.telegram.pollIntervalMs,
     config.telegram.discardBacklogOnStart
   );
-  const localChatLog = new LocalChatLog(defaultLocalChatLogPath(config.state.filePath));
+  const localChatLog = new LocalChatLog(
+    defaultLocalChatLogPath(config.state.filePath),
+    config.state.chatLogMaxFileBytes ?? 2 * 1024 * 1024
+  );
   const telegram: TelegramAdapter = {
     start: async (onUpdate) =>
       rawTelegram.start(async (update) => {

@@ -59,7 +59,8 @@
     "filePath": "./.codefox/state.json",
     "sessionTtlHours": 168,
     "approvalTtlHours": 72,
-    "codexSessionIdleMinutes": 120
+    "codexSessionIdleMinutes": 120,
+    "chatLogMaxFileBytes": 2097152
   },
   "audit": {
     "logFilePath": "./logs/audit.log",
