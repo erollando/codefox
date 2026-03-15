@@ -208,6 +208,22 @@ export interface ExternalHandoffStateSnapshot {
   handoff: ExternalHandoffBundleState;
   receivedAt: string;
   continuedWorkIds: string[];
+  awaitingConfirmation?: boolean;
+  acceptedAt?: string;
+  acceptedByUserId?: number;
+  awaitingExternalCompletion?: boolean;
+  externalCompletionStatus?: "pending" | "success" | "failed" | "aborted";
+  externalCompletionSummary?: string;
+  externalCompletedAt?: string;
+}
+
+export interface CodexChangelogStateSnapshot {
+  sourceUrl: string;
+  seenEntryIds: string[];
+  lastCheckedAt?: string;
+  latestEntryId?: string;
+  latestEntryTitle?: string;
+  latestEntryPublishedAt?: string;
 }
 
 export interface TaskCapabilityContext {

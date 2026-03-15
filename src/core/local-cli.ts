@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadConfig, resolveConfigPath } from "./config.js";
 import { ensureCodeFoxRunning } from "./dev-runtime.js";
 import { buildExternalSessionId } from "./external-session-route.js";
+import { LocalChatLog, defaultLocalChatLogPath, type LocalChatLogEntry } from "./local-chat-log.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./local-command-queue.js";
 import { JsonStateStore, pruneStateByTtl } from "./state-store.js";
 import { approveCurrentRevision, createInitialWorkflow, getCurrentRevision } from "./spec-workflow.js";
@@ -31,8 +32,6 @@ export interface LocalCliParsedArgs {
     | "deny"
     | "continue"
     | "status"
-    | "handoff-status"
-    | "handoff-show"
     | "stop";
   chatId?: number;
   userId?: number;
@@ -52,9 +51,13 @@ export interface LocalCliParsedArgs {
   relayPort?: number;
   leaseSeconds?: number;
   startIfMissingRelay?: boolean;
+  relayStartMode?: RelayStartMode;
   repoPath?: string;
   watch?: boolean;
 }
+
+type RelayStartMode = "foreground" | "background";
+type MissingRelayStartModeDecision = RelayStartMode | "none" | "prompt";
 
 interface RelayRoutesResponse {
   ok: boolean;
@@ -257,9 +260,7 @@ export function parseLocalCliArgs(argv: string[]): LocalCliParseResult {
   if (
     command === "approve" ||
     command === "deny" ||
-    command === "status" ||
-    command === "handoff-status" ||
-    command === "handoff-show"
+    command === "status"
   ) {
     const chatIdRaw = positional[1];
     if (!chatIdRaw) {
@@ -371,6 +372,7 @@ interface HandoffParsedArgs {
   relayPort?: number;
   leaseSeconds?: number;
   startIfMissingRelay?: boolean;
+  relayStartMode?: RelayStartMode;
   repoPath?: string;
 }
 
@@ -404,6 +406,7 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
   let relayPort: number | undefined;
   let leaseSeconds: number | undefined;
   let startIfMissingRelay: boolean | undefined;
+  let relayStartMode: RelayStartMode | undefined;
   let repoPath: string | undefined;
 
   for (let index = startIndex; index < tokens.length; index += 1) {
@@ -576,10 +579,22 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
     }
     if (token === "--start-if-missing") {
       startIfMissingRelay = true;
+      relayStartMode = "background";
       continue;
     }
     if (token === "--no-start-if-missing") {
       startIfMissingRelay = false;
+      relayStartMode = undefined;
+      continue;
+    }
+    if (token === "--start-in-foreground") {
+      startIfMissingRelay = true;
+      relayStartMode = "foreground";
+      continue;
+    }
+    if (token === "--start-in-background") {
+      startIfMissingRelay = true;
+      relayStartMode = "background";
       continue;
     }
     if (token === "--repo-path") {
@@ -618,6 +633,7 @@ function parseHandoffCommand(tokens: string[]): { ok: boolean; args?: HandoffPar
       relayPort,
       leaseSeconds,
       startIfMissingRelay,
+      relayStartMode,
       repoPath: repoPath?.trim()
     }
   };
@@ -687,9 +703,7 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
     args.command === "approve" ||
     args.command === "deny" ||
     args.command === "continue" ||
-    args.command === "status" ||
-    args.command === "handoff-status" ||
-    args.command === "handoff-show"
+    args.command === "status"
   ) {
     const effectiveUserId = args.userId ?? config.telegram.allowedUserIds[0];
     if (!effectiveUserId) {
@@ -713,13 +727,9 @@ export async function runLocalCli(argv: string[], output: LocalCliOutput): Promi
           ? "/deny"
           : args.command === "status"
             ? "/status"
-            : args.command === "handoff-status"
-              ? "/handoff status"
-              : args.command === "handoff-show"
-                ? "/handoff show"
-                : args.workId
-                  ? `/continue ${args.workId}`
-                  : "/continue";
+            : args.workId
+              ? `/continue ${args.workId}`
+              : "/continue";
 
     const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
     const queued = await queue.enqueue({
@@ -851,6 +861,7 @@ async function runLocalHandoff(
     sessionTtlHours: config.state.sessionTtlHours,
     approvalTtlHours: config.state.approvalTtlHours
   }).state;
+  let foregroundChild: ChildProcess | undefined;
 
   let routesResponse = await requestRelayJson<RelayRoutesResponse>({
     baseUrl: relayBaseUrl,
@@ -859,22 +870,33 @@ async function runLocalHandoff(
     authToken
   });
   if (routesResponse.status === 0) {
-    const shouldStart = await shouldStartMissingRelay(args, relayBaseUrl, resolvedConfigPath, output);
-    if (shouldStart) {
-      output.log(`Starting CodeFox with config ${resolvedConfigPath}...`);
-      const startedPid = startCodeFoxProcess(resolvedConfigPath);
-      if (typeof startedPid === "number" && startedPid > 0) {
-        const stopCommand = process.platform === "win32" ? `taskkill /PID ${startedPid} /F` : `kill ${startedPid}`;
-        const pidFilePath = relayPidFilePath(config.state.filePath);
-        await persistRelayPid(pidFilePath, startedPid);
-        output.log(`Started CodeFox in background (pid ${startedPid}). Stop it with: ${stopCommand}`);
-        output.log(`Background pid file: ${pidFilePath}`);
-        output.log(`For live logs, run CodeFox in foreground with: npm run dev -- ${resolvedConfigPath}`);
+    const startMode = await resolveMissingRelayStartMode(args, relayBaseUrl, resolvedConfigPath, output);
+    if (startMode !== "none") {
+      output.log(
+        startMode === "foreground"
+          ? `Starting CodeFox in foreground with config ${resolvedConfigPath}...`
+          : `Starting CodeFox in background with config ${resolvedConfigPath}...`
+      );
+      if (startMode === "foreground") {
+        foregroundChild = startCodeFoxProcessForeground(resolvedConfigPath);
+      } else {
+        const startedPid = startCodeFoxProcessBackground(resolvedConfigPath);
+        if (typeof startedPid === "number" && startedPid > 0) {
+          const directStopCommand = process.platform === "win32" ? `taskkill /PID ${startedPid} /F` : `kill ${startedPid}`;
+          const pidFilePath = relayPidFilePath(config.state.filePath);
+          await persistRelayPid(pidFilePath, startedPid);
+          output.log(
+            `Started CodeFox in background (pid ${startedPid}). Stop it with: npm run dev:stop -- --config ${resolvedConfigPath}`
+          );
+          output.log(`Direct PID stop (platform-specific): ${directStopCommand}`);
+          output.log(`Background pid file: ${pidFilePath}`);
+          output.log(`For a Ctrl+C-managed run instead, use: npm run dev -- ${resolvedConfigPath}`);
+        }
       }
       const ready = await waitForRelayReady(relayBaseUrl, authToken, 10000);
       if (!ready) {
         output.error(`Started CodeFox, but external relay is still unreachable at ${relayBaseUrl}.`);
-        return 1;
+        return finalizeForegroundRelayStart(1, foregroundChild, output);
       }
       routesResponse = await requestRelayJson<RelayRoutesResponse>({
         baseUrl: relayBaseUrl,
@@ -895,10 +917,10 @@ async function runLocalHandoff(
             : "If relay auth is enabled, provide the matching bearer token env var."
         ].join(" ")
       );
-      return 1;
+      return finalizeForegroundRelayStart(1, foregroundChild, output);
     }
     output.error(renderRelayError("Failed to fetch external relay routes.", routesResponse));
-    return 1;
+    return finalizeForegroundRelayStart(1, foregroundChild, output);
   }
   const routes = routesResponse.body.routes ?? [];
 
@@ -911,7 +933,7 @@ async function runLocalHandoff(
   const context = resolveHandoffContext(contextArgs, pruned.sessions, routes);
   if (!context.ok || !context.value) {
     output.error(context.error ?? "Could not resolve handoff context.");
-    return 1;
+    return finalizeForegroundRelayStart(1, foregroundChild, output);
   }
   const { chatId, sessionId, autoSelected } = context.value;
   if (autoSelected) {
@@ -923,7 +945,7 @@ async function runLocalHandoff(
     output.error(
       `Session '${sessionId}' is not currently routed. Set /repo and /mode in Telegram first, then retry.`
     );
-    return 1;
+    return finalizeForegroundRelayStart(1, foregroundChild, output);
   }
 
   const clientId = args.clientId || "codex-handoff-cli";
@@ -942,7 +964,7 @@ async function runLocalHandoff(
   });
   if (!specRevisionRef.ok || !specRevisionRef.value) {
     output.error(specRevisionRef.error ?? "Could not resolve spec revision.");
-    return 1;
+    return finalizeForegroundRelayStart(1, foregroundChild, output);
   }
   if (specRevisionRef.created) {
     output.log(`Auto-created and approved spec ${specRevisionRef.value} for chat ${chatId}.`);
@@ -985,10 +1007,8 @@ async function runLocalHandoff(
     output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
     output.log(`spec ref: ${specRevisionRef.value}`);
     output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
-    output.log("Next steps in Telegram:");
-    output.log("  /handoff show");
-    output.log(`  /continue ${workId}`);
-    return 0;
+    logTelegramHandoffNextSteps(output, false);
+    return finalizeForegroundRelayStart(0, foregroundChild, output);
   }
 
   const bindResponse = await requestRelayJson<RelayBindResponse>({
@@ -1008,7 +1028,7 @@ async function runLocalHandoff(
   if (!bindResponse.ok || !bindBody || bindBody.ok !== true) {
     const reason = bindBody && "reason" in bindBody ? bindBody.reason : bindResponse.error;
     output.error(`Bind failed: ${reason ?? "unknown bind error"}.`);
-    return 1;
+    return finalizeForegroundRelayStart(1, foregroundChild, output);
   }
 
   const leaseId = bindBody.lease.leaseId;
@@ -1035,7 +1055,7 @@ async function runLocalHandoff(
   if (!completionResponse.ok || completionResponse.body?.decision?.ok !== true) {
     await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
     output.error(renderRelayError("Completion event relay failed.", completionResponse));
-    return 1;
+    return finalizeForegroundRelayStart(1, foregroundChild, output);
   }
 
   const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
@@ -1055,7 +1075,7 @@ async function runLocalHandoff(
   if (!handoffResponse.ok || handoffResponse.body?.decision?.ok !== true) {
     await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
     output.error(renderRelayError("Handoff relay failed.", handoffResponse));
-    return 1;
+    return finalizeForegroundRelayStart(1, foregroundChild, output);
   }
 
   await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
@@ -1067,10 +1087,8 @@ async function runLocalHandoff(
   output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
   output.log(`spec ref: ${specRevisionRef.value}`);
   output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
-  output.log("Next steps in Telegram:");
-  output.log("  /handoff show");
-  output.log(`  /continue ${workId}`);
-  return 0;
+  logTelegramHandoffNextSteps(output, true);
+  return finalizeForegroundRelayStart(0, foregroundChild, output);
 }
 
 async function runLocalChat(
@@ -1123,6 +1141,39 @@ async function runLocalChat(
   let currentChatId: number = activeChatId;
 
   const queue = new FileLocalCommandQueue(defaultLocalCommandQueuePath(config.state.filePath));
+  const localChatLog = new LocalChatLog(defaultLocalChatLogPath(config.state.filePath));
+  const seenChatEntryIds = new Set<string>();
+  const markRecentChatEntriesAsSeen = async (chatId: number): Promise<void> => {
+    const recent = await localChatLog.tail(chatId, 120);
+    collectUnseenOutboundEntries(recent, seenChatEntryIds);
+  };
+  const pollChatReplies = async (chatId: number): Promise<void> => {
+    const recent = await localChatLog.tail(chatId, 60);
+    const unseenReplies = collectUnseenOutboundEntries(recent, seenChatEntryIds);
+    for (const reply of unseenReplies) {
+      output.log(renderLocalChatReply(reply));
+      if (reply.commandButtons && reply.commandButtons.length > 0) {
+        output.log(`buttons: ${reply.commandButtons.join(" | ")}`);
+      }
+    }
+  };
+
+  await markRecentChatEntriesAsSeen(currentChatId);
+  let pollInFlight = false;
+  const replyPollTimer = setInterval(() => {
+    if (pollInFlight) {
+      return;
+    }
+    pollInFlight = true;
+    void pollChatReplies(currentChatId)
+      .catch((error) => {
+        output.error(`chat reply polling error: ${String(error)}`);
+      })
+      .finally(() => {
+        pollInFlight = false;
+      });
+  }, 700);
+
   const { createInterface } = await import("node:readline/promises");
   const shell = createInterface({
     input: process.stdin,
@@ -1149,6 +1200,7 @@ async function runLocalChat(
         if (localShortcut.command === "chat") {
           if (typeof localShortcut.chatId === "number") {
             currentChatId = localShortcut.chatId;
+            await markRecentChatEntriesAsSeen(currentChatId);
           }
           output.log(`Switched to chat ${currentChatId}.`);
           continue;
@@ -1176,6 +1228,7 @@ async function runLocalChat(
           continue;
         }
         currentChatId = nextChat;
+        await markRecentChatEntriesAsSeen(currentChatId);
         output.log(`Switched to chat ${currentChatId}.`);
         continue;
       }
@@ -1188,6 +1241,7 @@ async function runLocalChat(
       output.log(`queued ${queued.id} -> chat ${currentChatId}: ${line}`);
     }
   } finally {
+    clearInterval(replyPollTimer);
     shell.close();
   }
   return 0;
@@ -1229,8 +1283,20 @@ function parseLocalChatShortcut(line: string): LocalChatShortcutParseResult {
   if (text === ":deny") {
     return { command: "queue", text: "/deny" };
   }
+  if (text === ":accept") {
+    return { command: "queue", text: "Accept handoff" };
+  }
+  if (text === ":reject") {
+    return { command: "queue", text: "Reject handoff" };
+  }
+  if (text === ":stop") {
+    return { command: "queue", text: "/stop" };
+  }
+  if (text === ":stopconfirm") {
+    return { command: "queue", text: "/stopconfirm" };
+  }
   if (text === ":handoff") {
-    return { command: "queue", text: "/handoff show" };
+    return { command: "queue", text: "Handoff details" };
   }
   if (text.startsWith(":continue ")) {
     const workId = text.slice(":continue ".length).trim();
@@ -1254,11 +1320,51 @@ function renderLocalChatShortcutHelp(): string {
     "  :details              Queue /details",
     "  :approve              Queue /approve",
     "  :deny                 Queue /deny",
-    "  :handoff              Queue /handoff show",
+    "  :accept               Queue Accept handoff",
+    "  :reject               Queue Reject handoff",
+    "  :stop                 Queue /stop",
+    "  :stopconfirm          Queue /stopconfirm",
+    "  :handoff              Queue Handoff details",
     "  :continue [workId]    Queue /continue [workId]",
     "  :exit                 Close shell",
     "Any non-shortcut input is queued as-is (plain text or Telegram slash command)."
   ].join("\n");
+}
+
+function collectUnseenOutboundEntries(entries: LocalChatLogEntry[], seenEntryIds: Set<string>): LocalChatLogEntry[] {
+  const unseen: LocalChatLogEntry[] = [];
+  for (const entry of entries) {
+    const seen = seenEntryIds.has(entry.id);
+    seenEntryIds.add(entry.id);
+    if (!seen && entry.direction === "outbound") {
+      unseen.push(entry);
+    }
+  }
+  trimSeenEntryIds(seenEntryIds, 3000);
+  return unseen;
+}
+
+function trimSeenEntryIds(seenEntryIds: Set<string>, maxEntries: number): void {
+  while (seenEntryIds.size > maxEntries) {
+    const oldest = seenEntryIds.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    seenEntryIds.delete(oldest);
+  }
+}
+
+function renderLocalChatReply(entry: LocalChatLogEntry): string {
+  return `CodeFox reply (${entry.channel}):\n${entry.text}`;
+}
+
+function logTelegramHandoffNextSteps(output: LocalCliOutput, acceptanceContinuesImmediately: boolean): void {
+  output.log("Next steps in Telegram:");
+  output.log("  Accept handoff");
+  output.log("  Handoff details (optional)");
+  if (acceptanceContinuesImmediately) {
+    output.log("  After acceptance, CodeFox can continue immediately.");
+  }
 }
 
 function resolveTaskId(
@@ -1743,17 +1849,45 @@ async function requestRelayJson<T>(options: {
   }
 }
 
-async function shouldStartMissingRelay(
+export function determineMissingRelayStartMode(
+  args: Pick<LocalCliParsedArgs, "startIfMissingRelay" | "relayStartMode">,
+  interactiveTerminal: boolean
+): MissingRelayStartModeDecision {
+  if (args.startIfMissingRelay === false) {
+    return "none";
+  }
+  if (args.relayStartMode) {
+    return args.relayStartMode;
+  }
+  if (args.startIfMissingRelay === true) {
+    return "background";
+  }
+  return interactiveTerminal ? "prompt" : "none";
+}
+
+export function parseMissingRelayStartPromptAnswer(answer: string): RelayStartMode | "none" {
+  const normalized = answer.trim().toLowerCase();
+  if (normalized === "" || normalized === "f" || normalized === "fg" || normalized === "foreground") {
+    return "foreground";
+  }
+  if (normalized === "b" || normalized === "bg" || normalized === "background") {
+    return "background";
+  }
+  return "none";
+}
+
+async function resolveMissingRelayStartMode(
   args: LocalCliParsedArgs,
   relayBaseUrl: string,
   resolvedConfigPath: string,
   output: LocalCliOutput
-): Promise<boolean> {
-  if (typeof args.startIfMissingRelay === "boolean") {
-    return args.startIfMissingRelay;
-  }
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    return false;
+): Promise<RelayStartMode | "none"> {
+  const requestedMode = determineMissingRelayStartMode(
+    args,
+    Boolean(process.stdin.isTTY && process.stdout.isTTY)
+  );
+  if (requestedMode !== "prompt") {
+    return requestedMode;
   }
   const { createInterface } = await import("node:readline/promises");
   const prompt = createInterface({
@@ -1762,18 +1896,27 @@ async function shouldStartMissingRelay(
   });
   try {
     const answer = await prompt.question(
-      `CodeFox relay is unreachable at ${relayBaseUrl}. Start CodeFox now with config ${resolvedConfigPath}? [y/N] `
+      `CodeFox relay is unreachable at ${relayBaseUrl}. Start CodeFox now with config ${resolvedConfigPath}? [F/b/N] `
     );
-    return /^y(es)?$/i.test(answer.trim());
+    return parseMissingRelayStartPromptAnswer(answer);
   } catch (error) {
     output.error(`Could not read relay start confirmation: ${String(error)}`);
-    return false;
+    return "none";
   } finally {
     prompt.close();
   }
 }
 
-function startCodeFoxProcess(resolvedConfigPath: string): number | undefined {
+function startCodeFoxProcessForeground(resolvedConfigPath: string): ChildProcess {
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  return spawn(npmCommand, ["run", "dev", "--", resolvedConfigPath], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+    env: process.env
+  });
+}
+
+function startCodeFoxProcessBackground(resolvedConfigPath: string): number | undefined {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const child = spawn(npmCommand, ["run", "dev", "--", resolvedConfigPath], {
     cwd: process.cwd(),
@@ -1783,6 +1926,120 @@ function startCodeFoxProcess(resolvedConfigPath: string): number | undefined {
   });
   child.unref();
   return child.pid;
+}
+
+async function finalizeForegroundRelayStart(
+  exitCode: number,
+  foregroundChild: ChildProcess | undefined,
+  output: LocalCliOutput
+): Promise<number> {
+  if (!foregroundChild) {
+    return exitCode;
+  }
+  if (exitCode !== 0) {
+    output.log("Stopping foreground CodeFox because handoff did not complete.");
+    await stopForegroundChild(foregroundChild);
+    return exitCode;
+  }
+  output.log("CodeFox is running in this terminal. Press Ctrl+C to stop it.");
+  return waitForForegroundChildExit(foregroundChild, output);
+}
+
+async function stopForegroundChild(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  try {
+    child.kill("SIGINT");
+  } catch {
+    return;
+  }
+  const exited = await waitForChildExit(child, 3000);
+  if (exited) {
+    return;
+  }
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    return;
+  }
+  await waitForChildExit(child, 2000);
+}
+
+async function waitForForegroundChildExit(child: ChildProcess, output: LocalCliOutput): Promise<number> {
+  return new Promise<number>((resolve) => {
+    let finished = false;
+    let stopRequested = false;
+    const finish = (code: number): void => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      child.off("exit", onExit);
+      resolve(code);
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (signal === "SIGINT") {
+        finish(130);
+        return;
+      }
+      if (signal === "SIGTERM") {
+        finish(143);
+        return;
+      }
+      finish(code ?? 0);
+    };
+    const requestStop = (signal: NodeJS.Signals): void => {
+      if (stopRequested) {
+        return;
+      }
+      stopRequested = true;
+      output.log("Stopping foreground CodeFox...");
+      try {
+        child.kill(signal);
+      } catch {
+        finish(signal === "SIGINT" ? 130 : 143);
+      }
+    };
+    const onSigint = (): void => {
+      requestStop("SIGINT");
+    };
+    const onSigterm = (): void => {
+      requestStop("SIGTERM");
+    };
+
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+    child.once("exit", onExit);
+  });
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return true;
+  }
+  return new Promise<boolean>((resolve) => {
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      child.off("exit", onExit);
+      resolve(false);
+    }, timeoutMs);
+    const onExit = (): void => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once("exit", onExit);
+  });
 }
 
 function relayPidFilePath(stateFilePath: string): string {
@@ -2027,15 +2284,14 @@ function renderHelp(): string {
     "  npm run local:cli -- [--config <path>] [--user <id>] approve [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] deny [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] status [chatId]",
-    "  npm run local:cli -- [--config <path>] [--user <id>] handoff-status [chatId]",
-    "  npm run local:cli -- [--config <path>] [--user <id>] handoff-show [chatId]",
     "  npm run local:cli -- [--config <path>] [--user <id>] continue [chatId] [workId]",
-    "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]",
+    "  npm run local:cli -- [--config <path>] handoff [chatId] [--remaining <summary>] [options]   (handoff bridge)",
     "  npm run local:cli -- [--config <path>] stop",
     "    options: [--work-id <id>] [--completed <text>]... [--risk <text>]... [--question <text>]...",
     "             [--task <taskId>] [--client <id>] [--spec <revision>] [--completion-summary <text>] [--session-id <id>]",
     "             [--host <relay-host>] [--port <relay-port>] [--lease-seconds <n>] [--repo-path <path>]",
-    "             [--start-if-missing|--no-start-if-missing]",
+    "             [--start-in-foreground|--start-in-background|--no-start-if-missing]",
+    "             [--start-if-missing]  (compat alias for --start-in-background)",
     "Global flags:",
     "  --config <path>   Path to config file",
     "  --user <id>       Override local user id for queued commands",

@@ -5,9 +5,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { RunningTask } from "../src/adapters/codex.js";
 import type { TelegramSendOptions } from "../src/adapters/telegram.js";
-import type { ExternalHandoffStateSnapshot, TaskContext, TaskResult } from "../src/types/domain.js";
+import type { CodexChangelogStateSnapshot, ExternalHandoffStateSnapshot, TaskContext, TaskResult } from "../src/types/domain.js";
 import type { SpecWorkflowState } from "../src/core/spec-workflow.js";
-import type { ExternalCodexHandoffBundle } from "../src/core/external-codex-integration.js";
+import type { CodexChangelogCheckResult, CodexChangelogTracker } from "../src/core/codex-changelog.js";
+import type { ExternalCodexCompletionEvent, ExternalCodexHandoffBundle } from "../src/core/external-codex-integration.js";
 import { ApprovalStore } from "../src/core/approval-store.js";
 import { AccessControl } from "../src/core/auth.js";
 import { CodeFoxController } from "../src/core/controller.js";
@@ -85,6 +86,23 @@ function makeUpdate(text: string, userId = 1, chatId = 100) {
   };
 }
 
+function makeCompletionEvent(
+  leaseId: string,
+  summary = "Desk Codex finished"
+): ExternalCodexCompletionEvent {
+  return {
+    schemaVersion: "v1",
+    leaseId,
+    eventId: `evt_${leaseId}`,
+    clientId: "vscode-codex",
+    timestamp: "2026-03-14T12:00:10.000Z",
+    sequence: 2,
+    type: "completion",
+    status: "success",
+    summary
+  };
+}
+
 function makeController(
   fakeCodex: FakeCodex,
   options?: {
@@ -95,8 +113,10 @@ function makeController(
     telegram?: FakeTelegram;
     initialSpecWorkflows?: Array<{ chatId: number; workflow: SpecWorkflowState }>;
     initialExternalHandoffs?: ExternalHandoffStateSnapshot[];
+    initialCodexChangelogState?: CodexChangelogStateSnapshot;
     repos?: Array<{ name: string; rootPath: string }>;
     persistState?: () => Promise<void>;
+    codexChangelogTracker?: CodexChangelogTracker;
     externalApprovalDecision?: (input: {
       leaseId: string;
       approvalKey: string;
@@ -134,7 +154,9 @@ function makeController(
     codexSessionIdleMinutes: 120,
     initialSpecWorkflows: options?.initialSpecWorkflows,
     initialExternalHandoffs: options?.initialExternalHandoffs,
+    initialCodexChangelogState: options?.initialCodexChangelogState,
     persistState: options?.persistState,
+    codexChangelogTracker: options?.codexChangelogTracker,
     externalApprovalDecision: options?.externalApprovalDecision,
     requestServiceStop: options?.requestServiceStop
   });
@@ -271,7 +293,7 @@ describe("CodeFoxController", () => {
     expect(details).toContain("Status:");
     expect(details).toContain("pending approval: none");
     expect(details).toContain("external handoff: none");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status", "/handoff show", "/pending"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["Show status", "Handoff details", "Show pending"]);
   });
 
   it("returns full policy summary for /policy and supports mode override", async () => {
@@ -342,6 +364,133 @@ describe("CodeFoxController", () => {
     expect(viewedEvents).toHaveLength(2);
     expect(viewedEvents[0]?.pack).toBeUndefined();
     expect(viewedEvents[1]?.pack).toBe("repo");
+  });
+
+  it("checks Codex changelog and persists the seen baseline", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+    const trackerCalls: Array<CodexChangelogStateSnapshot | undefined> = [];
+    const tracker: CodexChangelogTracker = {
+      async check(previous): Promise<CodexChangelogCheckResult> {
+        trackerCalls.push(previous);
+        return {
+          sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+          checkedAt: "2026-03-15T13:00:00.000Z",
+          latestEntry: {
+            id: "entry-2",
+            title: "Codex adds image input flag",
+            publishedAt: "2026-03-15T12:00:00.000Z",
+            summary: "Image input is now available.",
+            link: "https://developers.openai.com/codex/changelog/item"
+          },
+          newEntries: [
+            {
+              id: "entry-2",
+              title: "Codex adds image input flag",
+              publishedAt: "2026-03-15T12:00:00.000Z",
+              summary: "Image input is now available.",
+              link: "https://developers.openai.com/codex/changelog/item",
+              decision: "implement now",
+              impactHints: [
+                {
+                  category: "config",
+                  rationale: "matched keywords: flag",
+                  suggestedChange: "Review codex config surface."
+                },
+                {
+                  category: "multimodal",
+                  rationale: "matched keywords: image",
+                  suggestedChange: "Assess Telegram attachment handling."
+                }
+              ]
+            }
+          ],
+          state: {
+            sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+            seenEntryIds: ["entry-2", "entry-1"],
+            lastCheckedAt: "2026-03-15T13:00:00.000Z",
+            latestEntryId: "entry-2",
+            latestEntryTitle: "Codex adds image input flag",
+            latestEntryPublishedAt: "2026-03-15T12:00:00.000Z"
+          }
+        };
+      }
+    };
+
+    const { controller, telegram, audit } = makeController(fakeCodex, {
+      initialCodexChangelogState: {
+        sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+        seenEntryIds: ["entry-1"],
+        lastCheckedAt: "2026-03-14T12:00:00.000Z"
+      },
+      codexChangelogTracker: tracker
+    });
+
+    await controller.handleUpdate(makeUpdate("/codex-changelog"));
+
+    const message = telegram.sent.at(-1)?.text ?? "";
+    expect(message).toContain("Codex changelog check:");
+    expect(message).toContain("new entries: 1");
+    expect(message).toContain("decision: implement now");
+    expect(message).toContain("categories: config, multimodal");
+    expect(message).toContain("audit ref: view_");
+    expect(trackerCalls).toHaveLength(1);
+    expect(trackerCalls[0]?.seenEntryIds).toEqual(["entry-1"]);
+    expect(controller.getCodexChangelogState()?.latestEntryId).toBe("entry-2");
+
+    const events = audit.events.filter((event) => event.type === "codex_changelog_checked");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.newEntryCount).toBe(1);
+  });
+
+  it("reports no change when the Codex changelog has no unseen entries", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+    const tracker: CodexChangelogTracker = {
+      async check(): Promise<CodexChangelogCheckResult> {
+        return {
+          sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+          checkedAt: "2026-03-15T13:30:00.000Z",
+          latestEntry: {
+            id: "entry-2",
+            title: "Codex adds image input flag",
+            publishedAt: "2026-03-15T12:00:00.000Z",
+            summary: "Image input is now available."
+          },
+          newEntries: [],
+          state: {
+            sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+            seenEntryIds: ["entry-2", "entry-1"],
+            lastCheckedAt: "2026-03-15T13:30:00.000Z",
+            latestEntryId: "entry-2",
+            latestEntryTitle: "Codex adds image input flag",
+            latestEntryPublishedAt: "2026-03-15T12:00:00.000Z"
+          }
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex, {
+      codexChangelogTracker: tracker
+    });
+
+    await controller.handleUpdate(makeUpdate("/codex-changelog"));
+    const message = telegram.sent.at(-1)?.text ?? "";
+    expect(message).toContain("No new Codex changelog entries since the last recorded baseline.");
   });
 
   it("supports /audit lookup for known and unknown view ids", async () => {
@@ -603,7 +752,7 @@ describe("CodeFoxController", () => {
     ).toBe(true);
   });
 
-  it("ingests external handoff and continues remaining work with /handoff continue", async () => {
+  it("accepts a completed external handoff and auto-continues the remaining work", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -615,7 +764,31 @@ describe("CodeFoxController", () => {
       }
     };
 
-    const { controller, telegram } = makeController(fakeCodex);
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_invalid_work",
+          receivedAt: "2026-03-14T12:00:01.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: false,
+          awaitingExternalCompletion: false,
+          externalCompletionStatus: "success",
+          externalCompletionSummary: "Desk Codex finished",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_invalid_work",
+            handoffId: "handoff_invalid_work",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-INVALID-WORK",
+            specRevisionRef: "v1",
+            completedWork: [],
+            remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
+          }
+        }
+      ]
+    });
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
@@ -639,22 +812,66 @@ describe("CodeFoxController", () => {
       ]
     };
 
-    const ingest = await controller.ingestExternalHandoff(100, "lease_1", handoff);
+    const ingest = await controller.ingestExternalHandoff(100, "lease_1", handoff, undefined, makeCompletionEvent("lease_1"));
     expect(ingest.accepted).toBe(true);
 
-    await controller.handleUpdate(makeUpdate("/handoff status"));
-    await controller.handleUpdate(makeUpdate("/handoff continue"));
+    await controller.handleUpdate(makeUpdate("Handoff details"));
+    await controller.handleUpdate(makeUpdate("Accept handoff"));
     await flushAsyncWork();
-    await controller.handleUpdate(makeUpdate("/handoff show"));
+    await controller.handleUpdate(makeUpdate("Handoff details"));
 
     expect(fakeCodex.calls.length).toBe(1);
     expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
     expect(fakeCodex.calls[0]?.context.capability?.ref).toBe("repo.run_checks");
-    expect(telegram.sent.some((item) => item.text.includes("Handoff handoff_1"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Handoff detail: handoff_1"))).toBe(true);
     expect(telegram.sent.some((item) => item.text.includes("rw-1 [continued]"))).toBe(true);
     expect(
-      telegram.sent.some((item) => item.options?.commandButtons?.includes("/continue rw-1") === true)
+      telegram.sent.some((item) => item.options?.commandButtons?.includes("Accept handoff") === true)
     ).toBe(true);
+  });
+
+  it("waits after accept until external completion arrives, then auto-continues", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex);
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+
+    const handoff: ExternalCodexHandoffBundle = {
+      schemaVersion: "v1",
+      leaseId: "lease_wait",
+      handoffId: "handoff_wait",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:00:00.000Z",
+      taskId: "TASK-WAIT",
+      specRevisionRef: "v1",
+      completedWork: ["Implemented API route"],
+      remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
+    };
+
+    const ingest = await controller.ingestExternalHandoff(100, "lease_wait", handoff);
+    expect(ingest.accepted).toBe(true);
+
+    await controller.handleUpdate(makeUpdate("Accept handoff"));
+    expect(fakeCodex.calls).toHaveLength(0);
+    expect(telegram.sent.some((item) => item.text.includes("CodeFox will start its own continuation automatically"))).toBe(true);
+
+    await controller.noteExternalCompletion(100, "lease_wait", makeCompletionEvent("lease_wait"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls).toHaveLength(1);
+    expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
   });
 
   it("treats semantically identical external handoff ingest as idempotent", async () => {
@@ -792,7 +1009,7 @@ describe("CodeFoxController", () => {
     const message = telegram.sent.at(-1)?.text ?? "";
     expect(message).toContain("No external handoff available.");
     expect(message).toContain("npm run handoff:cli");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["Show status"]);
   });
 
   it("returns actionable guidance for invalid handoff work id", async () => {
@@ -806,30 +1023,39 @@ describe("CodeFoxController", () => {
       }
     };
 
-    const { controller, telegram } = makeController(fakeCodex);
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_invalid_work",
+          receivedAt: "2026-03-14T12:00:01.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: false,
+          awaitingExternalCompletion: false,
+          externalCompletionStatus: "success",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_invalid_work",
+            handoffId: "handoff_invalid_work",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-INVALID-WORK",
+            specRevisionRef: "v1",
+            completedWork: [],
+            remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
+          }
+        }
+      ]
+    });
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
     await controller.handleUpdate(makeUpdate("/spec approve"));
 
-    const handoff: ExternalCodexHandoffBundle = {
-      schemaVersion: "v1",
-      leaseId: "lease_invalid_work",
-      handoffId: "handoff_invalid_work",
-      clientId: "vscode-codex",
-      createdAt: "2026-03-14T12:00:00.000Z",
-      taskId: "TASK-INVALID-WORK",
-      specRevisionRef: "v1",
-      completedWork: [],
-      remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
-    };
-    const ingest = await controller.ingestExternalHandoff(100, "lease_invalid_work", handoff);
-    expect(ingest.accepted).toBe(true);
-
     await controller.handleUpdate(makeUpdate("/continue rw-unknown"));
     const message = telegram.sent.at(-1)?.text ?? "";
     expect(message).toContain("is not available");
-    expect(message).toContain("/continue 1");
+    expect(message).toContain("Continue 1");
     expect(message).toContain("Choices:");
   });
 
@@ -845,28 +1071,37 @@ describe("CodeFoxController", () => {
       }
     };
 
-    const { controller, telegram } = makeController(fakeCodex);
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_multi",
+          receivedAt: "2026-03-14T12:00:01.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: false,
+          awaitingExternalCompletion: false,
+          externalCompletionStatus: "success",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_multi",
+            handoffId: "handoff_multi",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-MULTI",
+            specRevisionRef: "v1",
+            completedWork: [],
+            remainingWork: [
+              { id: "rw-1", summary: "Run regression checks" },
+              { id: "rw-2", summary: "Prepare release note draft" }
+            ]
+          }
+        }
+      ]
+    });
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
     await controller.handleUpdate(makeUpdate("/spec approve"));
-
-    const handoff: ExternalCodexHandoffBundle = {
-      schemaVersion: "v1",
-      leaseId: "lease_multi",
-      handoffId: "handoff_multi",
-      clientId: "vscode-codex",
-      createdAt: "2026-03-14T12:00:00.000Z",
-      taskId: "TASK-MULTI",
-      specRevisionRef: "v1",
-      completedWork: [],
-      remainingWork: [
-        { id: "rw-1", summary: "Run regression checks" },
-        { id: "rw-2", summary: "Prepare release note draft" }
-      ]
-    };
-    const ingest = await controller.ingestExternalHandoff(100, "lease_multi", handoff);
-    expect(ingest.accepted).toBe(true);
 
     await controller.handleUpdate(makeUpdate("/continue 2"));
     await flushAsyncWork();
@@ -891,28 +1126,37 @@ describe("CodeFoxController", () => {
       }
     };
 
-    const { controller, telegram } = makeController(fakeCodex);
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_multi_default",
+          receivedAt: "2026-03-14T12:00:01.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: false,
+          awaitingExternalCompletion: false,
+          externalCompletionStatus: "success",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_multi_default",
+            handoffId: "handoff_multi_default",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-MULTI-DEFAULT",
+            specRevisionRef: "v1",
+            completedWork: [],
+            remainingWork: [
+              { id: "rw-1", summary: "Run regression checks" },
+              { id: "rw-2", summary: "Prepare release note draft" }
+            ]
+          }
+        }
+      ]
+    });
     await controller.handleUpdate(makeUpdate("/repo payments-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
     await controller.handleUpdate(makeUpdate("/spec approve"));
-
-    const handoff: ExternalCodexHandoffBundle = {
-      schemaVersion: "v1",
-      leaseId: "lease_multi_default",
-      handoffId: "handoff_multi_default",
-      clientId: "vscode-codex",
-      createdAt: "2026-03-14T12:00:00.000Z",
-      taskId: "TASK-MULTI-DEFAULT",
-      specRevisionRef: "v1",
-      completedWork: [],
-      remainingWork: [
-        { id: "rw-1", summary: "Run regression checks" },
-        { id: "rw-2", summary: "Prepare release note draft" }
-      ]
-    };
-    const ingest = await controller.ingestExternalHandoff(100, "lease_multi_default", handoff);
-    expect(ingest.accepted).toBe(true);
 
     await controller.handleUpdate(makeUpdate("/continue"));
     await flushAsyncWork();
@@ -920,7 +1164,7 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
     const notice = telegram.sent.find((item) => item.text.includes("Multiple handoff items are pending. Defaulting to 1"));
     expect(notice).toBeDefined();
-    expect(notice?.options?.commandButtons).toContain("/continue rw-2");
+    expect(notice?.options?.commandButtons).toContain("Continue 2");
   });
 
   it("aligns continuation repo with handoff source session repo", async () => {
@@ -939,6 +1183,31 @@ describe("CodeFoxController", () => {
       repos: [
         { name: "payments-api", rootPath: "/tmp/payments-api" },
         { name: "billing-api", rootPath: "/tmp/billing-api" }
+      ],
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_align",
+          sourceSessionId: "chat:100/repo:payments-api/mode:active",
+          sourceRepoName: "payments-api",
+          sourceMode: "active",
+          receivedAt: "2026-03-14T12:01:00.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: false,
+          awaitingExternalCompletion: false,
+          externalCompletionStatus: "success",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_align",
+            handoffId: "handoff_align",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-ALIGN",
+            specRevisionRef: "v1",
+            completedWork: ["Implemented API route"],
+            remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
+          }
+        }
       ]
     });
     await controller.handleUpdate(makeUpdate("/repo billing-api"));
@@ -946,27 +1215,7 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
     await controller.handleUpdate(makeUpdate("/spec approve"));
 
-    const handoff: ExternalCodexHandoffBundle = {
-      schemaVersion: "v1",
-      leaseId: "lease_align",
-      handoffId: "handoff_align",
-      clientId: "vscode-codex",
-      createdAt: "2026-03-14T12:00:00.000Z",
-      taskId: "TASK-ALIGN",
-      specRevisionRef: "v1",
-      completedWork: ["Implemented API route"],
-      remainingWork: [{ id: "rw-1", summary: "Run regression checks" }]
-    };
-
-    const ingest = await controller.ingestExternalHandoff(
-      100,
-      "lease_align",
-      handoff,
-      "chat:100/repo:payments-api/mode:active"
-    );
-    expect(ingest.accepted).toBe(true);
-
-    await controller.handleUpdate(makeUpdate("/handoff continue"));
+    await controller.handleUpdate(makeUpdate("Continue handoff"));
     await flushAsyncWork();
 
     expect(sessions.getOrCreate(100).selectedRepo).toBe("payments-api");
@@ -990,38 +1239,44 @@ describe("CodeFoxController", () => {
     };
 
     const { controller, telegram, sessions } = makeController(fakeCodex, {
-      repos: [{ name: "billing-api", rootPath: "/tmp/billing-api" }]
+      repos: [{ name: "billing-api", rootPath: "/tmp/billing-api" }],
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_align_auto_add",
+          sourceSessionId: "chat:100/repo:payments-api/mode:active",
+          sourceRepoName: "payments-api",
+          sourceRepoPath: handoffRepoDir,
+          sourceMode: "active",
+          receivedAt: "2026-03-14T12:01:00.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: false,
+          awaitingExternalCompletion: false,
+          externalCompletionStatus: "success",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_align_auto_add",
+            handoffId: "handoff_align_auto_add",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-ALIGN-AUTO",
+            specRevisionRef: "v1",
+            completedWork: ["Implemented API route"],
+            remainingWork: [{ id: "rw-1", summary: "Run regression checks" }],
+            sourceRepo: {
+              name: "payments-api",
+              rootPath: handoffRepoDir
+            }
+          }
+        }
+      ]
     });
     await controller.handleUpdate(makeUpdate("/repo billing-api"));
     await controller.handleUpdate(makeUpdate("/mode active"));
     await controller.handleUpdate(makeUpdate("/spec draft continue long running change"));
     await controller.handleUpdate(makeUpdate("/spec approve"));
 
-    const handoff: ExternalCodexHandoffBundle = {
-      schemaVersion: "v1",
-      leaseId: "lease_align_auto_add",
-      handoffId: "handoff_align_auto_add",
-      clientId: "vscode-codex",
-      createdAt: "2026-03-14T12:00:00.000Z",
-      taskId: "TASK-ALIGN-AUTO",
-      specRevisionRef: "v1",
-      completedWork: ["Implemented API route"],
-      remainingWork: [{ id: "rw-1", summary: "Run regression checks" }],
-      sourceRepo: {
-        name: "payments-api",
-        rootPath: handoffRepoDir
-      }
-    };
-
-    const ingest = await controller.ingestExternalHandoff(
-      100,
-      "lease_align_auto_add",
-      handoff,
-      "chat:100/repo:payments-api/mode:active"
-    );
-    expect(ingest.accepted).toBe(true);
-
-    await controller.handleUpdate(makeUpdate("/handoff continue"));
+    await controller.handleUpdate(makeUpdate("Continue handoff"));
     await flushAsyncWork();
 
     expect(sessions.getOrCreate(100).selectedRepo).toBe("payments-api");
@@ -1080,7 +1335,7 @@ describe("CodeFoxController", () => {
     expect(specStatus).toContain("Spec status: v1 (approved, approved)");
   });
 
-  it("restores persisted external handoff state and renders /handoff status", async () => {
+  it("restores persisted external handoff state and renders Handoff details", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask(repoPath, context) {
@@ -1120,10 +1375,10 @@ describe("CodeFoxController", () => {
       ]
     });
 
-    await controller.handleUpdate(makeUpdate("/handoff status"));
+    await controller.handleUpdate(makeUpdate("Handoff details"));
     const statusMessage = telegram.sent.at(-1)?.text ?? "";
-    expect(statusMessage).toContain("Handoff handoff_1");
-    expect(statusMessage).toContain("remaining: 1/1");
+    expect(statusMessage).toContain("Handoff detail: handoff_1");
+    expect(statusMessage).toContain("rw-1 [pending]");
   });
 
   it("rejects external handoff when requested capability is not runnable in current mode", async () => {
@@ -1759,8 +2014,67 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls.length).toBe(2);
     expect(fakeCodex.calls[1].context.runKind).toBe("steer");
     expect(fakeCodex.calls[1].context.instruction).toContain("Steer update from the user");
-    expect(telegram.sent.some((item) => item.text.includes("Steer received"))).toBe(true);
-    expect(telegram.sent.some((item) => item.text.includes("Applying 1 steer update"))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Steer received"))).toBe(false);
+    expect(telegram.sent.some((item) => item.text.includes("Applying 1 steer update"))).toBe(false);
+    expect(telegram.sent.some((item) => item.text.includes("Applying steer update in payments-api (active)."))).toBe(true);
+    expect(telegram.sent.some((item) => item.text.includes("Aborted: Run aborted by user."))).toBe(false);
+  });
+
+  it("queues /steer when an active run cannot be interrupted", async () => {
+    let resolveTask: ((result: TaskResult) => void) | undefined;
+    let callCount = 0;
+
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        callCount += 1;
+        fakeCodex.calls.push({ repoPath, context });
+        if (callCount === 1) {
+          return {
+            abort: () => {},
+            result: new Promise<TaskResult>((resolve) => {
+              resolveTask = resolve;
+            })
+          };
+        }
+
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "continued", threadId: "thread_1" })
+        };
+      }
+    };
+
+    const { controller, telegram, sessions, audit } = makeController(fakeCodex);
+
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft first run"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks first run"));
+    await flushAsyncWork();
+
+    const activeRequestId = sessions.getOrCreate(100).activeRequestId;
+    expect(activeRequestId).toBeDefined();
+    const internals = controller as unknown as {
+      activeAborts: Map<string, () => void>;
+    };
+    internals.activeAborts.delete(String(activeRequestId));
+
+    await controller.handleUpdate(makeUpdate("/steer focus only on failing test"));
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(1);
+    expect(telegram.sent.some((item) => item.text.includes(`Queued follow-up (1) for ${activeRequestId}`))).toBe(true);
+    expect(audit.events.some((event) => event.type === "steer_queued_uninterruptible_run")).toBe(true);
+
+    resolveTask?.({ ok: true, summary: "initial run done", threadId: "thread_1" });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(fakeCodex.calls.length).toBe(2);
+    expect(fakeCodex.calls[1].context.runKind).toBe("steer");
+    expect(fakeCodex.calls[1].context.instruction).toContain("focus only on failing test");
   });
 
   it("treats plain text as steer while a run is active", async () => {
@@ -1804,6 +2118,53 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls.length).toBe(2);
     expect(fakeCodex.calls[1].context.runKind).toBe("steer");
     expect(fakeCodex.calls[1].context.instruction).toContain("what was the last question?");
+  });
+
+  it("does not suggest steer in busy messages when active run is not interruptible", async () => {
+    let resolveTask: ((result: TaskResult) => void) | undefined;
+
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask(repoPath, context) {
+        fakeCodex.calls.push({ repoPath, context });
+        return {
+          abort: () => {},
+          result: new Promise<TaskResult>((resolve) => {
+            resolveTask = resolve;
+          })
+        };
+      }
+    };
+
+    const { controller, telegram, sessions } = makeController(fakeCodex, {
+      repos: [
+        { name: "payments-api", rootPath: "/tmp/payments-api" },
+        { name: "codefox", rootPath: "/tmp/codefox" }
+      ]
+    });
+    await controller.handleUpdate(makeUpdate("/repo payments-api"));
+    await controller.handleUpdate(makeUpdate("/mode active"));
+    await controller.handleUpdate(makeUpdate("/spec draft first run"));
+    await controller.handleUpdate(makeUpdate("/spec approve"));
+    await controller.handleUpdate(makeUpdate("/act repo.run_checks first run"));
+    await flushAsyncWork();
+
+    const activeRequestId = sessions.getOrCreate(100).activeRequestId;
+    expect(activeRequestId).toBeDefined();
+    const internals = controller as unknown as {
+      activeAborts: Map<string, () => void>;
+    };
+    internals.activeAborts.delete(String(activeRequestId));
+
+    await controller.handleUpdate(makeUpdate("/repo codefox"));
+
+    const latestMessage = telegram.sent.at(-1)?.text ?? "";
+    expect(latestMessage).toContain("is active.");
+    expect(latestMessage).toContain("use /status for context, or /abort to stop");
+    expect(latestMessage).not.toContain("steer");
+
+    resolveTask?.({ ok: true, summary: "done", threadId: "thread_1" });
+    await flushAsyncWork();
   });
 
   it("queues plain-text follow-up while admission lock is active", async () => {
@@ -2327,8 +2688,8 @@ describe("CodeFoxController", () => {
 
     await controller.handleUpdate(makeUpdate("/service stop"));
     const confirmPrompt = telegram.sent.at(-1);
-    expect(confirmPrompt?.text).toContain("confirm with /service stop confirm");
-    expect(confirmPrompt?.options?.commandButtons).toEqual(["/service stop confirm", "/status"]);
+    expect(confirmPrompt?.text).toContain("confirm with /stopconfirm");
+    expect(confirmPrompt?.options?.commandButtons).toEqual(["Confirm stop", "Show status"]);
     expect(stopRequests.length).toBe(0);
 
     await controller.handleUpdate(makeUpdate("/service stop confirm"));

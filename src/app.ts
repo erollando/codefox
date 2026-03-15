@@ -9,6 +9,7 @@ import { CodeFoxController, createControllerFromAdapters } from "./core/controll
 import { ExternalCodexRelay } from "./core/external-codex-relay.js";
 import { deriveExternalRoutes } from "./core/external-session-route.js";
 import { InstructionPolicy } from "./core/instruction-policy.js";
+import { RssCodexChangelogTracker } from "./core/codex-changelog.js";
 import { FileLocalCommandQueue, defaultLocalCommandQueuePath } from "./core/local-command-queue.js";
 import { LocalChatLog, defaultLocalChatLogPath } from "./core/local-chat-log.js";
 import { PolicyEngine } from "./core/policy.js";
@@ -99,7 +100,8 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
       sessions: sessions.list(),
       approvals: approvals.list(),
       specWorkflows: controller ? controller.listSpecWorkflows() : initialState.specWorkflows,
-      externalHandoffs: controller ? controller.listExternalHandoffs() : initialState.externalHandoffs
+      externalHandoffs: controller ? controller.listExternalHandoffs() : initialState.externalHandoffs,
+      codexChangelog: controller ? controller.getCodexChangelogState() : initialState.codexChangelog
     });
   };
 
@@ -187,8 +189,17 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
         requestedCapabilityRef: event.requestedCapabilityRef
       });
     },
+    onCompletionReported: async (event) => {
+      await controller.noteExternalCompletion(event.chatId, event.leaseId, event.completion, event.sessionId);
+    },
     onHandoffReceived: async (event) => {
-      const ingest = await controller.ingestExternalHandoff(event.chatId, event.leaseId, event.handoff, event.sessionId);
+      const ingest = await controller.ingestExternalHandoff(
+        event.chatId,
+        event.leaseId,
+        event.handoff,
+        event.sessionId,
+        event.latestCompletion
+      );
       if (!ingest.accepted) {
         await telegram.sendMessage(
           event.chatId,
@@ -227,8 +238,10 @@ export async function createApp(configPath?: string): Promise<AppRuntime> {
     codexDefaultReasoningEffort: config.codex.reasoningEffort,
     initialSpecWorkflows: initialState.specWorkflows,
     initialExternalHandoffs: initialState.externalHandoffs,
+    initialCodexChangelogState: initialState.codexChangelog,
     persistState,
     specPolicy,
+    codexChangelogTracker: new RssCodexChangelogTracker(),
     externalApprovalDecision: async ({ leaseId, approvalKey, approved, userId }) => {
       const result = await externalRelay.decideApproval(leaseId, approvalKey, approved, userId);
       return Boolean(result);

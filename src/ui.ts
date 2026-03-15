@@ -47,6 +47,8 @@ interface UiStateResponse {
       remainingTotal: number;
       remainingOpen: number;
       next?: string;
+      awaitingConfirmation: boolean;
+      awaitingExternalCompletion: boolean;
     };
     quickCommands: string[];
   } | null;
@@ -366,10 +368,18 @@ async function buildUiState(input: {
             taskId: handoff.handoff.taskId,
             remainingTotal: handoff.handoff.remainingWork.length,
             remainingOpen,
-            next: nextWork ? `${nextWork.id}: ${nextWork.summary}` : undefined
+            next: nextWork ? `${nextWork.id}: ${nextWork.summary}` : undefined,
+            awaitingConfirmation: handoff.awaitingConfirmation === true,
+            awaitingExternalCompletion: handoff.awaitingExternalCompletion === true
           }
         : undefined,
-      quickCommands: buildQuickCommands(Boolean(selectedSession?.activeRequestId), approvals.length > 0, remainingOpen > 0)
+      quickCommands: buildQuickCommands(Boolean(selectedSession?.activeRequestId), approvals.length > 0, handoff
+        ? {
+            remainingOpen,
+            awaitingConfirmation: handoff.awaitingConfirmation === true,
+            awaitingExternalCompletion: handoff.awaitingExternalCompletion === true
+          }
+        : undefined)
     },
     messages: messages.map((message) => ({
       id: message.id,
@@ -382,17 +392,33 @@ async function buildUiState(input: {
   };
 }
 
-function buildQuickCommands(activeRequest: boolean, hasApproval: boolean, hasOutstandingHandoff: boolean): string[] {
+function buildQuickCommands(
+  activeRequest: boolean,
+  hasApproval: boolean,
+  handoff?: {
+    remainingOpen: number;
+    awaitingConfirmation: boolean;
+    awaitingExternalCompletion: boolean;
+  }
+): string[] {
   if (hasApproval) {
-    return ["/approve", "/deny", "/pending", "/status", "/service stop"];
+    return ["Approve request", "Deny request", "Show pending", "Show status", "Stop service"];
   }
   if (activeRequest) {
-    return ["/abort", "/status", "/details", "/service stop"];
+    return ["Abort run", "Show status", "Show details", "Stop service"];
   }
-  if (hasOutstandingHandoff) {
-    return ["/continue", "/handoff show", "/status", "/service stop"];
+  if (handoff) {
+    if (handoff.awaitingConfirmation) {
+      return ["Accept handoff", "Reject handoff", "Handoff details", "Show status"];
+    }
+    if (handoff.awaitingExternalCompletion) {
+      return ["Handoff details", "Show status", "Stop service"];
+    }
+    if (handoff.remainingOpen > 0) {
+      return ["Continue handoff", "Handoff details", "Show status", "Stop service"];
+    }
   }
-  return ["/status", "/details", "/pending", "/handoff show", "/service stop"];
+  return ["Show status", "Show details", "Show pending", "Stop service"];
 }
 
 function resolveDefaultChatId(
@@ -976,7 +1002,8 @@ const UI_HTML = `<!doctype html>
 
       const selected = data.selected;
       if (!selected) {
-        contextEl.innerHTML = "<span class='tiny'>No active session yet. Start from Telegram, REPL, or handoff.</span>";
+        contextEl.innerHTML =
+          "<span class='tiny'>No active session yet. Start from Telegram, REPL, or handoff.</span>";
         quickEl.innerHTML = "";
         feedEl.innerHTML = "<div class='tiny'>No messages yet.</div>";
         forceScrollToBottom = false;
@@ -992,7 +1019,13 @@ const UI_HTML = `<!doctype html>
         pills.push("<span class='pill'>spec: " + selected.spec.revision + " (" + selected.spec.stage + ")</span>");
       }
       if (selected.handoff) {
-        pills.push("<span class='pill'>handoff: " + selected.handoff.remainingOpen + "/" + selected.handoff.remainingTotal + " open</span>");
+        pills.push(
+          "<span class='pill'>handoff: " +
+            selected.handoff.remainingOpen +
+            "/" +
+            selected.handoff.remainingTotal +
+            " open</span>"
+        );
       }
       contextEl.innerHTML = pills.join("");
 

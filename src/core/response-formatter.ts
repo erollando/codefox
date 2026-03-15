@@ -3,6 +3,7 @@ import { redactSensitive } from "./sanitize.js";
 import type { SpecModePolicy } from "./spec-policy.js";
 import type { InstructionPolicySummary } from "./instruction-policy.js";
 import type { CapabilityActionSpec, CapabilityPackSummary } from "./capability-registry.js";
+import type { CodexChangelogCheckResult } from "./codex-changelog.js";
 
 const TELEGRAM_OUTPUT_LIMIT = 1200;
 
@@ -18,6 +19,7 @@ export function formatHelp(): string {
     "CodeFox commands:",
     "/help",
     "/repos",
+    "/codex-changelog",
     "/capabilities [mail|calendar|repo|jira|ops|docs]",
     "/spec template",
     "/spec draft <intent>",
@@ -45,11 +47,12 @@ export function formatHelp(): string {
     "/steer <instruction>",
     "/close",
     "/service stop [confirm]",
+    "/stop [confirm] | /stopconfirm",
     "/status",
     "/details",
     "/continue [work-id|index]",
     "/resume [work-id|index]",
-    "/handoff [status|show|continue [work-id|index]|clear]",
+    "Accept handoff | Reject handoff | Handoff details | Continue handoff",
     "/audit <view_id>",
     "/abort"
   ].join("\n");
@@ -126,6 +129,42 @@ export function formatCapabilitiesSummary(input: {
         })
       : ["- (no actions defined)"])
   ].join("\n");
+}
+
+export function formatCodexChangelogCheck(result: CodexChangelogCheckResult): string {
+  const lines = [
+    "Codex changelog check:",
+    `source: ${result.sourceUrl}`,
+    `checked at: ${result.checkedAt}`
+  ];
+
+  if (result.latestEntry) {
+    lines.push(
+      `latest entry: ${result.latestEntry.title}${
+        result.latestEntry.publishedAt ? ` (${result.latestEntry.publishedAt})` : ""
+      }`
+    );
+  }
+
+  if (result.newEntries.length === 0) {
+    lines.push("No new Codex changelog entries since the last recorded baseline.");
+    return lines.join("\n");
+  }
+
+  lines.push(`new entries: ${result.newEntries.length}`);
+  for (const [index, entry] of result.newEntries.slice(0, 3).entries()) {
+    lines.push(
+      `${index + 1}. ${entry.title}${entry.publishedAt ? ` (${entry.publishedAt})` : ""}`,
+      `   decision: ${entry.decision}`,
+      `   categories: ${entry.impactHints.map((hint) => hint.category).join(", ")}`,
+      `   next: ${entry.impactHints[0]?.suggestedChange ?? "Review manually."}`
+    );
+  }
+  if (result.newEntries.length > 3) {
+    lines.push(`... plus ${result.newEntries.length - 3} more new entries.`);
+  }
+
+  return lines.join("\n");
 }
 
 export function formatRepos(repoNames: string[]): string {
@@ -239,16 +278,6 @@ export function formatTaskResult(
   }
 
   lines.push("Next: use /details for full context.");
-  if (safeInstructionPreview) {
-    const completionLabel = result.ok
-      ? "completed"
-      : result.aborted
-        ? "aborted"
-        : result.timedOut
-          ? "timed out"
-          : "failed";
-    lines.push(`request ${completionLabel}: ${truncateForTelegram(safeInstructionPreview, 240)}`);
-  }
   return lines.join("\n");
 }
 

@@ -1,0 +1,46 @@
+=== CodeFox Demo: Handoff Relay Lifecycle ===
+session id: chat:100/repo:payments-api/mode:active
+lease id: lease_5a72fe36f26490f3
+approval status: approved
+codex runs executed by CodeFox after handoff: 1
+note: this demo starts after the desk-side handoff action and focuses on relay/controller lifecycle.
+
+=== Command/Reply Transcript ===
+01. USER> /repo payments-api
+02. CODEFOX> Repo set to payments-api.
+03. USER> /mode active
+04. CODEFOX> Mode set to active (workspace-write sandbox).
+05. USER> /spec draft Ship invoice CSV export safely
+06. CODEFOX> Spec lifecycle initialized. | versions: v0(raw), v1(interpreted) | current: v1 (interpreted, draft) | missing sections for mode active: (none) | Use /spec clarify <note> to refine. | Use /spec show to review. | Use /spec approve to allow /run.
+07. USER> /spec clarify Keep schema unchanged and add tests
+08. CODEFOX> Spec clarified to v2. | current: (clarified, draft) | missing sections for mode active: (none) | Use /spec diff to inspect changes.
+09. USER> /spec approve
+10. CODEFOX> Spec v2 approved. /run is now allowed.
+11. EXTERNAL_CODEX> event progress (55%): Implemented export endpoint and started integration checks
+12. CODEFOX> External Codex progress [55%]: Implemented export endpoint and started integration checks
+13. EXTERNAL_CODEX> event approval_request: Need approval before preparing release branch
+14. CODEFOX> External Codex approval requested (prepare-branch, repo.prepare_branch): Need approval before preparing release branch
+15. USER> /pending
+16. CODEFOX> Pending approval: extapr_prepare-branch | repo: payments-api | mode: active | source: external-codex | requested by user: 1 | created at: 2026-03-15T12:57:59.567Z | capability: repo.prepare_branch | instruction: Need approval before preparing release branch | Use /approve or /deny. | external approval key: prepare-branch
+17. USER> /approve
+18. CODEFOX> Approved external request extapr_prepare-branch.
+19. EXTERNAL_CODEX> handoff bundle: TASK-DEMO-42 with remaining work rw-1
+20. CODEFOX> External Codex handoff bundle received: | task: TASK-DEMO-42 | spec ref: v2 | completed work: 2 | remaining work: 1
+21. CODEFOX> Accept handoff? External Codex is still running. CodeFox will wait and start its own continuation when it finishes.
+22. USER> Accept handoff
+23. CODEFOX> Accepted handoff handoff-demo-1. External Codex is still running. CodeFox will start its own continuation automatically when it finishes.
+24. EXTERNAL_CODEX> event completion: Execution phase complete in VS Code client
+25. CODEFOX> External Codex completion (success): Execution phase complete in VS Code client
+26. CODEFOX> External Codex finished (success) for handoff handoff-demo-1. Starting CodeFox continuation now.
+27. CODEFOX> Working on your request in payments-api (active).
+28. CODEFOX> Completed: Executed repo.run_checks for 'Run full regression checks before release' | request: Run full regression checks before release | Next: use /details for full context.
+
+=== Audit Event Counts (selected) ===
+external_event_relayed: 3
+external_handoff_relayed: 1
+external_approval_granted: 1
+external_handoff_ingested: 1
+external_handoff_continue_requested: 0
+external_handoff_continue_auto_requested: 1
+codex_start: 1
+codex_finish: 1

@@ -179,8 +179,17 @@ async function runDemo(): Promise<void> {
         createdAt: new Date().toISOString()
       });
     },
+    onCompletionReported: async (event) => {
+      await controller.noteExternalCompletion(event.chatId, event.leaseId, event.completion, event.sessionId);
+    },
     onHandoffReceived: async (event) => {
-      await controller.ingestExternalHandoff(event.chatId, event.leaseId, event.handoff);
+      await controller.ingestExternalHandoff(
+        event.chatId,
+        event.leaseId,
+        event.handoff,
+        event.sessionId,
+        event.latestCompletion
+      );
     }
   });
 
@@ -257,25 +266,6 @@ async function runDemo(): Promise<void> {
   await runUserCommand(controller, telegram, transcript, "/pending", userId, chatId);
   await runUserCommand(controller, telegram, transcript, "/approve", userId, chatId);
 
-  await runExternalStep(
-    telegram,
-    transcript,
-    "event completion: Execution phase complete in VS Code client",
-    async () => {
-      await relay.relayEvent({
-        schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
-        leaseId: bind.lease.leaseId,
-        eventId: "evt-3",
-        clientId: "vscode-codex-demo",
-        timestamp: "2026-03-14T15:00:15.000Z",
-        sequence: 3,
-        type: "completion",
-        status: "success",
-        summary: "Execution phase complete in VS Code client"
-      });
-    }
-  );
-
   const handoff: ExternalCodexHandoffBundle = {
     schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
     leaseId: bind.lease.leaseId,
@@ -303,14 +293,25 @@ async function runDemo(): Promise<void> {
     }
   );
 
-  await runUserCommand(controller, telegram, transcript, "/handoff show", userId, chatId);
-  await runUserCommand(
-    controller,
+  await runUserCommand(controller, telegram, transcript, "Accept handoff", userId, chatId);
+
+  await runExternalStep(
     telegram,
     transcript,
-    "/handoff continue rw-1",
-    userId,
-    chatId
+    "event completion: Execution phase complete in VS Code client",
+    async () => {
+      await relay.relayEvent({
+        schemaVersion: EXTERNAL_CODEX_SCHEMA_VERSION,
+        leaseId: bind.lease.leaseId,
+        eventId: "evt-3",
+        clientId: "vscode-codex-demo",
+        timestamp: "2026-03-14T15:00:15.000Z",
+        sequence: 3,
+        type: "completion",
+        status: "success",
+        summary: "Execution phase complete in VS Code client"
+      });
+    }
   );
   await flushAsyncWork();
   const repliesCaptured = transcript.reduce((count, entry) => {
@@ -325,11 +326,12 @@ async function runDemo(): Promise<void> {
     auditCounts.set(type, (auditCounts.get(type) ?? 0) + 1);
   }
 
-  console.log("=== CodeFox Demo: VS Code -> Phone Continuation ===");
+  console.log("=== CodeFox Demo: Handoff Relay Lifecycle ===");
   console.log(`session id: ${sessionId}`);
   console.log(`lease id: ${bind.lease.leaseId}`);
   console.log(`approval status: ${approvalRecord?.status ?? "missing"}`);
   console.log(`codex runs executed by CodeFox after handoff: ${codex.calls.length}`);
+  console.log("note: this demo starts after the desk-side handoff action and focuses on relay/controller lifecycle.");
   console.log("");
   console.log("=== Command/Reply Transcript ===");
   transcript.forEach((entry, index) => {
@@ -344,6 +346,7 @@ async function runDemo(): Promise<void> {
     "external_approval_granted",
     "external_handoff_ingested",
     "external_handoff_continue_requested",
+    "external_handoff_continue_auto_requested",
     "codex_start",
     "codex_finish"
   ];

@@ -4,6 +4,7 @@ import type { CapabilityPackName } from "../types/domain.js";
 export type ParsedCommand =
   | { type: "help" }
   | { type: "repos" }
+  | { type: "codex_changelog" }
   | { type: "capabilities"; pack?: CapabilityPackName }
   | {
       type: "spec";
@@ -69,6 +70,10 @@ export function parseCommand(text: string): ParsedCommand {
   }
 
   if (!trimmed.startsWith("/")) {
+    const buttonCommand = parseButtonCommand(trimmed);
+    if (buttonCommand) {
+      return buttonCommand;
+    }
     return { type: "run", instruction: trimmed };
   }
 
@@ -80,6 +85,9 @@ export function parseCommand(text: string): ParsedCommand {
       return { type: "help" };
     case "/repos":
       return { type: "repos" };
+    case "/codex-changelog":
+    case "/codex_changelog":
+      return arg ? { type: "unknown", raw: text } : { type: "codex_changelog" };
     case "/capabilities":
       if (!arg) {
         return { type: "capabilities", pack: undefined };
@@ -144,11 +152,11 @@ export function parseCommand(text: string): ParsedCommand {
         return { type: "unknown", raw: text };
       }
       return parseServiceCommand(arg, text);
-    case "/handoff":
-      if (!arg) {
-        return { type: "handoff", action: "status" };
-      }
-      return parseHandoffCommand(arg, text);
+    case "/stop":
+      return parseStopAlias(arg, text);
+    case "/stopconfirm":
+    case "/stop-confirm":
+      return { type: "service", action: "stop", confirm: true };
     case "/continue":
       if (!arg) {
         return { type: "handoff", action: "continue" };
@@ -172,6 +180,53 @@ export function parseCommand(text: string): ParsedCommand {
   }
 }
 
+function parseButtonCommand(text: string): ParsedCommand | undefined {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized === "show status") {
+    return { type: "status" };
+  }
+  if (normalized === "show details") {
+    return { type: "details" };
+  }
+  if (normalized === "show pending") {
+    return { type: "pending" };
+  }
+  if (normalized === "approve request") {
+    return { type: "approve" };
+  }
+  if (normalized === "deny request") {
+    return { type: "deny" };
+  }
+  if (normalized === "abort run") {
+    return { type: "abort" };
+  }
+  if (normalized === "stop service") {
+    return { type: "service", action: "stop", confirm: false };
+  }
+  if (normalized === "confirm stop") {
+    return { type: "service", action: "stop", confirm: true };
+  }
+  if (normalized === "handoff details") {
+    return { type: "handoff", action: "show" };
+  }
+  if (normalized === "continue handoff") {
+    return { type: "handoff", action: "continue" };
+  }
+  if (normalized === "clear handoff") {
+    return { type: "handoff", action: "clear" };
+  }
+  const continueItemMatch = /^continue (\d+)$/.exec(normalized);
+  if (continueItemMatch) {
+    return { type: "handoff", action: "continue", workId: continueItemMatch[1] };
+  }
+
+  return undefined;
+}
+
 function parseServiceCommand(arg: string, raw: string): ParsedCommand {
   const parts = arg.split(/\s+/).filter(Boolean);
   const subCommand = parts[0]?.toLowerCase();
@@ -185,6 +240,16 @@ function parseServiceCommand(arg: string, raw: string): ParsedCommand {
     return { type: "service", action: "stop", confirm: true };
   }
   return { type: "unknown", raw };
+}
+
+function parseStopAlias(arg: string, raw: string): ParsedCommand {
+  if (!arg) {
+    return { type: "service", action: "stop", confirm: false };
+  }
+
+  return arg.toLowerCase() === "confirm"
+    ? { type: "service", action: "stop", confirm: true }
+    : { type: "unknown", raw };
 }
 
 function parseHandoffCommand(arg: string, raw: string): ParsedCommand {

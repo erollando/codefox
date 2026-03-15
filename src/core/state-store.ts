@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ApprovalRequest,
+  CodexChangelogStateSnapshot,
   CodexReasoningEffort,
   ExternalHandoffStateSnapshot,
   PolicyMode,
@@ -20,6 +21,7 @@ export interface PersistedState {
   approvals: ApprovalRequest[];
   specWorkflows: PersistedSpecWorkflow[];
   externalHandoffs: ExternalHandoffStateSnapshot[];
+  codexChangelog?: CodexChangelogStateSnapshot;
 }
 
 export interface StateTtlOptions {
@@ -31,7 +33,8 @@ const EMPTY_STATE: PersistedState = {
   sessions: [],
   approvals: [],
   specWorkflows: [],
-  externalHandoffs: []
+  externalHandoffs: [],
+  codexChangelog: undefined
 };
 
 const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
@@ -74,12 +77,14 @@ export class JsonStateStore {
     const externalHandoffs = Array.isArray(obj.externalHandoffs)
       ? (obj.externalHandoffs as ExternalHandoffStateSnapshot[])
       : [];
+    const codexChangelog = sanitizeCodexChangelogState(obj.codexChangelog);
 
     return {
       sessions: sanitizeSessions(sessions),
       approvals: sanitizeApprovals(approvals),
       specWorkflows: sanitizeSpecWorkflows(specWorkflows),
-      externalHandoffs: sanitizeExternalHandoffs(externalHandoffs)
+      externalHandoffs: sanitizeExternalHandoffs(externalHandoffs),
+      codexChangelog
     };
   }
 
@@ -92,7 +97,8 @@ export class JsonStateStore {
         sessions: sanitizeSessions(state.sessions),
         approvals: sanitizeApprovals(state.approvals),
         specWorkflows: sanitizeSpecWorkflows(state.specWorkflows),
-        externalHandoffs: sanitizeExternalHandoffs(state.externalHandoffs)
+        externalHandoffs: sanitizeExternalHandoffs(state.externalHandoffs),
+        codexChangelog: sanitizeCodexChangelogState(state.codexChangelog)
       };
 
       const tempPath = `${this.filePath}.tmp`;
@@ -106,6 +112,31 @@ export class JsonStateStore {
   async flush(): Promise<void> {
     await this.writeQueue;
   }
+}
+
+function sanitizeCodexChangelogState(value: unknown): CodexChangelogStateSnapshot | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const state = value as Record<string, unknown>;
+  const sourceUrl = typeof state.sourceUrl === "string" && state.sourceUrl.trim().length > 0 ? state.sourceUrl.trim() : undefined;
+  if (!sourceUrl) {
+    return undefined;
+  }
+
+  const seenEntryIds = Array.isArray(state.seenEntryIds)
+    ? state.seenEntryIds.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 100)
+    : [];
+
+  return {
+    sourceUrl,
+    seenEntryIds,
+    lastCheckedAt: isValidIsoTimestamp(state.lastCheckedAt) ? state.lastCheckedAt : undefined,
+    latestEntryId: typeof state.latestEntryId === "string" ? state.latestEntryId : undefined,
+    latestEntryTitle: typeof state.latestEntryTitle === "string" ? state.latestEntryTitle : undefined,
+    latestEntryPublishedAt: isValidIsoTimestamp(state.latestEntryPublishedAt) ? state.latestEntryPublishedAt : undefined
+  };
 }
 
 function sanitizeSessions(sessions: SessionState[]): SessionState[] {
@@ -325,7 +356,24 @@ function sanitizeExternalHandoffs(externalHandoffs: ExternalHandoffStateSnapshot
           : undefined
       },
       receivedAt: isValidIsoTimestamp(entry.receivedAt) ? entry.receivedAt : new Date().toISOString(),
-      continuedWorkIds: entry.continuedWorkIds.filter((value): value is string => typeof value === "string")
+      continuedWorkIds: entry.continuedWorkIds.filter((value): value is string => typeof value === "string"),
+      awaitingConfirmation: entry.awaitingConfirmation === true,
+      acceptedAt: isValidIsoTimestamp(entry.acceptedAt) ? entry.acceptedAt : undefined,
+      acceptedByUserId:
+        typeof entry.acceptedByUserId === "number" && Number.isSafeInteger(entry.acceptedByUserId)
+          ? entry.acceptedByUserId
+          : undefined,
+      awaitingExternalCompletion: entry.awaitingExternalCompletion === true,
+      externalCompletionStatus:
+        entry.externalCompletionStatus === "success" ||
+        entry.externalCompletionStatus === "failed" ||
+        entry.externalCompletionStatus === "aborted" ||
+        entry.externalCompletionStatus === "pending"
+          ? entry.externalCompletionStatus
+          : undefined,
+      externalCompletionSummary:
+        typeof entry.externalCompletionSummary === "string" ? entry.externalCompletionSummary : undefined,
+      externalCompletedAt: isValidIsoTimestamp(entry.externalCompletedAt) ? entry.externalCompletedAt : undefined
     }))
     .filter(
       (entry) =>
@@ -429,7 +477,8 @@ export function pruneStateByTtl(
       specWorkflows: state.specWorkflows.filter((entry) => sessions.some((session) => session.chatId === entry.chatId)),
       externalHandoffs: state.externalHandoffs.filter((entry) =>
         sessions.some((session) => session.chatId === entry.chatId)
-      )
+      ),
+      codexChangelog: state.codexChangelog
     },
     removedSessions: state.sessions.length - sessions.length,
     removedApprovals: state.approvals.length - approvals.length

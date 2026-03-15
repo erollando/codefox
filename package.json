@@ -18,7 +18,8 @@
     "local:cli": "tsx src/local-cli.ts",
     "chat:cli": "tsx src/chat-cli.ts",
     "handoff:cli": "tsx src/handoff-cli.ts",
-    "demo:remote-handoff": "tsx scripts/demo-remote-handoff.ts",
+    "demo:handoff": "tsx scripts/demo-handoff-cli.ts",
+    "demo:handoff-lifecycle": "tsx scripts/demo-handoff.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run build && npm test"

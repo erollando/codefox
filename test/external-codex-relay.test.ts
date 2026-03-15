@@ -10,6 +10,8 @@ describe("ExternalCodexRelay", () => {
     const auditEvents: Array<Record<string, unknown>> = [];
     const notifications: Array<{ chatId: number; message: string }> = [];
     const approvalCallbacks: Array<Record<string, unknown>> = [];
+    const completionCallbacks: Array<Record<string, unknown>> = [];
+    const handoffCallbacks: Array<Record<string, unknown>> = [];
 
     const relay = new ExternalCodexRelay({
       integration: new ExternalCodexIntegration(),
@@ -23,6 +25,12 @@ describe("ExternalCodexRelay", () => {
       },
       onApprovalRequested: async (event) => {
         approvalCallbacks.push(event);
+      },
+      onCompletionReported: async (event) => {
+        completionCallbacks.push(event);
+      },
+      onHandoffReceived: async (event) => {
+        handoffCallbacks.push(event);
       }
     });
 
@@ -101,6 +109,10 @@ describe("ExternalCodexRelay", () => {
     expect(notifications[2]?.message).toContain("completion (success)");
     expect(notifications[3]?.message).toContain("handoff bundle received");
     expect(approvalCallbacks).toHaveLength(1);
+    expect(completionCallbacks).toHaveLength(1);
+    expect(completionCallbacks[0]?.chatId).toBe(100);
+    expect(handoffCallbacks).toHaveLength(1);
+    expect((handoffCallbacks[0]?.latestCompletion as { type?: string } | undefined)?.type).toBe("completion");
     expect(approvalCallbacks[0]?.approvalKey).toBe("push-branch");
     const pendingApproval = relay.getApprovalDecision(bind.lease.leaseId, "push-branch");
     expect(pendingApproval?.status).toBe("pending");

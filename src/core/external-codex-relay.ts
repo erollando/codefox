@@ -25,11 +25,18 @@ export interface ExternalCodexRelayOptions {
     summary: string;
     requestedCapabilityRef?: string;
   }) => Promise<void>;
+  onCompletionReported?: (event: {
+    leaseId: string;
+    sessionId: string;
+    chatId: number;
+    completion: Extract<ExternalCodexEvent, { type: "completion" }>;
+  }) => Promise<void>;
   onHandoffReceived?: (event: {
     leaseId: string;
     sessionId: string;
     chatId: number;
     handoff: ExternalCodexHandoffBundle;
+    latestCompletion?: Extract<ExternalCodexEvent, { type: "completion" }>;
   }) => Promise<void>;
 }
 
@@ -67,6 +74,7 @@ export class ExternalCodexRelay {
   readonly integration: ExternalCodexIntegration;
   private readonly routes = new Map<string, ExternalRouteEntry>();
   private readonly approvals = new Map<string, ExternalApprovalRecord>();
+  private readonly completions = new Map<string, Extract<ExternalCodexEvent, { type: "completion" }>>();
 
   constructor(private readonly options: ExternalCodexRelayOptions) {
     this.integration = options.integration ?? new ExternalCodexIntegration();
@@ -113,6 +121,7 @@ export class ExternalCodexRelay {
     if (!revoked) {
       return false;
     }
+    this.completions.delete(leaseId);
     for (const [key, record] of this.approvals.entries()) {
       if (record.leaseId === leaseId) {
         this.approvals.delete(key);
@@ -184,6 +193,17 @@ export class ExternalCodexRelay {
         });
       }
     }
+    if (event.type === "completion") {
+      this.completions.set(event.leaseId, event);
+      if (this.options.onCompletionReported) {
+        await this.options.onCompletionReported({
+          leaseId: event.leaseId,
+          sessionId: decision.lease.session.sessionId,
+          chatId: route.chatId,
+          completion: event
+        });
+      }
+    }
     return { decision, relayed: true };
   }
 
@@ -230,7 +250,8 @@ export class ExternalCodexRelay {
         leaseId: handoff.leaseId,
         sessionId: decision.lease.session.sessionId,
         chatId: route.chatId,
-        handoff
+        handoff,
+        latestCompletion: this.completions.get(handoff.leaseId)
       });
     }
     return { decision, relayed: true };

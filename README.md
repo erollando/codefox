@@ -50,6 +50,7 @@ Useful commands:
 ```text
 /status
 /details
+/codex-changelog
 /approve
 /deny
 /continue
@@ -98,6 +99,7 @@ Mobile mode:
 - force with `?mobile=1`
 
 Important: laptop UI and phone UI show the same CodeFox data and session state, so switching between local and remote work stays consistent.
+Remote scope note: in CodeFox today, "remote" (internet) UI means Telegram. LAN/browser control is handled by the local web UI.
 
 ### Local REPL
 
@@ -113,10 +115,11 @@ Example:
 status
 what changed in the last run?
 :handoff
+:accept
 :continue rw-1
 ```
 
-### External Handoff (Desk -> Remote)
+### External Handoff (Desk -> Telegram)
 
 Prerequisite: `externalRelay.enabled=true` in `config/codefox.config.json`.
 
@@ -126,12 +129,15 @@ At desk:
 npm run handoff:cli
 ```
 
+If CodeFox is not already running, the handoff CLI now prompts before starting it. Interactive default is foreground, so the terminal stays attached to `npm run dev` and `Ctrl+C` stops it cleanly. Use `--start-in-background` only when you explicitly want a detached process. The legacy `--start-if-missing` flag remains as a compatibility alias for background start.
+
 Then from Telegram/UI:
 
 ```text
-/handoff show
-/continue
+Accept handoff
 ```
+
+Handoff behavior: after a handoff arrives, Telegram shows `Accept handoff` / `Reject handoff`. If the external client is still running, CodeFox waits for the external completion signal and then starts its own continuation automatically. If the external client already finished, accepting starts that continuation immediately. Acceptance does not attach to or reclaim the original external Codex thread. CodeFox only takes ownership of the handoff state and any later CodeFox-managed continuation run. Today, external handoff continuity is task/spec/repo context continuity; same-thread takeover would require the external client to provide a resumable Codex thread/session id.
 
 ## Operational Helpers
 
@@ -150,13 +156,14 @@ CodeFox is the authority for policy, approvals, communication, and audit. Extern
 ## Current Limits
 
 - Capability packs exist as policy contracts; only `jira` is currently marked as native-backed (`implemented`).
-- Changelog-driven capability tracking is still manual.
 - Runtime behavior can depend on installed Codex CLI version.
 
 ## Documentation
 
 - Start/operate/troubleshoot: [Manual](./docs/MANUAL.md)
-- Desk-to-pocket walkthrough: [Demo: Remote Handoff](./docs/DEMO_REMOTE_HANDOFF.md)
+- Desk-side handoff action: [Demo: Handoff](./docs/DEMO_HANDOFF.md)
+- Relay/controller follow-up: [Demo: Handoff Lifecycle](./docs/DEMO_HANDOFF_LIFECYCLE.md)
 - End-user narrative: [Demo: One-Page Story](./docs/DEMO_ONE_PAGE_STORY.md)
-- Example transcript: [demo-outputs/remote-handoff-transcript.txt](./docs/demo-outputs/remote-handoff-transcript.txt)
+- Desk transcript: [demo-outputs/handoff-transcript.txt](./docs/demo-outputs/handoff-transcript.txt)
+- Lifecycle transcript: [demo-outputs/handoff-lifecycle-transcript.txt](./docs/demo-outputs/handoff-lifecycle-transcript.txt)
 - Capability backend status: [Capability Backends](./docs/CAPABILITY_BACKENDS.md)

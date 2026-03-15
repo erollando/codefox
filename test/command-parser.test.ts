@@ -5,6 +5,8 @@ describe("parseCommand", () => {
   it("parses slash commands", () => {
     expect(parseCommand("/help")).toEqual({ type: "help" });
     expect(parseCommand("/help@codefox_bot")).toEqual({ type: "help" });
+    expect(parseCommand("/codex-changelog")).toEqual({ type: "codex_changelog" });
+    expect(parseCommand("/codex_changelog")).toEqual({ type: "codex_changelog" });
     expect(parseCommand("/capabilities")).toEqual({
       type: "capabilities",
       pack: undefined
@@ -163,17 +165,11 @@ describe("parseCommand", () => {
     expect(parseCommand("/close")).toEqual({ type: "close" });
     expect(parseCommand("/service stop")).toEqual({ type: "service", action: "stop", confirm: false });
     expect(parseCommand("/service stop confirm")).toEqual({ type: "service", action: "stop", confirm: true });
+    expect(parseCommand("/stop")).toEqual({ type: "service", action: "stop", confirm: false });
+    expect(parseCommand("/stop confirm")).toEqual({ type: "service", action: "stop", confirm: true });
+    expect(parseCommand("/stopconfirm")).toEqual({ type: "service", action: "stop", confirm: true });
     expect(parseCommand("/details")).toEqual({ type: "details" });
     expect(parseCommand("/pending")).toEqual({ type: "pending" });
-    expect(parseCommand("/handoff")).toEqual({ type: "handoff", action: "status" });
-    expect(parseCommand("/handoff status")).toEqual({ type: "handoff", action: "status" });
-    expect(parseCommand("/handoff show")).toEqual({ type: "handoff", action: "show" });
-    expect(parseCommand("/handoff continue")).toEqual({ type: "handoff", action: "continue" });
-    expect(parseCommand("/handoff continue rw-1")).toEqual({
-      type: "handoff",
-      action: "continue",
-      workId: "rw-1"
-    });
     expect(parseCommand("/continue")).toEqual({ type: "handoff", action: "continue" });
     expect(parseCommand("/continue rw-1")).toEqual({
       type: "handoff",
@@ -186,7 +182,6 @@ describe("parseCommand", () => {
       action: "continue",
       workId: "2"
     });
-    expect(parseCommand("/handoff clear")).toEqual({ type: "handoff", action: "clear" });
     expect(parseCommand("/audit view_abcd1234")).toEqual({
       type: "audit",
       viewId: "view_abcd1234"
@@ -198,6 +193,20 @@ describe("parseCommand", () => {
       type: "run",
       instruction: "fix failing build"
     });
+  });
+
+  it("parses human-readable reply-keyboard button labels", () => {
+    expect(parseCommand("Show status")).toEqual({ type: "status" });
+    expect(parseCommand("Show details")).toEqual({ type: "details" });
+    expect(parseCommand("Show pending")).toEqual({ type: "pending" });
+    expect(parseCommand("Approve request")).toEqual({ type: "approve" });
+    expect(parseCommand("Deny request")).toEqual({ type: "deny" });
+    expect(parseCommand("Abort run")).toEqual({ type: "abort" });
+    expect(parseCommand("Stop service")).toEqual({ type: "service", action: "stop", confirm: false });
+    expect(parseCommand("Confirm stop")).toEqual({ type: "service", action: "stop", confirm: true });
+    expect(parseCommand("Handoff details")).toEqual({ type: "handoff", action: "show" });
+    expect(parseCommand("Continue handoff")).toEqual({ type: "handoff", action: "continue" });
+    expect(parseCommand("Continue 2")).toEqual({ type: "handoff", action: "continue", workId: "2" });
   });
 
   it("returns unknown for malformed inputs", () => {
@@ -225,15 +234,15 @@ describe("parseCommand", () => {
     expect(parseCommand("/repo remove").type).toBe("unknown");
     expect(parseCommand("/run").type).toBe("unknown");
     expect(parseCommand("/steer").type).toBe("unknown");
-    expect(parseCommand("/handoff continue rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/continue rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/resume rw-1 extra").type).toBe("unknown");
     expect(parseCommand("/service").type).toBe("unknown");
     expect(parseCommand("/service restart").type).toBe("unknown");
     expect(parseCommand("/service stop now").type).toBe("unknown");
-    expect(parseCommand("/handoff invalid").type).toBe("unknown");
+    expect(parseCommand("/stop now").type).toBe("unknown");
+    expect(parseCommand("/handoff").type).toBe("unknown");
     expect(parseCommand("/audit").type).toBe("unknown");
-    expect(parseCommand("/codex-changelog").type).toBe("unknown");
+    expect(parseCommand("/codex-changelog now").type).toBe("unknown");
     expect(parseCommand("/changelog").type).toBe("unknown");
     expect(parseCommand("/reasoning insane").type).toBe("unknown");
     expect(parseCommand("/ask why").type).toBe("unknown");

@@ -94,13 +94,13 @@ describe("TelegramPollingAdapter", () => {
 
     const adapter = new TelegramPollingAdapter("token", 1, 1, false);
     await adapter.sendMessage(100, "handoff ready", {
-      commandButtons: ["/handoff show", "/handoff continue rw-1"]
+      commandButtons: ["Handoff details", "Continue handoff"]
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const payload = JSON.parse(String(init.body));
     expect(payload.reply_markup.keyboard).toEqual([
-      [{ text: "/handoff show" }, { text: "/handoff continue rw-1" }]
+      [{ text: "Handoff details" }, { text: "Continue handoff" }]
     ]);
     expect(payload.reply_markup.one_time_keyboard).toBe(true);
   });

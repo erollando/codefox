@@ -16,7 +16,8 @@ CodeFox keeps the work moving from your phone.
 1. Start CodeFox.
 2. In Telegram, set repo/mode and approve the spec.
 3. Trigger handoff from desk.
-4. Continue from phone with `/handoff` and `/continue`.
+4. From phone, tap `Accept handoff`.
+5. If desk Codex is still running, CodeFox waits and starts its own continuation when desk execution finishes.
 
 ## Transcript (Command + Reply)
 
@@ -39,10 +40,11 @@ CODEFOX> Pending approval: extapr_prepare-branch ...
 USER> /approve
 CODEFOX> Approved external request extapr_prepare-branch.
 
-USER> /handoff show
-CODEFOX> Handoff detail: handoff_1 ... remaining work: rw-1 ...
+CODEFOX> Accept handoff? External Codex is still running. CodeFox will wait and start its own continuation when it finishes.
+USER> Accept handoff
+CODEFOX> Accepted handoff handoff_1. External Codex is still running. CodeFox will start its own continuation automatically when it finishes.
 
-USER> /continue
+CODEFOX> External Codex finished (success) for handoff handoff_1. Starting CodeFox continuation now.
 CODEFOX> Working on your request in payments-api (active).
 
 CODEFOX> Completed: Ran regression checks and prepared release note draft.
@@ -52,11 +54,12 @@ CODEFOX> Next: use /details for full context.
 
 ## What You Get
 
-- Continuity: you do not restart or reconstruct context.
+- Continuity: task/spec/handoff context carries over; the first CodeFox continuation starts in CodeFox's own Codex session lifecycle, then follow-up `/continue` or `/steer` reuses that CodeFox thread.
 - Control: approvals remain in CodeFox channels.
 - Safety: policy and mode still gate execution.
 - Clarity: updates are concise; `/details` gives full context.
 
 For full setup + exact operator steps:
-- [Demo: Remote Handoff](./DEMO_REMOTE_HANDOFF.md)
+- [Demo: Handoff](./DEMO_HANDOFF.md)
+- [Demo: Handoff Lifecycle](./DEMO_HANDOFF_LIFECYCLE.md)
 - [Manual](./MANUAL.md)

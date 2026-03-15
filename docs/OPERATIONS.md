@@ -3,6 +3,7 @@
 ## Purpose
 
 This runbook covers day-1/day-2 operations for running CodeFox as a single-operator Telegram control plane for Codex.
+Remote scope note: "remote" (internet) control currently means Telegram. LAN/browser control is handled by the local web UI.
 
 ## Preconditions
 
@@ -31,7 +32,8 @@ npm start -- ./config/codefox.config.json
 ## Stop
 
 - Send `SIGINT` (`Ctrl+C`) or `SIGTERM`.
-- From Telegram/local UI: `/service stop` then `/service stop confirm`.
+- From Telegram/local UI: `/stop` then `/stopconfirm` (or `/service stop` then `/service stop confirm`).
+- For an interactive handoff-started foreground process, stop it in the same terminal with `Ctrl+C`.
 - For auto-started/background dev process: `npm run dev:stop -- --config <path>` (or `npm run local:cli -- --config <path> stop`).
 - CodeFox aborts in-flight Codex runs, waits briefly for shutdown, ends polling, then writes `service_stop`.
 - On startup, pending Telegram backlog can be discarded when `telegram.discardBacklogOnStart=true`.
@@ -71,9 +73,16 @@ npm run verify
 
 - `/status` to inspect selected repo, mode, active request, and codex session id
 - `/details` for expanded technical context (session + handoff + approval pointers)
-- `/continue [work-id|index]` as shorthand for `/handoff continue [work-id|index]`
+- `/codex-changelog` to fetch the official Codex RSS feed, compare against the persisted baseline, and report new entries vs no-change with impact hints
+- `Accept handoff` / `Reject handoff` are the primary Telegram handoff actions.
+- `Handoff details` shows the current handoff bundle and remaining work.
+- `Continue handoff` is the primary continue action when handoff work is ready.
+- `/continue [work-id|index]` remains available as shorthand when you need a typed continue command.
 - `/resume [work-id|index]` as alias of `/continue`
-- `/handoff [status|show|continue [work-id]|clear]` to inspect and continue external handoff bundles
+- External handoff carries task context only; it does not import/attach the external desk-side Codex process.
+- Accepting a handoff does not take control of the original external Codex thread. CodeFox takes ownership only of the stored handoff bundle and any new CodeFox-managed continuation run.
+- Accepted handoffs can stay in `waiting_for_external_completion` until the external client sends a `completion` event. When that arrives, CodeFox starts its own continuation automatically if the handoff is otherwise runnable.
+- Continuation runs in CodeFox-managed Codex session lifecycle. Unless an external client explicitly provides a resumable thread/session id in a future protocol revision, this is context continuity rather than same-thread takeover.
 - `/reasoning <minimal|low|medium|high|xhigh|default>` (or `/effort ...`) to set per-chat reasoning effort override
 - `/run <instruction>` to execute work
 - `/steer <instruction>` to steer an active run (interrupt + resume fallback)
@@ -83,7 +92,7 @@ npm run verify
 - Run updates are concise by default; ask `/details` when you need full technical context.
 - `/close` to close stored Codex session thread explicitly
 - `/abort` to stop active Codex execution
-- `/service stop` to request a clean service shutdown (requires `/service stop confirm`)
+- `/stop` to request a clean service shutdown (requires `/stopconfirm`; legacy `/service stop [confirm]` also works)
 - `/repo add <name> <absolute-path>` to register a repo at runtime
 - `/repo init <name> [base-path]` to create, `git init`, register, and auto-select a repo
 - `/repo bootstrap <name> <python|java|nodejs> [base-path]` to init/register, apply local AGENTS template, and scaffold playbook docs
@@ -109,6 +118,7 @@ npm run verify
 - Attachment context is consumed by the next `/run`, `/act`, or `/steer` and then cleared.
 - `/repo bootstrap` and `/repo template` apply downstream `AGENTS.md` templates intended for normal git tracking.
 - Telegram run updates are concise by default (summary-first). Use `/status` when you need full session metadata.
+- Changelog checks persist seen entry IDs in state so repeated `/codex-changelog` runs only report newly published items.
 
 ## External Relay (Optional)
 
@@ -132,7 +142,9 @@ npm run verify
   - `:details`
   - `:approve`
   - `:deny`
-  - `:handoff`
+  - `:accept`
+  - `:reject`
+  - `:handoff` (queues `Handoff details`)
   - `:continue [workId]`
   - `:exit`
   - Any non-shortcut line is forwarded unchanged (plain text or slash command).
@@ -141,22 +153,27 @@ npm run verify
   - `npm run local:cli -- [--config <path>] approve [chatId]`
   - `npm run local:cli -- [--config <path>] deny [chatId]`
   - `npm run local:cli -- [--config <path>] status [chatId]`
-  - `npm run local:cli -- [--config <path>] handoff-status [chatId]`
-  - `npm run local:cli -- [--config <path>] handoff-show [chatId]`
   - `npm run local:cli -- [--config <path>] continue [chatId] [workId]`
   - `npm run local:cli -- [--config <path>] stop` (stop background dev process from PID file)
-  - These enqueue `/approve`, `/deny`, `/status`, `/handoff status`, `/handoff show`, and `/continue [workId]` via the same local command queue/controller path.
+  - These enqueue `/approve`, `/deny`, `/status`, and `/continue [workId]` via the same local command queue/controller path.
   - If `chatId` is omitted, CodeFox auto-selects single/default/most-recent chat context.
 - For an operator-facing handoff bridge without manual API calls, use:
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
-  - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--repo-path <path>`, `--start-if-missing`, `--no-start-if-missing`.
+  - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--repo-path <path>`, `--start-in-foreground`, `--start-in-background`, `--no-start-if-missing`.
+  - `--start-if-missing` is kept as a compatibility alias for `--start-in-background`.
   - The command automates route lookup, lease bind, completion event, handoff submission, and lease revoke (auto-generates task id, auto-derives remaining summary, and if multiple routes exist asks for an explicit route choice with default to most recently used).
   - If explicit `chatId` is provided but local session state is missing, route resolution falls back to active relay routes for that chat.
-  - Handoff payload includes source repo metadata; `/handoff continue` auto-aligns repo and can auto-register when source path is provided.
-  - If relay is unreachable, handoff CLI prompts to start CodeFox automatically on interactive terminals.
-  - When handoff CLI auto-starts CodeFox in background, it prints a PID/direct stop command and writes `<state-dir>/codefox.dev.pid`.
-  - Background auto-start is quiet by design; for live logs, run `npm run dev -- <path>` in a separate terminal.
+  - Handoff payload includes source repo metadata; CodeFox continuation auto-aligns repo and can auto-register when source path is provided.
+  - If relay is unreachable on an interactive terminal, `handoff:cli` prompts `[F/b/N]` and defaults to foreground start.
+  - Foreground start keeps the handoff terminal attached to `npm run dev -- <path>` after submission; stop it there with `Ctrl+C`.
+  - Background start is explicit (`--start-in-background` or legacy `--start-if-missing`), prints a cross-platform stop command, and writes `<state-dir>/codefox.dev.pid`.
+- `handoff:cli` is still a one-shot bridge command. It submits a finished-phase handoff bundle; it cannot keep a lease open and emit a later completion event after the command exits.
+- `handoff:cli` does not export the external Codex thread/session id, so CodeFox cannot resume that exact external thread after takeover. The follow-up run starts from the submitted handoff context.
+- Its terminal output now points users to `Accept handoff` as the primary Telegram next step; `Handoff details` remains the optional inspection path.
   - If the target chat has no local spec workflow yet, CodeFox auto-bootstraps and approves one at ingest time.
+  - Demo split:
+    - `npm run demo:handoff` shows the desk terminal action and relay calls.
+    - `npm run demo:handoff-lifecycle` shows the later accept/wait/auto-continue lifecycle inside CodeFox.
 - Endpoints:
   - `GET /health` (always unauthenticated)
   - `GET /v1/external-codex/routes`

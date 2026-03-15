@@ -18,12 +18,18 @@ Use this page as the index for detailed operational docs.
 - Open: `http://127.0.0.1:8789`
 - Read: [OPERATIONS.md](./OPERATIONS.md#external-relay-optional)
 
-5. **Handoff from external Codex to CodeFox**
-- Read: [DEMO_REMOTE_HANDOFF.md](./DEMO_REMOTE_HANDOFF.md)
-- Transcript: [demo-outputs/remote-handoff-transcript.txt](./demo-outputs/remote-handoff-transcript.txt)
+5. **Handoff from external Codex to Telegram**
+- Read: [DEMO_HANDOFF.md](./DEMO_HANDOFF.md)
+- Desk transcript: [demo-outputs/handoff-transcript.txt](./demo-outputs/handoff-transcript.txt)
+- Lifecycle follow-up: [DEMO_HANDOFF_LIFECYCLE.md](./DEMO_HANDOFF_LIFECYCLE.md)
+- Lifecycle transcript: [demo-outputs/handoff-lifecycle-transcript.txt](./demo-outputs/handoff-lifecycle-transcript.txt)
 
 6. **Understand the product quickly (end-user view)**
 - Read: [DEMO_ONE_PAGE_STORY.md](./DEMO_ONE_PAGE_STORY.md)
+
+7. **Check Codex changelog impact**
+- Use: `/codex-changelog`
+- Read: [OPERATIONS.md](./OPERATIONS.md#operational-commands-telegram)
 
 ## Quick Pointers
 

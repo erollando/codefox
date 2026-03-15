@@ -1,0 +1,32 @@
+=== CodeFox Demo: Desk-side handoff CLI ===
+exit code: 0
+note: this demo shows the desk terminal action itself. For the accept/wait/auto-continue lifecycle, run npm run demo:remote-handoff-lifecycle.
+
+=== Desk Command ===
+npm run handoff:cli -- --config ./config/codefox.config.json --completed "API endpoint added" --completed "Unit tests updated" --remaining "Run full regression checks before release" --repo-path /path/to/payments-api --risk "Need final green regression suite before release"
+
+=== Desk Terminal Output ===
+01. Auto-selected session chat:100/repo:payments-api/mode:active for chat 100.
+02. Handoff submitted successfully for chat 100.
+03. session: chat:100/repo:payments-api/mode:active
+04. lease: lease_demo_cli
+05. handoff id: handoff_60ffc70e
+06. task id: TASK-req_demo_cli (auto-generated)
+07. spec ref: v2
+08. remaining work: rw-1 (Run full regression checks before release)
+09. Next steps in Telegram:
+10.   Accept handoff
+11.   Handoff details (optional)
+12.   After acceptance, CodeFox can continue immediately.
+
+=== Relay Calls ===
+01. GET /v1/external-codex/routes
+02. POST /v1/external-codex/bind
+03. POST /v1/external-codex/event
+04. POST /v1/external-codex/handoff
+05. POST /v1/external-codex/revoke
+
+=== Submitted Handoff Summary ===
+task id: TASK-req_demo_cli
+spec ref: v2
+remaining work: Run full regression checks before release

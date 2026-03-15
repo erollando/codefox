@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAuditLookup,
+  formatCodexChangelogCheck,
   formatError,
   formatPolicySummary,
   formatSessionStatus,
@@ -25,8 +26,7 @@ describe("response formatter", () => {
     expect(message).toContain("Completed: done");
     expect(message).toContain("request: prepare release commit and push branch");
     expect(message).toContain("Next: use /details for full context.");
-    expect(message).toContain("request completed: prepare release commit and push branch");
-    expect(message.trim().endsWith("request completed: prepare release commit and push branch")).toBe(true);
+    expect(message).not.toContain("request completed:");
     expect(message).not.toContain("output:");
     expect(message).not.toContain("very noisy transcript");
   });
@@ -70,7 +70,7 @@ describe("response formatter", () => {
 
     expect(aborted).toContain("Aborted:");
     expect(timedOut).toContain("Timed out:");
-    expect(timedOut).toContain("request timed out: run all integration tests");
+    expect(timedOut).toContain("request: run all integration tests");
   });
 
   it("redacts sensitive tokens in summary and output", () => {
@@ -211,6 +211,59 @@ describe("response formatter", () => {
     expect(detail).toContain("inputs: checkProfile:enum");
     expect(detail).toContain("audit: resultSummary");
     expect(detail).toContain("rollback: (none)");
+  });
+
+  it("renders Codex changelog checks with new entries and no-change states", () => {
+    const changed = formatCodexChangelogCheck({
+      sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+      checkedAt: "2026-03-15T13:00:00.000Z",
+      latestEntry: {
+        id: "entry-2",
+        title: "Codex adds image input flag",
+        publishedAt: "2026-03-15T12:00:00.000Z",
+        summary: "Adds image support."
+      },
+      newEntries: [
+        {
+          id: "entry-2",
+          title: "Codex adds image input flag",
+          publishedAt: "2026-03-15T12:00:00.000Z",
+          summary: "Adds image support.",
+          decision: "implement now",
+          impactHints: [
+            {
+              category: "config",
+              rationale: "matched keywords: flag",
+              suggestedChange: "Review config surface."
+            }
+          ]
+        }
+      ],
+      state: {
+        sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+        seenEntryIds: ["entry-2"]
+      }
+    });
+    const unchanged = formatCodexChangelogCheck({
+      sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+      checkedAt: "2026-03-15T13:30:00.000Z",
+      latestEntry: {
+        id: "entry-2",
+        title: "Codex adds image input flag",
+        publishedAt: "2026-03-15T12:00:00.000Z",
+        summary: "Adds image support."
+      },
+      newEntries: [],
+      state: {
+        sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+        seenEntryIds: ["entry-2"]
+      }
+    });
+
+    expect(changed).toContain("Codex changelog check:");
+    expect(changed).toContain("new entries: 1");
+    expect(changed).toContain("decision: implement now");
+    expect(unchanged).toContain("No new Codex changelog entries since the last recorded baseline.");
   });
 
   it("avoids duplicate error prefixing", () => {

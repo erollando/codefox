@@ -14,6 +14,7 @@ describe("JsonStateStore", () => {
     expect(loaded.approvals).toEqual([]);
     expect(loaded.specWorkflows).toEqual([]);
     expect(loaded.externalHandoffs).toEqual([]);
+    expect(loaded.codexChangelog).toBeUndefined();
   });
 
   it("saves and reloads sessions/approvals/specWorkflows", async () => {
@@ -75,7 +76,15 @@ describe("JsonStateStore", () => {
           }
         }
       ],
-      externalHandoffs: []
+      externalHandoffs: [],
+      codexChangelog: {
+        sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+        seenEntryIds: ["entry-1"],
+        lastCheckedAt: new Date().toISOString(),
+        latestEntryId: "entry-1",
+        latestEntryTitle: "Codex release",
+        latestEntryPublishedAt: new Date().toISOString()
+      }
     });
 
     const loaded = await store.load();
@@ -84,6 +93,7 @@ describe("JsonStateStore", () => {
     expect(loaded.approvals[0]?.capabilityRef).toBe("repo.prepare_branch");
     expect(loaded.specWorkflows.length).toBe(1);
     expect(loaded.externalHandoffs).toEqual([]);
+    expect(loaded.codexChangelog?.latestEntryId).toBe("entry-1");
     expect(loaded.sessions[0].selectedRepo).toBe("payments-api");
     expect(loaded.sessions[0].codexThreadId).toBe("thread_1");
     expect(loaded.specWorkflows[0]?.workflow.revisions[0]?.sections.REQUEST).toBe("fix tests");
@@ -115,7 +125,8 @@ describe("JsonStateStore", () => {
           }
         ],
         specWorkflows: [{ chatId: "bad", workflow: {} }],
-        externalHandoffs: [{ chatId: "bad" }]
+        externalHandoffs: [{ chatId: "bad" }],
+        codexChangelog: { sourceUrl: "", seenEntryIds: [1, "ok"] }
       }),
       "utf8"
     );
@@ -151,6 +162,7 @@ describe("JsonStateStore", () => {
     ]);
     expect(loaded.specWorkflows).toEqual([]);
     expect(loaded.externalHandoffs).toEqual([]);
+    expect(loaded.codexChangelog).toBeUndefined();
   });
 
   it("prunes stale sessions and approvals when TTL is set", () => {
@@ -282,7 +294,12 @@ describe("JsonStateStore", () => {
             receivedAt: "2026-01-01T00:00:00.000Z",
             continuedWorkIds: []
           }
-        ]
+        ],
+        codexChangelog: {
+          sourceUrl: "https://developers.openai.com/codex/changelog/rss.xml",
+          seenEntryIds: ["fresh-entry"],
+          lastCheckedAt: "2026-01-02T11:45:00.000Z"
+        }
       },
       {
         sessionTtlHours: 2,
@@ -295,7 +312,53 @@ describe("JsonStateStore", () => {
     expect(result.state.approvals.map((approval) => approval.id)).toEqual(["fresh"]);
     expect(result.state.specWorkflows.map((entry) => entry.chatId)).toEqual([100]);
     expect(result.state.externalHandoffs.map((entry) => entry.chatId)).toEqual([100]);
+    expect(result.state.codexChangelog?.seenEntryIds).toEqual(["fresh-entry"]);
     expect(result.removedSessions).toBe(1);
     expect(result.removedApprovals).toBe(1);
+  });
+
+  it("preserves extended lifecycle fields for persisted external handoffs", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-state-"));
+    const statePath = path.join(tmpDir, "state.json");
+    const store = new JsonStateStore(statePath);
+
+    await store.save({
+      sessions: [],
+      approvals: [],
+      specWorkflows: [],
+      externalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_confirm",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_confirm",
+            handoffId: "handoff_confirm",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-CONFIRM",
+            specRevisionRef: "v1",
+            completedWork: [],
+            remainingWork: [{ id: "rw-1", summary: "continue" }]
+          },
+          receivedAt: "2026-03-14T12:00:01.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: true,
+          acceptedAt: "2026-03-14T12:00:02.000Z",
+          acceptedByUserId: 7,
+          awaitingExternalCompletion: true,
+          externalCompletionStatus: "pending",
+          externalCompletionSummary: "still running"
+        }
+      ],
+      codexChangelog: undefined
+    });
+
+    const loaded = await store.load();
+    expect(loaded.externalHandoffs).toHaveLength(1);
+    expect(loaded.externalHandoffs[0]?.awaitingConfirmation).toBe(true);
+    expect(loaded.externalHandoffs[0]?.acceptedByUserId).toBe(7);
+    expect(loaded.externalHandoffs[0]?.awaitingExternalCompletion).toBe(true);
+    expect(loaded.externalHandoffs[0]?.externalCompletionStatus).toBe("pending");
   });
 });

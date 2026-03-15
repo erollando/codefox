@@ -4,7 +4,12 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseLocalCliArgs, runLocalCli } from "../src/core/local-cli.js";
+import {
+  determineMissingRelayStartMode,
+  parseLocalCliArgs,
+  parseMissingRelayStartPromptAnswer,
+  runLocalCli
+} from "../src/core/local-cli.js";
 
 function isLoopbackPermissionError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -144,22 +149,6 @@ describe("local CLI", () => {
     expect(status.args.command).toBe("status");
     expect(status.args.chatId).toBe(100);
 
-    const handoffStatus = parseLocalCliArgs(["handoff-status"]);
-    expect(handoffStatus.ok).toBe(true);
-    if (!handoffStatus.ok || !handoffStatus.args) {
-      return;
-    }
-    expect(handoffStatus.args.command).toBe("handoff-status");
-    expect(handoffStatus.args.chatId).toBeUndefined();
-
-    const handoffShow = parseLocalCliArgs(["handoff-show", "100"]);
-    expect(handoffShow.ok).toBe(true);
-    if (!handoffShow.ok || !handoffShow.args) {
-      return;
-    }
-    expect(handoffShow.args.command).toBe("handoff-show");
-    expect(handoffShow.args.chatId).toBe(100);
-
     const contWithChat = parseLocalCliArgs(["continue", "100", "rw-2"]);
     expect(contWithChat.ok).toBe(true);
     if (!contWithChat.ok || !contWithChat.args) {
@@ -200,7 +189,7 @@ describe("local CLI", () => {
       "Regression may fail",
       "--repo-path",
       "/tmp/payments-api",
-      "--start-if-missing"
+      "--start-in-foreground"
     ]);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok || !parsed.args) {
@@ -214,6 +203,18 @@ describe("local CLI", () => {
     expect(parsed.args.unresolvedRisks).toEqual(["Regression may fail"]);
     expect(parsed.args.repoPath).toBe("/tmp/payments-api");
     expect(parsed.args.startIfMissingRelay).toBe(true);
+    expect(parsed.args.relayStartMode).toBe("foreground");
+  });
+
+  it("keeps --start-if-missing as a background-start compatibility alias", () => {
+    const parsed = parseLocalCliArgs(["handoff", "--start-if-missing"]);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || !parsed.args) {
+      return;
+    }
+    expect(parsed.args.command).toBe("handoff");
+    expect(parsed.args.startIfMissingRelay).toBe(true);
+    expect(parsed.args.relayStartMode).toBe("background");
   });
 
   it("parses handoff command without chatId and taskId", () => {
@@ -226,6 +227,31 @@ describe("local CLI", () => {
     expect(parsed.args.chatId).toBeUndefined();
     expect(parsed.args.taskId).toBeUndefined();
     expect(parsed.args.remainingSummary).toBeUndefined();
+  });
+
+  it("resolves missing-relay start mode precedence", () => {
+    expect(determineMissingRelayStartMode({}, true)).toBe("prompt");
+    expect(determineMissingRelayStartMode({}, false)).toBe("none");
+    expect(determineMissingRelayStartMode({ startIfMissingRelay: false }, true)).toBe("none");
+    expect(determineMissingRelayStartMode({ relayStartMode: "foreground" }, false)).toBe("foreground");
+    expect(determineMissingRelayStartMode({ startIfMissingRelay: true }, true)).toBe("background");
+    expect(
+      determineMissingRelayStartMode(
+        {
+          startIfMissingRelay: true,
+          relayStartMode: "background"
+        },
+        true
+      )
+    ).toBe("background");
+  });
+
+  it("parses foreground/background/no answers for missing-relay prompt", () => {
+    expect(parseMissingRelayStartPromptAnswer("")).toBe("foreground");
+    expect(parseMissingRelayStartPromptAnswer("f")).toBe("foreground");
+    expect(parseMissingRelayStartPromptAnswer("background")).toBe("background");
+    expect(parseMissingRelayStartPromptAnswer("n")).toBe("none");
+    expect(parseMissingRelayStartPromptAnswer("later")).toBe("none");
   });
 
   it("returns parse errors for invalid session command", () => {
@@ -602,13 +628,9 @@ describe("local CLI", () => {
     try {
       const approveCode = await runLocalCli(["--config", configPath, "approve"], output);
       const statusCode = await runLocalCli(["--config", configPath, "status"], output);
-      const handoffStatusCode = await runLocalCli(["--config", configPath, "handoff-status"], output);
-      const handoffShowCode = await runLocalCli(["--config", configPath, "handoff-show"], output);
       const continueCode = await runLocalCli(["--config", configPath, "continue", "rw-1"], output);
       expect(approveCode).toBe(0);
       expect(statusCode).toBe(0);
-      expect(handoffStatusCode).toBe(0);
-      expect(handoffShowCode).toBe(0);
       expect(continueCode).toBe(0);
     } finally {
       if (typeof previousToken === "undefined") {
@@ -623,8 +645,6 @@ describe("local CLI", () => {
     expect(rendered).toContain("Auto-selected chat 100.");
     expect(rendered).toContain(": /approve");
     expect(rendered).toContain(": /status");
-    expect(rendered).toContain(": /handoff status");
-    expect(rendered).toContain(": /handoff show");
     expect(rendered).toContain(": /continue rw-1");
   });
 
@@ -878,7 +898,8 @@ describe("local CLI", () => {
     expect(logs.join("\n")).toContain("Handoff submitted successfully");
     expect(logs.join("\n")).toContain("Auto-selected session chat:100/repo:payments-api/mode:active");
     expect(logs.join("\n")).toContain("task id: TASK-");
-    expect(logs.join("\n")).toContain("/continue rw-1");
+    expect(logs.join("\n")).toContain("Accept handoff");
+    expect(logs.join("\n")).toContain("After acceptance, CodeFox can continue immediately.");
 
     expect(relayRequests.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
       "GET /v1/external-codex/routes",
