@@ -49,6 +49,38 @@ export async function stopOwnedCodeFoxProcess(input: {
     return;
   }
 
+  if (process.platform !== "win32") {
+    if (!isProcessGroupAlive(pid)) {
+      await removeRelayPidIfMatches(input.stateFilePath, pid);
+      return;
+    }
+
+    try {
+      process.kill(-pid);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== "ESRCH") {
+        throw error;
+      }
+    }
+
+    const stoppedGracefully = await waitForProcessGroupExit(pid, 5000);
+    if (!stoppedGracefully) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== "ESRCH") {
+          throw error;
+        }
+      }
+      await waitForProcessGroupExit(pid, 2000);
+    }
+
+    await removeRelayPidIfMatches(input.stateFilePath, pid);
+    return;
+  }
+
   if (!isProcessAlive(pid)) {
     await removeRelayPidIfMatches(input.stateFilePath, pid);
     return;
@@ -160,6 +192,19 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function isProcessGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
+}
+
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt <= timeoutMs) {
@@ -169,6 +214,17 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return !isProcessAlive(pid);
+}
+
+async function waitForProcessGroupExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= timeoutMs) {
+    if (!isProcessGroupAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isProcessGroupAlive(pid);
 }
 
 async function isLikelyCodeFoxProcess(pid: number): Promise<boolean> {
