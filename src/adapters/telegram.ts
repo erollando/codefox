@@ -69,6 +69,7 @@ interface TelegramApiResponse<T> {
 }
 
 const TELEGRAM_MESSAGE_LIMIT = 3900;
+const TELEGRAM_COMMAND_BUTTONS_PER_ROW = 3;
 
 export class TelegramPollingAdapter implements TelegramAdapter {
   private offset = 0;
@@ -269,10 +270,12 @@ function sanitizeFileName(name: string): string {
 function buildCommandKeyboard(commands: string[]): Record<string, unknown> {
   const buttons = [...new Set(commands.map((entry) => entry.trim()).filter(Boolean))];
   const rows: Array<Array<{ text: string }>> = [];
-  for (let index = 0; index < buttons.length; index += 2) {
-    const first = buttons[index];
-    const second = buttons[index + 1];
-    rows.push(second ? [{ text: first }, { text: second }] : [{ text: first }]);
+  for (let index = 0; index < buttons.length; index += TELEGRAM_COMMAND_BUTTONS_PER_ROW) {
+    rows.push(
+      buttons
+        .slice(index, index + TELEGRAM_COMMAND_BUTTONS_PER_ROW)
+        .map((label) => ({ text: label }))
+    );
   }
   return {
     keyboard: rows,
