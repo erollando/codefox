@@ -293,7 +293,7 @@ describe("CodeFoxController", () => {
     expect(details).toContain("Status:");
     expect(details).toContain("pending approval: none");
     expect(details).toContain("external handoff: none");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status", "/help"]);
   });
 
   it("returns full policy summary for /policy and supports mode override", async () => {
@@ -976,7 +976,7 @@ describe("CodeFoxController", () => {
 
     expect(ingest.accepted).toBe(true);
     expect(telegram.sent.at(-1)?.text).toContain("Handoff request received: handoff_new");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/accept", "/reject", "/handoff show", "/status"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/accept", "/reject", "/handoff show", "/status", "/help"]);
 
     const handoffs = controller.listExternalHandoffs();
     expect(handoffs).toHaveLength(1);
@@ -1095,7 +1095,7 @@ describe("CodeFoxController", () => {
 
     expect(ingest.accepted).toBe(true);
     expect(telegram.sent.at(-1)?.text).toContain("Handoff request still pending");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/accept", "/reject", "/handoff show", "/status"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/accept", "/reject", "/handoff show", "/status", "/help"]);
   });
 
   it("returns actionable guidance when /continue is requested without a handoff", async () => {
@@ -1115,7 +1115,7 @@ describe("CodeFoxController", () => {
     const message = telegram.sent.at(-1)?.text ?? "";
     expect(message).toContain("No external handoff available.");
     expect(message).toContain("npm run handoff:cli");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status", "/help"]);
   });
 
   it("returns actionable guidance for invalid handoff work id", async () => {
@@ -2795,7 +2795,7 @@ describe("CodeFoxController", () => {
     await controller.handleUpdate(makeUpdate("/service stop"));
     const confirmPrompt = telegram.sent.at(-1);
     expect(confirmPrompt?.text).toContain("confirm with /stopconfirm");
-    expect(confirmPrompt?.options?.commandButtons).toEqual(["/service stop confirm", "/status"]);
+    expect(confirmPrompt?.options?.commandButtons).toEqual(["/service stop confirm", "/status", "/help"]);
     expect(stopRequests.length).toBe(0);
 
     await controller.handleUpdate(makeUpdate("/service stop confirm"));

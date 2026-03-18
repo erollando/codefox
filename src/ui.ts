@@ -486,23 +486,31 @@ function buildQuickCommands(
   }
 ): string[] {
   if (hasApproval) {
-    return ["/approve", "/deny", "/pending", "/status", "/service stop"];
+    return withHelpButton(["/approve", "/deny", "/pending", "/status", "/service stop"]);
   }
   if (activeRequest) {
-    return ["/abort", "/status", "/details", "/service stop"];
+    return withHelpButton(["/abort", "/status", "/details", "/service stop"]);
   }
   if (handoff) {
     if (handoff.awaitingConfirmation) {
-      return ["/accept", "/reject", "/handoff show", "/status"];
+      return withHelpButton(["/accept", "/reject", "/handoff show", "/status"]);
     }
     if (handoff.awaitingExternalCompletion) {
-      return ["/handoff show", "/status", "/service stop"];
+      return withHelpButton(["/handoff show", "/status", "/service stop"]);
     }
     if (handoff.remainingOpen > 0) {
-      return ["/continue", "/handoff show", "/status", "/service stop"];
+      return withHelpButton(["/continue", "/handoff show", "/status", "/service stop"]);
     }
   }
-  return ["/status", "/details", "/pending", "/service stop"];
+  return withHelpButton(["/status", "/details", "/pending", "/service stop"]);
+}
+
+function withHelpButton(commands: string[]): string[] {
+  const deduped = [...new Set(commands.map((entry) => entry.trim()).filter(Boolean))];
+  if (!deduped.includes("/help")) {
+    deduped.push("/help");
+  }
+  return deduped;
 }
 
 function resolveDefaultChatId(

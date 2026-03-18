@@ -184,13 +184,14 @@ export class CodeFoxController {
     const rawSendMessage = deps.telegram.sendMessage.bind(deps.telegram);
     deps.telegram.sendMessage = async (chatId, text, options) => {
       const filteredButtons = this.filterTelegramCommandButtons(chatId, options?.commandButtons);
+      const buttonsWithHelp = ensureHelpButton(filteredButtons);
       const nextOptions =
         options && typeof options === "object"
           ? {
               ...options,
-              commandButtons: filteredButtons
+              commandButtons: buttonsWithHelp
             }
-          : options;
+          : { commandButtons: buttonsWithHelp };
       await rawSendMessage(chatId, text, nextOptions);
     };
     this.specPolicy = deps.specPolicy ?? new SpecPolicyEngine();
@@ -3666,6 +3667,19 @@ function continueHandoffButton(): string {
 
 function handoffDetailsButton(): string {
   return "/handoff show";
+}
+
+function helpButton(): string {
+  return "/help";
+}
+
+function ensureHelpButton(buttons?: string[]): string[] {
+  const normalized = Array.isArray(buttons) ? buttons.map((entry) => entry.trim()).filter(Boolean) : [];
+  const deduped = [...new Set(normalized)];
+  if (!deduped.includes(helpButton())) {
+    deduped.push(helpButton());
+  }
+  return deduped;
 }
 
 function renderOutstandingHandoffChoices(
