@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -8,10 +8,13 @@ export interface EnsureCodeFoxRunningResult {
   runningPids: number[];
 }
 
+const ownedRuntimeChildren = new Map<number, ChildProcess>();
+
 export async function ensureCodeFoxRunning(input: {
   resolvedConfigPath: string;
   stateFilePath: string;
   waitTimeoutMs?: number;
+  streamLogsToConsole?: boolean;
 }): Promise<EnsureCodeFoxRunningResult> {
   const runningBefore = await findRunningCodeFoxPids(input.resolvedConfigPath, input.stateFilePath);
   if (runningBefore.length > 0) {
@@ -21,7 +24,9 @@ export async function ensureCodeFoxRunning(input: {
     };
   }
 
-  const pid = startCodeFoxProcess(input.resolvedConfigPath);
+  const pid = startCodeFoxProcess(input.resolvedConfigPath, {
+    streamLogsToConsole: input.streamLogsToConsole === true
+  });
   if (!pid || pid <= 0) {
     throw new Error(`Failed to start CodeFox process for config ${input.resolvedConfigPath}.`);
   }
@@ -52,6 +57,7 @@ export async function stopOwnedCodeFoxProcess(input: {
   if (process.platform !== "win32") {
     if (!isProcessGroupAlive(pid)) {
       await removeRelayPidIfMatches(input.stateFilePath, pid);
+      ownedRuntimeChildren.delete(pid);
       return;
     }
 
@@ -78,11 +84,13 @@ export async function stopOwnedCodeFoxProcess(input: {
     }
 
     await removeRelayPidIfMatches(input.stateFilePath, pid);
+    ownedRuntimeChildren.delete(pid);
     return;
   }
 
   if (!isProcessAlive(pid)) {
     await removeRelayPidIfMatches(input.stateFilePath, pid);
+    ownedRuntimeChildren.delete(pid);
     return;
   }
 
@@ -109,6 +117,7 @@ export async function stopOwnedCodeFoxProcess(input: {
   }
 
   await removeRelayPidIfMatches(input.stateFilePath, pid);
+  ownedRuntimeChildren.delete(pid);
 }
 
 async function waitForRunningProcess(
@@ -141,16 +150,39 @@ async function findRunningCodeFoxPids(resolvedConfigPath: string, stateFilePath:
   return [...pids].sort((left, right) => left - right);
 }
 
-function startCodeFoxProcess(resolvedConfigPath: string): number | undefined {
+function startCodeFoxProcess(
+  resolvedConfigPath: string,
+  options?: {
+    streamLogsToConsole?: boolean;
+  }
+): number | undefined {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const streamLogs = options?.streamLogsToConsole === true;
   const child = spawn(npmCommand, ["run", "dev", "--", resolvedConfigPath], {
     cwd: process.cwd(),
     detached: true,
-    stdio: "ignore",
+    stdio: streamLogs ? ["ignore", "pipe", "pipe"] : "ignore",
     env: process.env
   });
+  const pid = child.pid;
+  if (streamLogs && pid && pid > 0) {
+    ownedRuntimeChildren.set(pid, child);
+    child.stdout?.on("data", (chunk) => {
+      process.stdout.write(`[codefox runtime stdout pid=${pid}] ${String(chunk)}`);
+    });
+    child.stderr?.on("data", (chunk) => {
+      process.stderr.write(`[codefox runtime stderr pid=${pid}] ${String(chunk)}`);
+    });
+    child.on("error", (error) => {
+      console.error(`[codefox runtime spawn error pid=${pid}] ${String(error)}`);
+    });
+    child.on("exit", (code, signal) => {
+      console.log(`[codefox runtime exit pid=${pid}] code=${code ?? "null"} signal=${signal ?? "null"}`);
+      ownedRuntimeChildren.delete(pid);
+    });
+  }
   child.unref();
-  return child.pid;
+  return pid;
 }
 
 function relayPidFilePath(stateFilePath: string): string {

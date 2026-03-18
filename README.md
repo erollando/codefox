@@ -75,8 +75,10 @@ What it does:
 Runtime behavior:
 
 - if CodeFox is not running, UI auto-starts it in background
+- when UI auto-starts runtime, runtime stdout/stderr is mirrored in the UI terminal
 - default bind is local-only (`127.0.0.1`)
 - local loopback access is trusted (no pairing required)
+- UI commands are written to CodeFox local command queue and require a running CodeFox runtime consumer (`npm run dev` / `npm start`)
 
 Phone access (trusted LAN):
 
@@ -90,8 +92,15 @@ Device pairing flow:
 
 - when UI starts in LAN mode, terminal prints one-time pair link(s) and a QR code
 - scan the QR from phone once
-- phone browser is registered as a paired device and can open UI afterward
+- phone browser is registered as the active paired device and can open UI afterward
+- pairing a new remote browser revokes the previous remote browser pairing
 - non-paired remote devices are denied
+
+QR goal and scope:
+
+- QR is only for browser-device pairing on LAN UI access
+- scanning QR registers that browser and stores a paired-device cookie
+- QR does not authorize external relay API clients and is not used by `handoff:cli`
 
 Mobile mode:
 
@@ -103,15 +112,35 @@ Remote scope note: in CodeFox today, "remote" (internet) UI means Telegram. LAN/
 
 Local rule: slash-prefixed input is for CodeFox control. Plain text is forwarded to Codex as work/steer input.
 
+If UI commands do not reach the agent:
+
+- run CodeFox explicitly in another terminal: `npm run dev -- ./config/codefox.config.json`
+- keep that terminal open and watch startup errors
+- then run `npm run ui`
+
 ### External Handoff (Desk -> Telegram)
 
 Prerequisite: `externalRelay.enabled=true` in `config/codefox.config.json`.
+
+Token auth for external relay:
+
+- `CODEFOX_EXTERNAL_RELAY_TOKEN` (or whatever `externalRelay.authTokenEnvVar` points to) protects external relay HTTP endpoints
+- this token is for external clients (`handoff:cli`, custom relay clients), not browser UI pairing
+- if `authTokenEnvVar` is configured, set the same env var/value in both:
+  - the CodeFox runtime process (`npm run dev` or `npm start`)
+  - the handoff client terminal (`npm run handoff:cli ...`)
 
 At desk:
 
 ```bash
 npm run handoff:cli
 ```
+
+Recommended order:
+
+1. start runtime: `npm run dev -- ./config/codefox.config.json`
+2. in Telegram/UI set a routed session (`/repo ...` then `/mode ...`)
+3. run `npm run handoff:cli` from desk terminal
 
 If CodeFox is not already running, the handoff CLI now prompts before starting it. Interactive default is foreground, so the terminal stays attached to `npm run dev` and `Ctrl+C` stops it cleanly. Use `--start-in-background` only when you explicitly want a detached process. The legacy `--start-if-missing` flag remains as a compatibility alias for background start.
 

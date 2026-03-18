@@ -46,12 +46,16 @@ export class UiDeviceAuthStore {
     };
   }
 
-  async registerDevice(input: { label?: string; userAgent?: string }): Promise<{ token: string; id: string; label: string }> {
+  async registerDevice(input: {
+    label?: string;
+    userAgent?: string;
+    replaceExisting?: boolean;
+  }): Promise<{ token: string; id: string; label: string }> {
     const token = randomToken(32);
     const now = new Date().toISOString();
     const id = `dev_${randomToken(6)}`;
     const store = await this.load();
-    const nextNumber = store.devices.length + 1;
+    const nextNumber = input.replaceExisting ? 1 : store.devices.length + 1;
     const label = (input.label?.trim() || `mobile-${nextNumber}`).slice(0, 64);
     const device: UiDeviceRecord = {
       id,
@@ -62,7 +66,7 @@ export class UiDeviceAuthStore {
       userAgent: input.userAgent?.slice(0, 240)
     };
     const next: UiDeviceStore = {
-      devices: [...store.devices, device]
+      devices: input.replaceExisting ? [device] : [...store.devices, device]
     };
     await this.save(next);
     return {

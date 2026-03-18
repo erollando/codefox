@@ -41,8 +41,8 @@ export class FileLocalCommandQueue {
   }
 
   async enqueue(input: LocalCommandEnqueueInput): Promise<LocalQueuedCommand> {
-    if (!Number.isSafeInteger(input.chatId) || input.chatId <= 0) {
-      throw new Error("chatId must be a positive integer.");
+    if (!Number.isSafeInteger(input.chatId) || input.chatId === 0) {
+      throw new Error("chatId must be a non-zero safe integer.");
     }
     if (!Number.isSafeInteger(input.userId) || input.userId <= 0) {
       throw new Error("userId must be a positive integer.");
@@ -165,7 +165,7 @@ function parseQueuedCommand(raw: string): { ok: true; command: LocalQueuedComman
     typeof obj.id !== "string" ||
     typeof obj.chatId !== "number" ||
     !Number.isSafeInteger(obj.chatId) ||
-    obj.chatId <= 0 ||
+    obj.chatId === 0 ||
     typeof obj.userId !== "number" ||
     !Number.isSafeInteger(obj.userId) ||
     obj.userId <= 0 ||

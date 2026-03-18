@@ -26,6 +26,24 @@ describe("FileLocalCommandQueue", () => {
     expect(raw).toContain('"source": "local-cli"');
   });
 
+  it("accepts Telegram group chat ids (negative integers)", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-queue-"));
+    const queue = new FileLocalCommandQueue(tmpDir, {
+      now: () => new Date("2026-03-14T12:00:00.000Z")
+    });
+
+    await queue.enqueue({
+      chatId: -1001234567890,
+      userId: 1,
+      text: "/status"
+    });
+
+    const files = await readdir(path.join(tmpDir, "inbox"));
+    expect(files.length).toBe(1);
+    const raw = await readFile(path.join(tmpDir, "inbox", files[0]), "utf8");
+    expect(raw).toContain('"chatId": -1001234567890');
+  });
+
   it("processes queued commands and moves files to processed", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "codefox-local-queue-"));
     const queue = new FileLocalCommandQueue(tmpDir, {

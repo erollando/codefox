@@ -130,8 +130,14 @@ npm run verify
   - provides quick command buttons and free-text input
   - quick actions submit slash commands directly so control input is explicit
   - auto-starts CodeFox runtime in background if missing
+  - when UI auto-starts runtime, runtime stdout/stderr is mirrored to UI terminal
   - loopback requests are trusted; non-loopback requests require paired-device cookie auth
   - in LAN mode (`--host 0.0.0.0`), startup prints one-time pair QR/link (`/pair?code=...`) for phone registration
+  - pairing authorizes one remote browser at a time; a new pairing revokes the previous remote browser token
+- Auth surfaces are separate by design:
+  - QR/pair link authorizes browser UI devices only (paired-device cookie)
+  - relay bearer token authorizes external relay API clients only
+- If UI commands do not execute, run `npm run dev -- ./config/codefox.config.json` in a separate terminal and keep it open to inspect startup/runtime errors.
 - For an operator-facing handoff bridge without manual API calls, use:
   - `npm run handoff:cli -- --config <path> [--completed "<item>"]`
   - Optional overrides: `<chatId>` positional, `--task <taskId>`, `--remaining "<summary>"`, `--repo-path <path>`, `--start-in-foreground`, `--start-in-background`, `--no-start-if-missing`.
@@ -159,8 +165,16 @@ npm run verify
   - `POST /v1/external-codex/event`
   - `POST /v1/external-codex/handoff`
 - If `externalRelay.authTokenEnvVar` is set, requests must include `Authorization: Bearer <token>`.
+  - default sample env var is `CODEFOX_EXTERNAL_RELAY_TOKEN`
+  - the token is read by CodeFox runtime at startup and by clients such as `handoff:cli`
+  - this token is not used for browser UI pairing
 - `approval_request` events are relayed into CodeFox approval flow; external clients must poll approval status and must not bypass `/approve`/`/deny`.
 - One active external lease is allowed per CodeFox session id; clients must revoke before rebinding.
+- For reliable handoff flow, prefer this order:
+  1. Start CodeFox runtime (`npm run dev -- ./config/codefox.config.json`).
+  2. In Telegram/UI, select route context (`/repo ...`, `/mode ...`).
+  3. Run `npm run handoff:cli ...` from desk.
+  4. Accept in Telegram/UI (`/accept`) when prompted.
 
 ## Troubleshooting
 
@@ -185,3 +199,9 @@ npm run verify
 4. Stuck long-running run:
 - send `/abort`
 - check whether process exit is reflected in audit log
+
+5. Local UI accepts input but nothing reaches agent:
+- verify CodeFox runtime is actually running (`npm run dev -- ./config/codefox.config.json`)
+- inspect runtime terminal for startup failures (missing `TELEGRAM_BOT_TOKEN`, config errors, Codex preflight errors)
+- verify UI has a target chat context (single allowed chat, or existing session selected)
+- if needed, restart runtime then UI

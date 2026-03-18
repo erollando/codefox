@@ -1,5 +1,6 @@
 import http from "node:http";
 import os from "node:os";
+import type { Socket } from "node:net";
 import { randomBytes } from "node:crypto";
 import QRCode from "qrcode";
 import { loadEnvFile } from "./core/env.js";
@@ -90,11 +91,12 @@ if (!args.ok) {
     try {
       const ensured = await ensureCodeFoxRunning({
         resolvedConfigPath: configPath,
-        stateFilePath: config.state.filePath
+        stateFilePath: config.state.filePath,
+        streamLogsToConsole: true
       });
       if (ensured.started) {
         ownedRuntimePid = ensured.pid;
-        console.log(`CodeFox was not running. Started background service (pid ${ensured.pid}).`);
+        console.log(`CodeFox was not running. Started background service (pid ${ensured.pid}) and attached runtime stdout/stderr logs.`);
       }
     } catch (error) {
       console.error(`Failed to auto-start CodeFox runtime: ${String(error)}`);
@@ -104,6 +106,7 @@ if (!args.ok) {
 
     const firstPair = issuePairCode(pairCodes, args.value.pairTtlSeconds);
     const firstPairUrls = buildPairUrls(args.value.host, args.value.port, firstPair.code);
+    const serverSockets = new Set<Socket>();
 
     const server = http.createServer(async (request, response) => {
       try {
@@ -119,7 +122,8 @@ if (!args.ok) {
             return;
           }
           const device = await deviceAuth.registerDevice({
-            userAgent: request.headers["user-agent"]
+            userAgent: request.headers["user-agent"],
+            replaceExisting: true
           });
           setUiDeviceCookie(response, device.token);
           writePairSuccessHtml(response, device.label);
@@ -142,7 +146,7 @@ if (!args.ok) {
         }
         if (method === "GET" && url.pathname === "/api/state") {
           const chatParam = url.searchParams.get("chatId");
-          const chatId = toPositiveInteger(chatParam);
+          const chatId = toNonZeroSafeInteger(chatParam);
           const state = await buildUiState({
             store,
             config,
@@ -159,7 +163,7 @@ if (!args.ok) {
             writeJson(response, 400, { ok: false, error: "text is required." });
             return;
           }
-          const explicitChatId = toPositiveInteger(body.chatId);
+          const explicitChatId = toNonZeroSafeInteger(body.chatId);
           const state = await store.load();
           const pruned = pruneStateByTtl(state, {
             sessionTtlHours: config.state.sessionTtlHours,
@@ -188,6 +192,12 @@ if (!args.ok) {
         writeJson(response, 500, { ok: false, error: String(error) });
       }
     });
+    server.on("connection", (socket) => {
+      serverSockets.add(socket);
+      socket.on("close", () => {
+        serverSockets.delete(socket);
+      });
+    });
 
     const shutdown = (signal: string): void => {
       if (shuttingDown) {
@@ -198,9 +208,23 @@ if (!args.ok) {
         if (ownedRuntimePid) {
           console.log(`Received ${signal}, stopping auto-started CodeFox (pid ${ownedRuntimePid})...`);
         }
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }).catch(() => undefined);
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            server.close(() => resolve());
+          }),
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              for (const socket of serverSockets) {
+                try {
+                  socket.destroy();
+                } catch {
+                  // Best-effort shutdown.
+                }
+              }
+              resolve();
+            }, 1500);
+          })
+        ]).catch(() => undefined);
         if (ownedRuntimePid) {
           try {
             await stopOwnedCodeFoxProcess({
@@ -222,7 +246,9 @@ if (!args.ok) {
 
     server.listen(args.value.port, args.value.host, async () => {
       console.log(`CodeFox UI ready at http://${args.value.host}:${args.value.port}`);
-      console.log("For live logs, optionally run `npm run dev` in another terminal.");
+      console.log(
+        `UI enqueues commands for CodeFox runtime. If commands do not execute, run \`npm run dev -- ${configPath}\` in another terminal and check startup logs.`
+      );
       const existingDevices = await deviceAuth.count();
       console.log(`Paired UI devices: ${existingDevices}.`);
       if (args.value.host === "127.0.0.1" || args.value.host.toLowerCase() === "localhost") {
@@ -473,15 +499,15 @@ function resolveDefaultChatId(
   return latest?.chatId;
 }
 
-function toPositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+function toNonZeroSafeInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value !== 0) {
     return value;
   }
   if (typeof value !== "string" || value.trim().length === 0) {
     return undefined;
   }
   const parsed = Number(value.trim());
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+  if (!Number.isSafeInteger(parsed) || parsed === 0) {
     return undefined;
   }
   return parsed;
@@ -649,6 +675,7 @@ function writePairSuccessHtml(response: http.ServerResponse, label: string): voi
 <body style="font-family:Segoe UI,system-ui,sans-serif;padding:18px;">
   <h2>Device Paired</h2>
   <p>This browser is now authorized as <strong>${escapeHtml(label)}</strong>.</p>
+  <p>Previous remote browser pairing is revoked.</p>
   <p>Opening CodeFox UI...</p>
   <script>setTimeout(() => { window.location.href = "/"; }, 400);</script>
 </body></html>`);
@@ -708,17 +735,21 @@ const UI_HTML = `<!doctype html>
       --brand-soft: #d8f3ef;
       --brand-soft-2: #effaf8;
       --shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
-      --app-vh: 1vh;
     }
-    html, body { height: 100%; }
+    html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+    html {
+      background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      position: fixed;
+      inset: 0;
       font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
       color: var(--text);
-      min-height: calc(var(--app-vh) * 100);
-      height: calc(var(--app-vh) * 100);
+      min-height: 100%;
+      height: 100%;
       overflow: hidden;
     }
     .shell {
@@ -728,7 +759,7 @@ const UI_HTML = `<!doctype html>
       display: grid;
       grid-template-columns: 280px 1fr;
       gap: 14px;
-      height: calc(var(--app-vh) * 100);
+      height: 100%;
     }
     .card {
       background: var(--card);
@@ -793,14 +824,16 @@ const UI_HTML = `<!doctype html>
       color: #1e293b;
     }
     .quick {
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
       gap: 6px;
       padding: 8px 12px;
       border-bottom: 1px solid var(--line);
-      align-items: center;
+      align-items: stretch;
       align-content: flex-start;
       background: #fdfefe;
+      max-height: 108px;
+      overflow: auto;
     }
     .quick button,
     .composer button {
@@ -816,6 +849,9 @@ const UI_HTML = `<!doctype html>
       white-space: nowrap;
       min-height: 28px;
       transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+    }
+    .quick button {
+      width: 100%;
     }
     .quick button:hover,
     .composer button:hover {
@@ -916,7 +952,7 @@ const UI_HTML = `<!doctype html>
         grid-template-rows: auto 1fr;
         padding: 10px;
         gap: 10px;
-        height: calc(var(--app-vh) * 100);
+        height: 100%;
       }
       .sessions {
         max-height: 116px;
@@ -934,7 +970,7 @@ const UI_HTML = `<!doctype html>
       }
       .main {
         min-height: 0;
-        height: 100%;
+        height: auto;
       }
       .context,
       .quick,
@@ -944,6 +980,8 @@ const UI_HTML = `<!doctype html>
       }
       .quick {
         gap: 5px;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        max-height: 112px;
       }
     }
     body.mobile-mode .shell {
@@ -951,7 +989,7 @@ const UI_HTML = `<!doctype html>
       grid-template-rows: auto 1fr;
       padding: 10px;
       gap: 10px;
-      height: calc(var(--app-vh) * 100);
+      height: 100%;
     }
     body.mobile-mode .sessions {
       max-height: 116px;
@@ -969,7 +1007,7 @@ const UI_HTML = `<!doctype html>
     }
     body.mobile-mode .main {
       min-height: 0;
-      height: 100%;
+      height: auto;
     }
     body.mobile-mode .context,
     body.mobile-mode .quick,
@@ -979,6 +1017,8 @@ const UI_HTML = `<!doctype html>
     }
     body.mobile-mode .quick {
       gap: 5px;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      max-height: 112px;
     }
   </style>
 </head>
@@ -998,21 +1038,6 @@ const UI_HTML = `<!doctype html>
     </section>
   </div>
   <script>
-    function updateViewportHeightVar() {
-      const viewportHeight = window.visualViewport && window.visualViewport.height
-        ? window.visualViewport.height
-        : window.innerHeight;
-      const vh = viewportHeight * 0.01;
-      document.documentElement.style.setProperty("--app-vh", vh + "px");
-    }
-
-    updateViewportHeightVar();
-    window.addEventListener("resize", updateViewportHeightVar, { passive: true });
-    if (window.visualViewport && typeof window.visualViewport.addEventListener === "function") {
-      window.visualViewport.addEventListener("resize", updateViewportHeightVar, { passive: true });
-      window.visualViewport.addEventListener("scroll", updateViewportHeightVar, { passive: true });
-    }
-
     const params = new URLSearchParams(window.location.search);
     const forcedMobile = params.get("mobile") === "1";
     if (forcedMobile) {
@@ -1029,6 +1054,44 @@ const UI_HTML = `<!doctype html>
     const feedEl = document.getElementById("feed");
     const composerEl = document.getElementById("composer");
     const inputEl = document.getElementById("input");
+    const MAX_QUICK_COMMANDS = 36;
+    const PINNED_COMMANDS = [
+      "/status",
+      "/details",
+      "/pending",
+      "/continue",
+      "/accept",
+      "/reject",
+      "/approve",
+      "/deny",
+      "/handoff show",
+      "/abort",
+      "/close",
+      "/policy",
+      "/capabilities",
+      "/repo info",
+      "/service stop"
+    ];
+    const COMMAND_PRIORITY = new Map([
+      ["/accept", 10],
+      ["/reject", 11],
+      ["/approve", 12],
+      ["/deny", 13],
+      ["/continue", 14],
+      ["/abort", 15],
+      ["/status", 20],
+      ["/details", 21],
+      ["/pending", 22],
+      ["/handoff show", 23],
+      ["/handoff", 24],
+      ["/close", 30],
+      ["/policy", 40],
+      ["/capabilities", 41],
+      ["/repo info", 50],
+      ["/repo", 51],
+      ["/mode", 52],
+      ["/service stop", 60]
+    ]);
 
     if (feedEl) {
       feedEl.addEventListener("scroll", () => {
@@ -1051,7 +1114,8 @@ const UI_HTML = `<!doctype html>
       const nextFingerprint = buildMessageFingerprint(data.messages || []);
       const hasNewMessages = nextFingerprint !== lastMessageFingerprint;
       lastMessageFingerprint = nextFingerprint;
-      const activeCommands = resolveActiveCommands(data);
+      const selected = data.selected;
+      const activeCommands = resolveActiveCommands(data, selected);
 
       sessionsEl.innerHTML = "";
       for (const session of data.sessions) {
@@ -1068,7 +1132,6 @@ const UI_HTML = `<!doctype html>
         sessionsEl.appendChild(button);
       }
 
-      const selected = data.selected;
       if (!selected) {
         contextEl.innerHTML =
           "<span class='tiny'>No active session yet. Start from Telegram, the local UI, or handoff.</span>";
@@ -1128,12 +1191,17 @@ const UI_HTML = `<!doctype html>
             const actions = document.createElement("div");
             actions.className = "actions";
             for (const command of message.commandButtons) {
+              if (!isCommandRelevant(command, selected)) {
+                continue;
+              }
               const actionButton = document.createElement("button");
               actionButton.textContent = formatCommandLabel(command);
               actionButton.onclick = () => sendText(command);
               actions.appendChild(actionButton);
             }
-            card.appendChild(actions);
+            if (actions.children.length > 0) {
+              card.appendChild(actions);
+            }
           }
           feedEl.appendChild(card);
         }
@@ -1172,10 +1240,117 @@ const UI_HTML = `<!doctype html>
       return command;
     }
 
-    function resolveActiveCommands(data) {
-      return Array.isArray(data.selected && data.selected.quickCommands)
-        ? data.selected.quickCommands.filter((value) => typeof value === "string" && value.trim())
-        : [];
+    function resolveActiveCommands(data, selected) {
+      const commands = [];
+      const seen = new Set();
+
+      const addCommand = (value) => {
+        if (typeof value !== "string") {
+          return;
+        }
+        const command = value.trim();
+        if (!command) {
+          return;
+        }
+        if (!isCommandRelevant(command, selected)) {
+          return;
+        }
+        const key = command.toLowerCase();
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        commands.push(command);
+      };
+
+      if (Array.isArray(data.selected && data.selected.quickCommands)) {
+        for (const value of data.selected.quickCommands) {
+          addCommand(value);
+        }
+      }
+
+      if (Array.isArray(data.messages)) {
+        for (let index = data.messages.length - 1; index >= 0; index -= 1) {
+          const message = data.messages[index];
+          if (!Array.isArray(message && message.commandButtons)) {
+            continue;
+          }
+          for (const value of message.commandButtons) {
+            addCommand(value);
+          }
+          if (commands.length >= MAX_QUICK_COMMANDS) {
+            break;
+          }
+        }
+      }
+
+      for (const value of PINNED_COMMANDS) {
+        addCommand(value);
+      }
+
+      commands.sort((left, right) => {
+        const leftPriority = commandPriority(left);
+        const rightPriority = commandPriority(right);
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
+        }
+        return left.localeCompare(right);
+      });
+
+      return commands.slice(0, MAX_QUICK_COMMANDS);
+    }
+
+    function isCommandRelevant(command, selected) {
+      if (typeof command !== "string") {
+        return false;
+      }
+      const normalized = command.trim().toLowerCase();
+      if (!normalized) {
+        return false;
+      }
+      const base = normalized.split(/\s+/)[0];
+      const hasApproval = Boolean(selected && typeof selected.approvalCount === "number" && selected.approvalCount > 0);
+      const handoff = selected && selected.handoff ? selected.handoff : undefined;
+      const hasHandoff = Boolean(handoff);
+      const awaitingConfirmation = Boolean(handoff && handoff.awaitingConfirmation);
+      const awaitingExternalCompletion = Boolean(handoff && handoff.awaitingExternalCompletion);
+      const hasOpenHandoffWork = Boolean(handoff && typeof handoff.remainingOpen === "number" && handoff.remainingOpen > 0);
+      const hasActiveRequest = Boolean(selected && selected.activeRequestId);
+
+      if (base === "/approve" || base === "/deny") {
+        return hasApproval;
+      }
+      if (base === "/accept" || base === "/reject") {
+        return awaitingConfirmation;
+      }
+      if (base === "/handoff") {
+        return hasHandoff;
+      }
+      if (base === "/continue" || base === "/resume") {
+        return hasHandoff && !awaitingConfirmation && !awaitingExternalCompletion && hasOpenHandoffWork;
+      }
+      if (base === "/abort") {
+        return hasActiveRequest;
+      }
+      return true;
+    }
+
+    function commandPriority(command) {
+      if (typeof command !== "string") {
+        return 999;
+      }
+      const normalized = command.trim().toLowerCase();
+      if (!normalized) {
+        return 999;
+      }
+      if (COMMAND_PRIORITY.has(normalized)) {
+        return COMMAND_PRIORITY.get(normalized);
+      }
+      const base = normalized.split(/\s+/)[0];
+      if (COMMAND_PRIORITY.has(base)) {
+        return COMMAND_PRIORITY.get(base) + 40;
+      }
+      return 500;
     }
 
     function buildMessageFingerprint(messages) {

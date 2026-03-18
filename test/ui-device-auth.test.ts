@@ -28,4 +28,26 @@ describe("UiDeviceAuthStore", () => {
     const raw = await readFile(filePath, "utf8");
     expect(raw).toContain("my-phone");
   });
+
+  it("replaces existing devices when requested", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codefox-ui-auth-"));
+    const filePath = path.join(root, "ui-devices.json");
+    const store = new UiDeviceAuthStore(filePath);
+
+    const first = await store.registerDevice({
+      label: "first-phone",
+      userAgent: "Mobile Safari"
+    });
+    expect(await store.count()).toBe(1);
+    expect((await store.findByToken(first.token))?.label).toBe("first-phone");
+
+    const second = await store.registerDevice({
+      label: "second-phone",
+      userAgent: "DuckDuckGo",
+      replaceExisting: true
+    });
+    expect(await store.count()).toBe(1);
+    expect(await store.findByToken(first.token)).toBeUndefined();
+    expect((await store.findByToken(second.token))?.label).toBe("second-phone");
+  });
 });
