@@ -86,6 +86,16 @@ interface RelayBindErrorResponse {
 
 type RelayBindResponse = RelayBindSuccessResponse | RelayBindErrorResponse;
 
+interface RelayDeliveryResponse {
+  decision?: {
+    ok?: boolean;
+    reasonCode?: string;
+    reason?: string;
+  };
+  relayed?: boolean;
+  error?: string;
+}
+
 export interface LocalCliParseResult {
   ok: boolean;
   args?: LocalCliParsedArgs;
@@ -955,27 +965,21 @@ async function runLocalHandoff(
       : {}),
     ...(args.unresolvedRisks && args.unresolvedRisks.length > 0 ? { unresolvedRisks: args.unresolvedRisks } : {})
   };
-    if (
-      areSemanticallyEquivalentExternalHandoffs(
-        existingHandoff
-          ? {
-              sourceSessionId: existingHandoff.sourceSessionId,
-              bundle: existingHandoff.handoff
-            }
-          : undefined,
-        {
-          sourceSessionId: sessionId,
-          bundle: handoffTemplate
-        }
-      )
-    ) {
-      output.log(`Handoff already up to date for chat ${chatId}; no changes submitted.`);
-      output.log(`session: ${sessionId}`);
-      output.log(`task id: ${taskId}${args.taskId ? "" : " (auto-generated)"}`);
-      output.log(`spec ref: ${specRevisionRef.value}`);
-      output.log(`remaining work: ${workId} (${remainingSummary}${args.remainingSummary ? "" : " (auto-generated)"})`);
-      logTelegramHandoffNextSteps(output, false);
-      return finalizeForegroundRelayStart(0, foregroundChild, output);
+    const isEquivalentHandoff = areSemanticallyEquivalentExternalHandoffs(
+      existingHandoff
+        ? {
+            sourceSessionId: existingHandoff.sourceSessionId,
+            bundle: existingHandoff.handoff
+          }
+        : undefined,
+      {
+        sourceSessionId: sessionId,
+        bundle: handoffTemplate
+      }
+    );
+    const shouldResendEquivalentHandoff = isEquivalentHandoff;
+    if (shouldResendEquivalentHandoff) {
+      output.log(`Handoff already up to date for chat ${chatId}; re-sending reminder to routed clients.`);
     }
 
     const bindResponse = await requestRelayJson<RelayBindResponse>({
@@ -1000,33 +1004,42 @@ async function runLocalHandoff(
 
     const leaseId = bindBody.lease.leaseId;
     const schemaVersion = bindBody.lease.schemaVersion;
-    const completionEvent = {
-    schemaVersion,
-    leaseId,
-    eventId: `evt_${randomUUID().slice(0, 8)}`,
-    clientId,
-    timestamp: new Date().toISOString(),
-    sequence: 1,
-    type: "completion",
-    status: "success",
-    summary: args.completionSummary || "Execution phase complete in external Codex client"
-  };
+    if (!shouldResendEquivalentHandoff) {
+      const completionEvent = {
+        schemaVersion,
+        leaseId,
+        eventId: `evt_${randomUUID().slice(0, 8)}`,
+        clientId,
+        timestamp: new Date().toISOString(),
+        sequence: 1,
+        type: "completion",
+        status: "success",
+        summary: args.completionSummary || "Execution phase complete in external Codex client"
+      };
 
-    const completionResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
-    baseUrl: relayBaseUrl,
-    path: "/v1/external-codex/event",
-    method: "POST",
-    authToken,
-    body: completionEvent
-  });
-    if (!completionResponse.ok || completionResponse.body?.decision?.ok !== true) {
-      await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
-      output.error(renderRelayError("Completion event relay failed.", completionResponse));
-      return finalizeForegroundRelayStart(1, foregroundChild, output);
+      const completionResponse = await requestRelayJson<RelayDeliveryResponse>({
+        baseUrl: relayBaseUrl,
+        path: "/v1/external-codex/event",
+        method: "POST",
+        authToken,
+        body: completionEvent
+      });
+      if (!completionResponse.ok || completionResponse.body?.decision?.ok !== true) {
+        await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
+        output.error(renderRelayError("Completion event relay failed.", completionResponse));
+        return finalizeForegroundRelayStart(1, foregroundChild, output);
+      }
+      if (completionResponse.body?.relayed !== true) {
+        await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
+        output.error(
+          "Completion event was accepted but not delivered to a routed chat session. Ensure the target /repo and /mode session is still active, then retry."
+        );
+        return finalizeForegroundRelayStart(1, foregroundChild, output);
+      }
     }
 
     const handoffId = `handoff_${randomUUID().slice(0, 8)}`;
-    const handoffResponse = await requestRelayJson<{ decision?: { ok?: boolean; reason?: string } }>({
+    const handoffResponse = await requestRelayJson<RelayDeliveryResponse>({
     baseUrl: relayBaseUrl,
     path: "/v1/external-codex/handoff",
     method: "POST",
@@ -1044,10 +1057,21 @@ async function runLocalHandoff(
       output.error(renderRelayError("Handoff relay failed.", handoffResponse));
       return finalizeForegroundRelayStart(1, foregroundChild, output);
     }
+    if (handoffResponse.body?.relayed !== true) {
+      await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
+      output.error(
+        "Handoff was accepted but not delivered to a routed chat session. Ensure the target /repo and /mode session is still active, then retry."
+      );
+      return finalizeForegroundRelayStart(1, foregroundChild, output);
+    }
 
     await bestEffortRevokeLease(relayBaseUrl, authToken, leaseId);
 
-    output.log(`Handoff submitted successfully for chat ${chatId}.`);
+    output.log(
+      shouldResendEquivalentHandoff
+        ? `Handoff reminder submitted successfully for chat ${chatId}.`
+        : `Handoff submitted successfully for chat ${chatId}.`
+    );
     output.log(`session: ${sessionId}`);
     output.log(`lease: ${leaseId}`);
     output.log(`handoff id: ${handoffId}`);

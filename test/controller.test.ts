@@ -874,7 +874,7 @@ describe("CodeFoxController", () => {
     expect(fakeCodex.calls[0]?.context.instruction).toBe("Run regression checks");
   });
 
-  it("treats semantically identical external handoff ingest as idempotent", async () => {
+  it("re-opens semantically identical external handoff ingest when prior state is already completed", async () => {
     const fakeCodex: FakeCodex = {
       calls: [],
       startTask() {
@@ -975,13 +975,15 @@ describe("CodeFoxController", () => {
     );
 
     expect(ingest.accepted).toBe(true);
-    expect(telegram.sent).toHaveLength(0);
+    expect(telegram.sent.at(-1)?.text).toContain("Handoff request received: handoff_new");
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/accept", "/reject", "/handoff show", "/status"]);
 
     const handoffs = controller.listExternalHandoffs();
     expect(handoffs).toHaveLength(1);
-    expect(handoffs[0]?.leaseId).toBe("lease_existing");
-    expect(handoffs[0]?.handoff.handoffId).toBe("handoff_existing");
-    expect(handoffs[0]?.continuedWorkIds).toEqual(["rw-1"]);
+    expect(handoffs[0]?.leaseId).toBe("lease_new");
+    expect(handoffs[0]?.handoff.handoffId).toBe("handoff_new");
+    expect(handoffs[0]?.continuedWorkIds).toEqual([]);
+    expect(handoffs[0]?.awaitingConfirmation).toBe(true);
     expect(
       audit.events.some(
         (event) =>
@@ -990,6 +992,110 @@ describe("CodeFoxController", () => {
           event.handoffId === "handoff_new"
       )
     ).toBe(true);
+  });
+
+  it("re-notifies Telegram when duplicate handoff is still awaiting confirmation", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "done" })
+        };
+      }
+    };
+
+    const { controller, telegram } = makeController(fakeCodex, {
+      initialExternalHandoffs: [
+        {
+          chatId: 100,
+          leaseId: "lease_existing",
+          sourceSessionId: "chat:100/repo:payments-api/mode:active",
+          sourceRepoName: "payments-api",
+          sourceMode: "active",
+          receivedAt: "2026-03-14T12:01:00.000Z",
+          continuedWorkIds: [],
+          awaitingConfirmation: true,
+          awaitingExternalCompletion: true,
+          externalCompletionStatus: "pending",
+          handoff: {
+            schemaVersion: "v1",
+            leaseId: "lease_existing",
+            handoffId: "handoff_existing",
+            clientId: "vscode-codex",
+            createdAt: "2026-03-14T12:00:00.000Z",
+            taskId: "TASK-100",
+            specRevisionRef: "v1",
+            completedWork: [],
+            remainingWork: [
+              {
+                id: "rw-1",
+                summary: "Run regression checks"
+              }
+            ]
+          }
+        }
+      ],
+      initialSpecWorkflows: [
+        {
+          chatId: 100,
+          workflow: {
+            revisions: [
+              {
+                version: 1,
+                stage: "approved",
+                status: "approved",
+                sourceIntent: "continue external work",
+                createdAt: "2026-03-14T12:00:00.000Z",
+                updatedAt: "2026-03-14T12:00:00.000Z",
+                approvedAt: "2026-03-14T12:00:00.000Z",
+                sections: {
+                  REQUEST: "continue external work",
+                  GOAL: "goal",
+                  OUTCOME: "outcome",
+                  CONSTRAINTS: ["constraint"],
+                  NON_GOALS: [],
+                  CONTEXT: [],
+                  ASSUMPTIONS: [],
+                  QUESTIONS: [],
+                  PLAN: ["plan"],
+                  APPROVALS_REQUIRED: [],
+                  DONE_WHEN: ["done"]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    });
+
+    const duplicateHandoff: ExternalCodexHandoffBundle = {
+      schemaVersion: "v1",
+      leaseId: "lease_new",
+      handoffId: "handoff_new",
+      clientId: "vscode-codex",
+      createdAt: "2026-03-14T12:05:00.000Z",
+      taskId: "TASK-100",
+      specRevisionRef: "v1",
+      completedWork: [],
+      remainingWork: [
+        {
+          id: "rw-1",
+          summary: "Run regression checks"
+        }
+      ]
+    };
+
+    const ingest = await controller.ingestExternalHandoff(
+      100,
+      "lease_new",
+      duplicateHandoff,
+      "chat:100/repo:payments-api/mode:active"
+    );
+
+    expect(ingest.accepted).toBe(true);
+    expect(telegram.sent.at(-1)?.text).toContain("Handoff request still pending");
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/accept", "/reject", "/handoff show", "/status"]);
   });
 
   it("returns actionable guidance when /continue is requested without a handoff", async () => {

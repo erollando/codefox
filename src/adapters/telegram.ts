@@ -119,10 +119,7 @@ export class TelegramPollingAdapter implements TelegramAdapter {
 
   async sendMessage(chatId: number, text: string, options?: TelegramSendOptions): Promise<void> {
     const parts = splitMessage(text, TELEGRAM_MESSAGE_LIMIT);
-    const replyMarkup =
-      options?.commandButtons && options.commandButtons.length > 0
-        ? buildCommandKeyboard(options.commandButtons)
-        : undefined;
+    const replyMarkup = resolveReplyMarkup(options?.commandButtons);
     if (parts.length === 1) {
       await this.request("sendMessage", {
         chat_id: chatId,
@@ -220,6 +217,21 @@ export class TelegramPollingAdapter implements TelegramAdapter {
   }
 }
 
+function resolveReplyMarkup(commands?: string[]): Record<string, unknown> | undefined {
+  if (!Array.isArray(commands)) {
+    return {
+      remove_keyboard: true
+    };
+  }
+  const buttons = commands.map((entry) => entry.trim()).filter(Boolean);
+  if (buttons.length === 0) {
+    return {
+      remove_keyboard: true
+    };
+  }
+  return buildCommandKeyboard(buttons);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -264,7 +276,8 @@ function buildCommandKeyboard(commands: string[]): Record<string, unknown> {
   }
   return {
     keyboard: rows,
-    one_time_keyboard: true,
+    one_time_keyboard: false,
+    is_persistent: true,
     resize_keyboard: true
   };
 }

@@ -489,7 +489,7 @@ export class CodeFoxController {
       )
     ) {
       if (existing && latestCompletion) {
-        await this.noteExternalCompletion(chatId, leaseId, latestCompletion, sourceSessionId);
+        await this.noteExternalCompletion(chatId, existing.leaseId, latestCompletion, sourceSessionId);
       }
       await this.deps.audit.log({
         type: "external_handoff_ingest_duplicate",
@@ -498,6 +498,66 @@ export class CodeFoxController {
         handoffId: handoff.handoffId,
         taskId: handoff.taskId
       });
+      const duplicateState = this.externalHandoffs.get(chatId);
+      if (duplicateState && !latestCompletion && !isActionableHandoffState(duplicateState)) {
+        const refreshedState: ExternalHandoffState = {
+          leaseId,
+          sourceSessionId: sourceSessionId?.trim(),
+          sourceRepoName: handoff.sourceRepo?.name?.trim() || parseRepoFromExternalSessionId(sourceSessionId),
+          sourceRepoPath: handoff.sourceRepo?.rootPath?.trim() || undefined,
+          sourceMode: parseModeFromExternalSessionId(sourceSessionId),
+          bundle: cloneExternalHandoffBundle(handoff),
+          receivedAt: new Date().toISOString(),
+          continuedWorkIds: [],
+          awaitingConfirmation: true,
+          acceptedAt: undefined,
+          acceptedByUserId: undefined,
+          awaitingExternalCompletion: false,
+          externalCompletionStatus: "success",
+          externalCompletionSummary: undefined,
+          externalCompletedAt: undefined
+        };
+        this.externalHandoffs.set(chatId, refreshedState);
+        this.persistState();
+        await this.deps.telegram.sendMessage(
+          chatId,
+          [
+            `Handoff request received: ${handoff.handoffId}.`,
+            "External Codex already finished this step.",
+            "Reply with /accept or /reject.",
+            "Use /handoff show for details."
+          ].join("\n"),
+          { commandButtons: buildHandoffConfirmationButtons() }
+        );
+        return {
+          accepted: true
+        };
+      }
+      if (duplicateState && !latestCompletion) {
+        if (duplicateState.awaitingConfirmation) {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            [
+              `Handoff request still pending: ${duplicateState.bundle.handoffId}.`,
+              "Reply with /accept or /reject.",
+              "Use /handoff show for details."
+            ].join("\n"),
+            { commandButtons: buildHandoffConfirmationButtons() }
+          );
+        } else if (duplicateState.awaitingExternalCompletion) {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Handoff ${duplicateState.bundle.handoffId} is accepted and waiting for external completion.`,
+            { commandButtons: buildHandoffCommandButtons(duplicateState) }
+          );
+        } else if (countOutstandingHandoffWork(duplicateState) > 0) {
+          await this.deps.telegram.sendMessage(
+            chatId,
+            `Handoff ${duplicateState.bundle.handoffId} still has pending work. Use /continue or /handoff show.`,
+            { commandButtons: buildHandoffCommandButtons(duplicateState) }
+          );
+        }
+      }
       return {
         accepted: true
       };
@@ -533,8 +593,18 @@ export class CodeFoxController {
     await this.deps.telegram.sendMessage(
       chatId,
       latestCompletion
-        ? "Use /accept to take over this handoff now. External Codex already finished, so CodeFox can continue immediately."
-        : "Use /accept to take over this handoff when ready. External Codex is still running, and CodeFox will continue after it finishes.",
+        ? [
+            `Handoff request received: ${handoff.handoffId}.`,
+            "External Codex already finished this step.",
+            "Reply with /accept or /reject.",
+            "Use /handoff show for details."
+          ].join("\n")
+        : [
+            `Handoff request received: ${handoff.handoffId}.`,
+            "External Codex is still running.",
+            "Reply with /accept or /reject.",
+            "Use /handoff show for details."
+          ].join("\n"),
       { commandButtons: buildHandoffConfirmationButtons() }
     );
     return {

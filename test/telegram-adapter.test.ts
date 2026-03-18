@@ -80,6 +80,7 @@ describe("TelegramPollingAdapter", () => {
     expect(url).toContain("/sendMessage");
     expect(payload.chat_id).toBe(100);
     expect(payload.text).toBe("hello");
+    expect(payload.reply_markup).toEqual({ remove_keyboard: true });
   });
 
   it("attaches one-tap command keyboard when command buttons are provided", async () => {
@@ -102,7 +103,8 @@ describe("TelegramPollingAdapter", () => {
     expect(payload.reply_markup.keyboard).toEqual([
       [{ text: "/handoff show" }, { text: "/continue" }]
     ]);
-    expect(payload.reply_markup.one_time_keyboard).toBe(true);
+    expect(payload.reply_markup.one_time_keyboard).toBe(false);
+    expect(payload.reply_markup.is_persistent).toBe(true);
   });
 
   it("splits long outgoing messages into multiple Telegram messages", async () => {
@@ -130,6 +132,9 @@ describe("TelegramPollingAdapter", () => {
     const stripPrefix = (value: string): string => value.replace(/^\[\d+\/\d+\]\n/, "");
     const reassembled = [firstPayload.text, secondPayload.text, thirdPayload.text].map(String).map(stripPrefix).join("");
     expect(reassembled).toBe("x".repeat(9000));
+    expect(firstPayload.reply_markup).toBeUndefined();
+    expect(secondPayload.reply_markup).toBeUndefined();
+    expect(thirdPayload.reply_markup).toEqual({ remove_keyboard: true });
   });
 
   it("attaches command buttons on the final chunk when message is split", async () => {

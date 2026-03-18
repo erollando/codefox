@@ -83,6 +83,7 @@ if (!args.ok) {
   const pairCodes = new Map<string, number>();
   let ownedRuntimePid: number | undefined;
   let shuttingDown = false;
+  let runtimeWatchTimer: NodeJS.Timeout | undefined;
 
   if (!defaultUserId) {
     console.error("No allowed user id configured. Set telegram.allowedUserIds or pass --user <id>.");
@@ -97,6 +98,22 @@ if (!args.ok) {
       if (ensured.started) {
         ownedRuntimePid = ensured.pid;
         console.log(`CodeFox was not running. Started background service (pid ${ensured.pid}) and attached runtime stdout/stderr logs.`);
+        runtimeWatchTimer = setInterval(() => {
+          const pid = ownedRuntimePid;
+          if (!pid || shuttingDown) {
+            return;
+          }
+          if (!isProcessAlive(pid)) {
+            ownedRuntimePid = undefined;
+            if (runtimeWatchTimer) {
+              clearInterval(runtimeWatchTimer);
+              runtimeWatchTimer = undefined;
+            }
+            console.log(`Auto-started CodeFox exited (pid ${pid}). Shutting down UI.`);
+            shutdown("runtime-exit");
+          }
+        }, 750);
+        runtimeWatchTimer.unref();
       }
     } catch (error) {
       console.error(`Failed to auto-start CodeFox runtime: ${String(error)}`);
@@ -205,6 +222,10 @@ if (!args.ok) {
       }
       shuttingDown = true;
       void (async () => {
+        if (runtimeWatchTimer) {
+          clearInterval(runtimeWatchTimer);
+          runtimeWatchTimer = undefined;
+        }
         if (ownedRuntimePid) {
           console.log(`Received ${signal}, stopping auto-started CodeFox (pid ${ownedRuntimePid})...`);
         }
@@ -607,6 +628,19 @@ function isLoopbackAddress(address: string): boolean {
   }
   const normalized = address.trim().toLowerCase();
   return normalized === "::1" || normalized === "127.0.0.1" || normalized === "::ffff:127.0.0.1";
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ESRCH") {
+      return false;
+    }
+    return true;
+  }
 }
 
 async function isAuthorizedRequest(input: {
@@ -1164,7 +1198,7 @@ const UI_HTML = `<!doctype html>
       for (const command of activeCommands) {
         const button = document.createElement("button");
         button.textContent = formatCommandLabel(command);
-        button.onclick = () => sendText(command);
+        button.onclick = () => sendCommand(command);
         quickEl.appendChild(button);
       }
 
@@ -1196,7 +1230,7 @@ const UI_HTML = `<!doctype html>
               }
               const actionButton = document.createElement("button");
               actionButton.textContent = formatCommandLabel(command);
-              actionButton.onclick = () => sendText(command);
+              actionButton.onclick = () => sendCommand(command);
               actions.appendChild(actionButton);
             }
             if (actions.children.length > 0) {
@@ -1237,7 +1271,27 @@ const UI_HTML = `<!doctype html>
       if (typeof command !== "string") {
         return "";
       }
-      return command;
+      const trimmed = command.trim();
+      return trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+    }
+
+    function normalizeButtonCommand(command) {
+      if (typeof command !== "string") {
+        return "";
+      }
+      const trimmed = command.trim();
+      if (!trimmed) {
+        return "";
+      }
+      return trimmed.startsWith("/") ? trimmed : "/" + trimmed;
+    }
+
+    async function sendCommand(command) {
+      const normalized = normalizeButtonCommand(command);
+      if (!normalized) {
+        return;
+      }
+      await sendText(normalized);
     }
 
     function resolveActiveCommands(data, selected) {
