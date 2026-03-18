@@ -127,6 +127,7 @@ interface ExternalHandoffState {
 const SHUTDOWN_ABORT_TIMEOUT_MS = 5000;
 const SHUTDOWN_ABORT_POLL_INTERVAL_MS = 50;
 const TASK_START_NOTICE_DELAY_MS = 5000;
+const SERVICE_STOP_CONFIRM_TTL_MS = 2 * 60 * 1000;
 const POLICY_MODES: PolicyMode[] = ["observe", "active", "full-access"];
 
 export interface ControllerShutdownResult {
@@ -174,6 +175,7 @@ export class CodeFoxController {
   private readonly executionAdmissionSource = new Map<number, AdmissionSource>();
   private readonly pendingSteers = new Map<number, PendingSteer[]>();
   private readonly attachmentContext = new Map<number, TaskAttachment[]>();
+  private readonly pendingServiceStopConfirmations = new Map<number, { userId: number; requestedAt: number }>();
   private readonly specDrafts = new Map<number, SpecWorkflowState>();
   private readonly externalHandoffs = new Map<number, ExternalHandoffState>();
   private readonly specPolicy: SpecPolicyEngine;
@@ -241,6 +243,7 @@ export class CodeFoxController {
     const activeRequestId = session?.activeRequestId;
     const pendingApproval = this.deps.approvals.get(chatId);
     const handoffState = this.externalHandoffs.get(chatId);
+    const pendingServiceStopConfirmation = this.getPendingServiceStopConfirmation(chatId);
     const hasOpenHandoffWork = handoffState ? countOutstandingHandoffWork(handoffState) > 0 : false;
     const handoffActionable = Boolean(
       handoffState && (handoffState.awaitingConfirmation || handoffState.awaitingExternalCompletion || hasOpenHandoffWork)
@@ -263,7 +266,8 @@ export class CodeFoxController {
         handoffActionable,
         handoffAwaitingConfirmation: Boolean(handoffState?.awaitingConfirmation),
         handoffAwaitingExternalCompletion: Boolean(handoffState?.awaitingExternalCompletion),
-        hasOpenHandoffWork
+        hasOpenHandoffWork,
+        hasPendingServiceStopConfirmation: Boolean(pendingServiceStopConfirmation)
       })) {
         continue;
       }
@@ -287,11 +291,15 @@ export class CodeFoxController {
       handoffAwaitingConfirmation: boolean;
       handoffAwaitingExternalCompletion: boolean;
       hasOpenHandoffWork: boolean;
+      hasPendingServiceStopConfirmation: boolean;
     }
   ): boolean {
     const normalized = button.trim().toLowerCase();
     if (!normalized) {
       return false;
+    }
+    if (normalized === confirmStopButton()) {
+      return state.hasPendingServiceStopConfirmation;
     }
     const base = normalized.split(/\s+/)[0];
     if (base === "/approve" || base === "/deny") {
@@ -1401,13 +1409,36 @@ export class CodeFoxController {
     }
 
     if (!command.confirm) {
-        await this.deps.telegram.sendMessage(
-          chatId,
-          "Service stop requested.\nNext: confirm with /stopconfirm (or /service stop confirm).",
-          { commandButtons: [confirmStopButton(), showStatusButton()] }
-        );
-        return;
-      }
+      this.pendingServiceStopConfirmations.set(chatId, {
+        userId,
+        requestedAt: Date.now()
+      });
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Service stop requested.\nNext: confirm with /stopconfirm (or /service stop confirm).",
+        { commandButtons: [confirmStopButton(), showStatusButton()] }
+      );
+      return;
+    }
+
+    const pendingConfirmation = this.getPendingServiceStopConfirmation(chatId);
+    if (!pendingConfirmation) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "No pending service stop confirmation.\nNext: run /service stop first.",
+        { commandButtons: [stopServiceButton(), showStatusButton()] }
+      );
+      return;
+    }
+    if (pendingConfirmation.userId !== userId) {
+      await this.deps.telegram.sendMessage(
+        chatId,
+        "Only the requesting user can confirm this service stop.",
+        { commandButtons: [showStatusButton()] }
+      );
+      return;
+    }
+    this.pendingServiceStopConfirmations.delete(chatId);
 
     if (!this.deps.requestServiceStop) {
       await this.deps.telegram.sendMessage(
@@ -1433,6 +1464,18 @@ export class CodeFoxController {
       source: "telegram_command"
     });
     await this.deps.telegram.sendMessage(chatId, "Service stop accepted. CodeFox is shutting down.");
+  }
+
+  private getPendingServiceStopConfirmation(chatId: number): { userId: number; requestedAt: number } | undefined {
+    const pending = this.pendingServiceStopConfirmations.get(chatId);
+    if (!pending) {
+      return undefined;
+    }
+    if (Date.now() - pending.requestedAt > SERVICE_STOP_CONFIRM_TTL_MS) {
+      this.pendingServiceStopConfirmations.delete(chatId);
+      return undefined;
+    }
+    return pending;
   }
 
   private async handleApprove(chatId: number, userId: number): Promise<void> {

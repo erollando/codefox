@@ -2803,4 +2803,57 @@ describe("CodeFoxController", () => {
     expect(telegram.sent.at(-1)?.text).toContain("Service stop accepted");
     expect(audit.events.some((event) => event.type === "service_stop_requested")).toBe(true);
   });
+
+  it("rejects /service stop confirm when no pending stop request exists", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+    const stopRequests: Array<{ chatId: number; userId: number }> = [];
+    const { controller, telegram } = makeController(fakeCodex, {
+      requestServiceStop: async (input) => {
+        stopRequests.push(input);
+        return true;
+      }
+    });
+
+    await controller.handleUpdate(makeUpdate("/service stop confirm"));
+    expect(stopRequests).toEqual([]);
+    expect(telegram.sent.at(-1)?.text).toContain("No pending service stop confirmation");
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/service stop", "/status", "/help"]);
+  });
+
+  it("allows only the requesting user to confirm /service stop", async () => {
+    const fakeCodex: FakeCodex = {
+      calls: [],
+      startTask() {
+        return {
+          abort: () => {},
+          result: Promise.resolve({ ok: true, summary: "ok" })
+        };
+      }
+    };
+    const stopRequests: Array<{ chatId: number; userId: number }> = [];
+    const { controller, telegram } = makeController(fakeCodex, {
+      allowedUserIds: [1, 2],
+      requestServiceStop: async (input) => {
+        stopRequests.push(input);
+        return true;
+      }
+    });
+
+    await controller.handleUpdate(makeUpdate("/service stop", 1));
+    await controller.handleUpdate(makeUpdate("/service stop confirm", 2));
+    expect(stopRequests).toEqual([]);
+    expect(telegram.sent.at(-1)?.text).toContain("Only the requesting user can confirm");
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status", "/help"]);
+
+    await controller.handleUpdate(makeUpdate("/service stop confirm", 1));
+    expect(stopRequests).toEqual([{ chatId: 100, userId: 1 }]);
+  });
 });
