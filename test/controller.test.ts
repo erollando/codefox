@@ -293,7 +293,7 @@ describe("CodeFoxController", () => {
     expect(details).toContain("Status:");
     expect(details).toContain("pending approval: none");
     expect(details).toContain("external handoff: none");
-    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status", "/handoff show", "/pending"]);
+    expect(telegram.sent.at(-1)?.options?.commandButtons).toEqual(["/status"]);
   });
 
   it("returns full policy summary for /policy and supports mode override", async () => {

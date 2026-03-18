@@ -1315,6 +1315,7 @@ const UI_HTML = `<!doctype html>
       const awaitingConfirmation = Boolean(handoff && handoff.awaitingConfirmation);
       const awaitingExternalCompletion = Boolean(handoff && handoff.awaitingExternalCompletion);
       const hasOpenHandoffWork = Boolean(handoff && typeof handoff.remainingOpen === "number" && handoff.remainingOpen > 0);
+      const handoffActionable = hasHandoff && (awaitingConfirmation || awaitingExternalCompletion || hasOpenHandoffWork);
       const hasActiveRequest = Boolean(selected && selected.activeRequestId);
 
       if (base === "/approve" || base === "/deny") {
@@ -1324,7 +1325,7 @@ const UI_HTML = `<!doctype html>
         return awaitingConfirmation;
       }
       if (base === "/handoff") {
-        return hasHandoff;
+        return handoffActionable;
       }
       if (base === "/continue" || base === "/resume") {
         return hasHandoff && !awaitingConfirmation && !awaitingExternalCompletion && hasOpenHandoffWork;

@@ -181,6 +181,18 @@ export class CodeFoxController {
   private codexChangelogState?: CodexChangelogStateSnapshot;
 
   constructor(private readonly deps: ControllerDeps) {
+    const rawSendMessage = deps.telegram.sendMessage.bind(deps.telegram);
+    deps.telegram.sendMessage = async (chatId, text, options) => {
+      const filteredButtons = this.filterTelegramCommandButtons(chatId, options?.commandButtons);
+      const nextOptions =
+        options && typeof options === "object"
+          ? {
+              ...options,
+              commandButtons: filteredButtons
+            }
+          : options;
+      await rawSendMessage(chatId, text, nextOptions);
+    };
     this.specPolicy = deps.specPolicy ?? new SpecPolicyEngine();
     this.capabilityRegistry = deps.capabilityRegistry ?? new CapabilityRegistry();
     for (const entry of deps.initialSpecWorkflows ?? []) {
@@ -218,6 +230,88 @@ export class CodeFoxController {
         seenEntryIds: [...deps.initialCodexChangelogState.seenEntryIds]
       };
     }
+  }
+
+  private filterTelegramCommandButtons(chatId: number, buttons?: string[]): string[] | undefined {
+    if (!Array.isArray(buttons) || buttons.length === 0) {
+      return undefined;
+    }
+    const session = this.deps.sessions.list().find((entry) => entry.chatId === chatId);
+    const activeRequestId = session?.activeRequestId;
+    const pendingApproval = this.deps.approvals.get(chatId);
+    const handoffState = this.externalHandoffs.get(chatId);
+    const hasOpenHandoffWork = handoffState ? countOutstandingHandoffWork(handoffState) > 0 : false;
+    const handoffActionable = Boolean(
+      handoffState && (handoffState.awaitingConfirmation || handoffState.awaitingExternalCompletion || hasOpenHandoffWork)
+    );
+
+    const filtered: string[] = [];
+    const seen = new Set<string>();
+    for (const rawButton of buttons) {
+      if (typeof rawButton !== "string") {
+        continue;
+      }
+      const button = rawButton.trim();
+      if (!button) {
+        continue;
+      }
+      if (!this.isTelegramButtonRelevant(button, {
+        hasPendingApproval: Boolean(pendingApproval),
+        hasActiveRequest: Boolean(activeRequestId),
+        hasHandoff: Boolean(handoffState),
+        handoffActionable,
+        handoffAwaitingConfirmation: Boolean(handoffState?.awaitingConfirmation),
+        handoffAwaitingExternalCompletion: Boolean(handoffState?.awaitingExternalCompletion),
+        hasOpenHandoffWork
+      })) {
+        continue;
+      }
+      const key = button.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      filtered.push(button);
+    }
+    return filtered.length > 0 ? filtered : undefined;
+  }
+
+  private isTelegramButtonRelevant(
+    button: string,
+    state: {
+      hasPendingApproval: boolean;
+      hasActiveRequest: boolean;
+      hasHandoff: boolean;
+      handoffActionable: boolean;
+      handoffAwaitingConfirmation: boolean;
+      handoffAwaitingExternalCompletion: boolean;
+      hasOpenHandoffWork: boolean;
+    }
+  ): boolean {
+    const normalized = button.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    const base = normalized.split(/\s+/)[0];
+    if (base === "/approve" || base === "/deny") {
+      return state.hasPendingApproval;
+    }
+    if (base === "/accept" || base === "/reject") {
+      return state.handoffAwaitingConfirmation;
+    }
+    if (base === "/handoff") {
+      return state.handoffActionable;
+    }
+    if (base === "/continue" || base === "/resume") {
+      return state.hasHandoff && !state.handoffAwaitingConfirmation && !state.handoffAwaitingExternalCompletion && state.hasOpenHandoffWork;
+    }
+    if (base === "/abort") {
+      return state.hasActiveRequest;
+    }
+    if (base === "/pending") {
+      return state.hasPendingApproval;
+    }
+    return true;
   }
 
   listSpecWorkflows(): Array<{ chatId: number; workflow: SpecWorkflowState }> {
@@ -3357,6 +3451,10 @@ function countOutstandingHandoffWork(state: ExternalHandoffState): number {
   return state.bundle.remainingWork.filter((work) => !state.continuedWorkIds.includes(work.id)).length;
 }
 
+function isActionableHandoffState(state: ExternalHandoffState): boolean {
+  return state.awaitingConfirmation || state.awaitingExternalCompletion || countOutstandingHandoffWork(state) > 0;
+}
+
 function buildPrimaryCommandButtons(
   activeRequestId: string | undefined,
   hasPendingApproval: boolean,
@@ -3369,6 +3467,9 @@ function buildPrimaryCommandButtons(
     return [abortRunButton(), showStatusButton(), showDetailsButton(), stopServiceButton()];
   }
   if (handoffState) {
+    if (!isActionableHandoffState(handoffState)) {
+      return [showStatusButton(), showDetailsButton(), showPendingButton(), stopServiceButton()];
+    }
     if (handoffState.awaitingConfirmation) {
       return [acceptHandoffButton(), rejectHandoffButton(), handoffDetailsButton(), showStatusButton()];
     }
@@ -3390,7 +3491,7 @@ function buildHandoffCommandButtons(state: ExternalHandoffState): string[] {
   if (countOutstandingHandoffWork(state) > 0) {
     return [continueHandoffButton(), handoffDetailsButton(), showStatusButton()];
   }
-  return [showStatusButton(), handoffDetailsButton()];
+  return [showStatusButton()];
 }
 
 function buildHandoffSelectionCommandButtons(state: ExternalHandoffState): string[] {
